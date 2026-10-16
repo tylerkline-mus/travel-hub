@@ -1,0 +1,482 @@
+/**
+ * Travel Hub — Google Apps Script backend
+ * ---------------------------------------------------------------
+ * Paste this whole file into Extensions → Apps Script on your
+ * Travel Hub Google Sheet, run setup() once, then deploy as a
+ * Web App (Execute as: Me, Who has access: Anyone).
+ *
+ * Script Properties (Project Settings → Script Properties):
+ *   TOKEN       your passphrase (setup() creates one if missing)
+ *   PLACES_KEY  your Google Maps Platform API key (optional but
+ *               needed for place names, hours and addresses)
+ */
+
+const SHEETS = {
+  Trips: ['id', 'name', 'destination', 'start', 'end', 'timezone', 'notes', 'created', 'updated'],
+  Items: ['id', 'trip_id', 'kind', 'category', 'title', 'city', 'region', 'country', 'address',
+          'lat', 'lng', 'place_id', 'maps_url', 'hours', 'website', 'day', 'start_time', 'end_time',
+          'confirmation', 'status', 'source', 'notes', 'created', 'updated'],
+  Plan:  ['trip_id', 'day', 'item_id', 'order', 'note'],
+  Log:   ['id', 'trip_id', 'item_id', 'place_id', 'title', 'lat', 'lng', 'logged_at', 'timezone',
+          'origin', 'note', 'would_return', 'cost', 'currency', 'photo_url', 'created'],
+};
+
+const PLACE_FIELDS = ['id', 'displayName', 'formattedAddress', 'location', 'regularOpeningHours',
+  'websiteUri', 'googleMapsUri', 'primaryTypeDisplayName', 'addressComponents', 'utcOffsetMinutes'];
+
+/* ---------------------------------------------------------------
+ * One-time setup: creates the tabs and headers, keeps every cell
+ * as plain text so dates and IDs never get auto-converted.
+ * ------------------------------------------------------------- */
+function setup() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  Object.keys(SHEETS).forEach(function (name) {
+    let sh = ss.getSheetByName(name);
+    if (!sh) sh = ss.insertSheet(name);
+    const headers = SHEETS[name];
+    const existing = sh.getLastColumn() > 0
+      ? sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String)
+      : [];
+    // Add any missing headers to the right without disturbing existing ones
+    const missing = headers.filter(function (h) { return existing.indexOf(h) === -1; });
+    const finalHeaders = existing.filter(String).concat(missing);
+    sh.getRange(1, 1, 1, finalHeaders.length).setValues([finalHeaders]).setFontWeight('bold');
+    sh.getRange(1, 1, sh.getMaxRows(), finalHeaders.length).setNumberFormat('@');
+    sh.setFrozenRows(1);
+  });
+  const def = ss.getSheetByName('Sheet1');
+  if (def && def.getLastRow() === 0) ss.deleteSheet(def);
+
+  const props = PropertiesService.getScriptProperties();
+  if (!props.getProperty('TOKEN')) {
+    const token = Utilities.getUuid().split('-')[0];
+    props.setProperty('TOKEN', token);
+    Logger.log('Created passphrase (TOKEN): ' + token);
+  } else {
+    Logger.log('Passphrase (TOKEN) already set: ' + props.getProperty('TOKEN'));
+  }
+  if (!props.getProperty('PLACES_KEY')) {
+    Logger.log('No PLACES_KEY yet — Maps links will save, but without hours/address lookup.');
+  }
+}
+
+/** Run this from the editor to check your Places key works. */
+function testPlaces() {
+  const r = resolveText('https://www.google.com/maps/place/Harpa/@64.1502,-21.9326,17z');
+  Logger.log(JSON.stringify(r, null, 2));
+}
+
+/* ---------------------------------------------------------------
+ * Web endpoints
+ * ------------------------------------------------------------- */
+function doGet(e) {
+  return handle((e && e.parameter) || {});
+}
+
+function doPost(e) {
+  let p = {};
+  try { p = JSON.parse(e.postData.contents); } catch (err) { p = (e && e.parameter) || {}; }
+  return handle(p);
+}
+
+function handle(p) {
+  try {
+    const token = PropertiesService.getScriptProperties().getProperty('TOKEN');
+    if (!token || String(p.token) !== token) return json({ ok: false, error: 'Wrong passphrase' });
+    const fn = ACTIONS[p.action];
+    if (!fn) return json({ ok: false, error: 'Unknown action: ' + p.action });
+    const data = fn(p);
+    if (p.format === 'text') return ContentService.createTextOutput(String(data));
+    return json({ ok: true, data: data });
+  } catch (err) {
+    return json({ ok: false, error: String((err && err.message) || err) });
+  }
+}
+
+function json(o) {
+  return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);
+}
+
+const ACTIONS = {
+  /** Everything the app needs on load. */
+  bootstrap: function () {
+    return {
+      trips: readTable('Trips'),
+      items: readTable('Items'),
+      plan: readTable('Plan'),
+      log: readTable('Log'),
+      places: !!PropertiesService.getScriptProperties().getProperty('PLACES_KEY'),
+    };
+  },
+
+  /** For the iPhone Shortcut: { "Trip name": "trip_id", ..., "Someday": "someday" } */
+  tripMenu: function () {
+    const today = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd');
+    const trips = readTable('Trips')
+      .filter(function (t) { return !t.end || t.end >= today; })
+      .sort(function (a, b) { return String(a.start || '9999').localeCompare(String(b.start || '9999')); });
+    const menu = {};
+    trips.forEach(function (t) { menu[t.name] = t.id; });
+    menu['Someday'] = 'someday';
+    return menu;
+  },
+
+  /** Add an item from pasted text / a Maps link. Works from GET (Shortcut) or POST (app). */
+  add: function (p) {
+    return withLock(function () {
+      const tripId = (p.trip === 'someday' || !p.trip) ? '' : String(p.trip);
+      const id = p.id ? String(p.id) : newId('it');
+      const existing = findRow('Items', id);
+      if (existing) return existing.obj; // idempotent for the offline queue
+
+      const text = String(p.text || '').trim();
+      const resolved = text ? resolveText(text) : {};
+      const now = new Date().toISOString();
+      const item = {
+        id: id,
+        trip_id: tripId,
+        kind: p.kind || resolved.kind || 'idea',
+        category: p.category || resolved.category || '',
+        title: p.title || resolved.title || text || 'Untitled',
+        city: resolved.city || '', region: resolved.region || '', country: resolved.country || '',
+        address: resolved.address || '',
+        lat: resolved.lat != null ? resolved.lat : '', lng: resolved.lng != null ? resolved.lng : '',
+        place_id: resolved.place_id || '',
+        maps_url: resolved.maps_url || '',
+        hours: resolved.hours || '',
+        website: resolved.website || '',
+        day: p.day || '', start_time: p.start_time || '', end_time: p.end_time || '',
+        confirmation: p.confirmation || '',
+        status: 'open',
+        source: text,
+        notes: p.notes || '',
+        created: now, updated: now,
+      };
+
+      // Same place already saved to this trip? Return it instead of a duplicate.
+      if (item.place_id) {
+        const dupe = readTable('Items').filter(function (i) {
+          return i.place_id === item.place_id && i.trip_id === tripId;
+        })[0];
+        if (dupe) { dupe._duplicate = true; return dupe; }
+      }
+      appendObj('Items', item);
+      return item;
+    });
+  },
+
+  /** Preview a link without saving (used by the capture sheet). */
+  resolve: function (p) { return resolveText(String(p.text || '')); },
+
+  updateItem: function (p) {
+    return withLock(function () {
+      const patch = parsePatch(p.patch);
+      patch.updated = new Date().toISOString();
+      return updateRow('Items', p.id, patch);
+    });
+  },
+
+  deleteItem: function (p) {
+    return withLock(function () { deleteRow('Items', p.id); return { id: p.id }; });
+  },
+
+  /** Move many items at once (e.g. Someday → a new trip). */
+  attach: function (p) {
+    return withLock(function () {
+      const ids = Array.isArray(p.ids) ? p.ids : String(p.ids || '').split(',');
+      const tripId = p.trip_id === 'someday' ? '' : String(p.trip_id || '');
+      const now = new Date().toISOString();
+      return ids.filter(String).map(function (id) {
+        return updateRow('Items', id, { trip_id: tripId, updated: now });
+      });
+    });
+  },
+
+  addTrip: function (p) {
+    return withLock(function () {
+      const t = parsePatch(p.trip);
+      const now = new Date().toISOString();
+      const trip = {
+        id: t.id || newId('tr'),
+        name: t.name || 'New trip',
+        destination: t.destination || '',
+        start: t.start || '', end: t.end || '',
+        timezone: t.timezone || '',
+        notes: t.notes || '',
+        created: now, updated: now,
+      };
+      if (findRow('Trips', trip.id)) return findRow('Trips', trip.id).obj;
+      appendObj('Trips', trip);
+      return trip;
+    });
+  },
+
+  updateTrip: function (p) {
+    return withLock(function () {
+      const patch = parsePatch(p.patch);
+      patch.updated = new Date().toISOString();
+      return updateRow('Trips', p.id, patch);
+    });
+  },
+
+  /** Deleting a trip sends its items back to Someday rather than deleting them. */
+  deleteTrip: function (p) {
+    return withLock(function () {
+      const now = new Date().toISOString();
+      readTable('Items').filter(function (i) { return i.trip_id === p.id; })
+        .forEach(function (i) { updateRow('Items', i.id, { trip_id: '', day: '', updated: now }); });
+      deleteRow('Trips', p.id);
+      return { id: p.id };
+    });
+  },
+
+  /** Re-run the Google lookup for an item (e.g. to refresh hours). */
+  refreshItem: function (p) {
+    return withLock(function () {
+      const row = findRow('Items', p.id);
+      if (!row) throw new Error('Not found: ' + p.id);
+      const src = row.obj.maps_url || row.obj.source || row.obj.title;
+      const r = resolveText(src);
+      const patch = { updated: new Date().toISOString() };
+      ['city', 'region', 'country', 'address', 'lat', 'lng', 'place_id', 'maps_url', 'hours', 'website']
+        .forEach(function (k) { if (r[k] != null && r[k] !== '') patch[k] = r[k]; });
+      return updateRow('Items', p.id, patch);
+    });
+  },
+};
+
+/* ---------------------------------------------------------------
+ * Google Maps link → place
+ * ------------------------------------------------------------- */
+function resolveText(text) {
+  text = String(text || '').trim();
+  const urlMatch = text.match(/https?:\/\/[^\s<>"]+/);
+  const lines = text.split(/\n/).map(function (s) { return s.trim(); }).filter(String);
+  const nonUrl = lines.filter(function (l) { return !/^https?:\/\//.test(l); })
+    .map(function (l) { return l.replace(/https?:\/\/\S+/g, '').trim(); }).filter(String);
+
+  if (!urlMatch) return { kind: 'idea', title: text };
+
+  const url = urlMatch[0];
+  if (!isMapsUrl(url)) {
+    // A blog post, menu, article… keep it as an idea with the link
+    return { kind: 'idea', title: nonUrl[0] || url, website: url };
+  }
+
+  const full = expandUrl(url);
+  const parsed = parseMapsUrl(full);
+  const out = {
+    kind: 'place',
+    title: parsed.name || nonUrl[0] || parsed.query || 'Saved place',
+    lat: parsed.lat, lng: parsed.lng,
+    maps_url: url,
+  };
+
+  const key = PropertiesService.getScriptProperties().getProperty('PLACES_KEY');
+  if (!key) return out;
+
+  let place = null;
+  try {
+    if (parsed.placeId) place = placeDetails(parsed.placeId, key);
+    if (!place) {
+      const q = parsed.name || parsed.query || nonUrl.join(', ');
+      if (q) place = textSearch(q, parsed.lat, parsed.lng, key);
+    }
+  } catch (err) {
+    out.lookup_error = String(err.message || err);
+  }
+  return place ? Object.assign(out, fromPlace(place, url)) : out;
+}
+
+function isMapsUrl(u) {
+  return /(^https?:\/\/)?(maps\.app\.goo\.gl|goo\.gl\/maps|g\.co\/kgs|(www\.)?google\.[a-z.]+\/maps|maps\.google\.[a-z.]+)/i.test(u);
+}
+
+function expandUrl(url) {
+  let cur = url;
+  for (let i = 0; i < 6; i++) {
+    if (!/maps\.app\.goo\.gl|goo\.gl|g\.co/i.test(cur)) break;
+    const res = UrlFetchApp.fetch(cur, { followRedirects: false, muteHttpExceptions: true });
+    const h = res.getAllHeaders();
+    let loc = h['Location'] || h['location'];
+    if (Array.isArray(loc)) loc = loc[0];
+    if (!loc) {
+      const m = res.getContentText().match(/https:\/\/www\.google\.[a-z.]+\/maps[^"'\s<>]+/);
+      if (m) cur = m[0].replace(/\\u0026/g, '&').replace(/&amp;/g, '&');
+      break;
+    }
+    cur = loc;
+  }
+  return cur;
+}
+
+function parseMapsUrl(u) {
+  const r = {};
+  let m;
+  if ((m = u.match(/\/maps\/place\/([^\/@?]+)/))) r.name = safeDecode(m[1]);
+  if ((m = u.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/))) { r.lat = +m[1]; r.lng = +m[2]; }
+  else if ((m = u.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/))) { r.lat = +m[1]; r.lng = +m[2]; }
+  const q = getParam(u, 'q') || getParam(u, 'query');
+  if (q) {
+    const cm = q.match(/^\s*(-?\d+\.\d+),\s*(-?\d+\.\d+)\s*$/);
+    if (cm) { r.lat = +cm[1]; r.lng = +cm[2]; } else r.query = q;
+  }
+  const pid = getParam(u, 'query_place_id') || getParam(u, 'place_id');
+  if (pid) r.placeId = pid;
+  return r;
+}
+
+function getParam(u, k) {
+  const m = u.match(new RegExp('[?&]' + k + '=([^&#]+)'));
+  return m ? safeDecode(m[1]) : '';
+}
+
+function safeDecode(s) {
+  try { return decodeURIComponent(String(s).replace(/\+/g, ' ')); } catch (e) { return String(s).replace(/\+/g, ' '); }
+}
+
+function textSearch(query, lat, lng, key) {
+  const body = { textQuery: query, pageSize: 1 };
+  if (lat != null && lng != null) {
+    body.locationBias = { circle: { center: { latitude: lat, longitude: lng }, radius: 500 } };
+  }
+  const res = UrlFetchApp.fetch('https://places.googleapis.com/v1/places:searchText', {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(body),
+    headers: {
+      'X-Goog-Api-Key': key,
+      'X-Goog-FieldMask': PLACE_FIELDS.map(function (f) { return 'places.' + f; }).join(','),
+    },
+    muteHttpExceptions: true,
+  });
+  const j = JSON.parse(res.getContentText());
+  if (j.error) throw new Error('Places: ' + j.error.message);
+  return (j.places || [])[0] || null;
+}
+
+function placeDetails(placeId, key) {
+  const res = UrlFetchApp.fetch('https://places.googleapis.com/v1/places/' + encodeURIComponent(placeId), {
+    headers: { 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': PLACE_FIELDS.join(',') },
+    muteHttpExceptions: true,
+  });
+  const j = JSON.parse(res.getContentText());
+  return j.error ? null : j;
+}
+
+function fromPlace(pl, originalUrl) {
+  const comp = function (types) {
+    const c = (pl.addressComponents || []).filter(function (a) {
+      return (a.types || []).some(function (t) { return types.indexOf(t) !== -1; });
+    })[0];
+    return c ? (c.longText || '') : '';
+  };
+  const oh = pl.regularOpeningHours;
+  return {
+    title: (pl.displayName && pl.displayName.text) || undefined,
+    place_id: pl.id || '',
+    address: pl.formattedAddress || '',
+    lat: pl.location ? pl.location.latitude : undefined,
+    lng: pl.location ? pl.location.longitude : undefined,
+    maps_url: pl.googleMapsUri || originalUrl,
+    website: pl.websiteUri || '',
+    category: (pl.primaryTypeDisplayName && pl.primaryTypeDisplayName.text) || '',
+    city: comp(['locality', 'postal_town']) || comp(['administrative_area_level_2']),
+    region: comp(['administrative_area_level_1']),
+    country: comp(['country']),
+    hours: oh ? JSON.stringify({ weekday: oh.weekdayDescriptions || [], periods: oh.periods || [],
+                                 utcOffset: pl.utcOffsetMinutes }) : '',
+  };
+}
+
+/* ---------------------------------------------------------------
+ * Sheet helpers
+ * ------------------------------------------------------------- */
+function sheet(name) {
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  if (!sh) throw new Error('Missing tab "' + name + '" — run setup()');
+  return sh;
+}
+
+function headersOf(sh) {
+  return sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+}
+
+function norm(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  return v === null || v === undefined ? '' : String(v);
+}
+
+function readTable(name) {
+  const sh = sheet(name);
+  if (sh.getLastRow() < 2) return [];
+  const values = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+  const hdr = values.shift().map(String);
+  return values
+    .filter(function (r) { return r.some(function (c) { return c !== ''; }); })
+    .map(function (r) {
+      const o = {};
+      hdr.forEach(function (h, i) { if (h) o[h] = norm(r[i]); });
+      return o;
+    });
+}
+
+function appendObj(name, obj) {
+  const sh = sheet(name);
+  const hdr = headersOf(sh);
+  const row = hdr.map(function (h) { return obj[h] !== undefined && obj[h] !== null ? String(obj[h]) : ''; });
+  const r = sh.getLastRow() + 1;
+  const range = sh.getRange(r, 1, 1, hdr.length);
+  range.setNumberFormat('@');
+  range.setValues([row]);
+}
+
+function findRow(name, id) {
+  if (!id) return null;
+  const sh = sheet(name);
+  if (sh.getLastRow() < 2) return null;
+  const hdr = headersOf(sh);
+  const idCol = hdr.indexOf('id');
+  const ids = sh.getRange(2, idCol + 1, sh.getLastRow() - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(id)) {
+      const rowNum = i + 2;
+      const vals = sh.getRange(rowNum, 1, 1, hdr.length).getValues()[0];
+      const obj = {};
+      hdr.forEach(function (h, k) { if (h) obj[h] = norm(vals[k]); });
+      return { sh: sh, hdr: hdr, rowNum: rowNum, obj: obj };
+    }
+  }
+  return null;
+}
+
+function updateRow(name, id, patch) {
+  const f = findRow(name, id);
+  if (!f) throw new Error('Not found: ' + id);
+  const obj = Object.assign({}, f.obj);
+  Object.keys(patch).forEach(function (k) { if (k !== 'id' && f.hdr.indexOf(k) !== -1) obj[k] = patch[k]; });
+  const row = f.hdr.map(function (h) { return obj[h] !== undefined && obj[h] !== null ? String(obj[h]) : ''; });
+  f.sh.getRange(f.rowNum, 1, 1, f.hdr.length).setValues([row]);
+  return obj;
+}
+
+function deleteRow(name, id) {
+  const f = findRow(name, id);
+  if (f) f.sh.deleteRow(f.rowNum);
+}
+
+function parsePatch(x) {
+  if (!x) return {};
+  if (typeof x === 'string') { try { return JSON.parse(x); } catch (e) { return {}; } }
+  return x;
+}
+
+function newId(prefix) {
+  return prefix + '_' + Utilities.getUuid().replace(/-/g, '').slice(0, 10);
+}
+
+function withLock(fn) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try { return fn(); } finally { lock.releaseLock(); }
+}
