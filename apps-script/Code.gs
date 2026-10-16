@@ -16,11 +16,12 @@ const SHEETS = {
   Items: ['id', 'trip_id', 'kind', 'category', 'title', 'city', 'region', 'country', 'address',
           'lat', 'lng', 'place_id', 'maps_url', 'hours', 'website', 'day', 'start_time', 'end_time',
           'confirmation', 'status', 'source', 'notes', 'created', 'updated',
-          'end_day', 'parent_id', 'seq'],
+          'end_day', 'parent_id', 'seq', 'priority',
+          'from_code', 'to_code', 'from_name', 'to_name', 'from_lat', 'from_lng', 'to_lat', 'to_lng'],
   Plan:  ['trip_id', 'day', 'item_id', 'order', 'note'],
   Log:   ['id', 'trip_id', 'item_id', 'place_id', 'title', 'lat', 'lng', 'logged_at', 'timezone',
           'origin', 'note', 'would_return', 'cost', 'currency', 'photo_url', 'created',
-          'parent_id', 'day', 'seq', 'time', 'mode', 'address', 'city', 'maps_url', 'updated'],
+          'parent_id', 'day', 'seq', 'time', 'mode', 'address', 'city', 'maps_url', 'updated', 'rating'],
   Routes: ['key', 'polyline', 'duration', 'distance', 'created'],
 };
 
@@ -155,6 +156,8 @@ const ACTIONS = {
         end_day: p.end_day || '',
         parent_id: p.parent_id || '',
         seq: p.seq != null ? String(p.seq) : '',
+        priority: p.priority || '',
+        from_code: p.from_code || '', to_code: p.to_code || '',
         confirmation: p.confirmation || '',
         status: 'open',
         source: text,
@@ -176,6 +179,8 @@ const ACTIONS = {
         })[0];
         if (dupe) { dupe._duplicate = true; return dupe; }
       }
+      fillAirports(item, item);
+      if (!p.title && !text && (item.from_code || item.to_code)) item.title = [item.from_code, item.to_code].filter(String).join(' → ');
       appendObj('Items', item);
       return item;
     });
@@ -299,6 +304,8 @@ const ACTIONS = {
     return withLock(function () {
       const patch = parsePatch(p.patch);
       patch.updated = new Date().toISOString();
+      const cur = findRow('Items', p.id);
+      if (cur && ('from_code' in patch || 'to_code' in patch)) fillAirports(Object.assign({}, cur.obj, patch), patch, cur.obj);
       return updateRow('Items', p.id, patch);
     });
   },
@@ -468,6 +475,44 @@ function getParam(u, k) {
 function safeDecode(s) {
   try { return decodeURIComponent(String(s).replace(/\+/g, ' ')); } catch (e) { return String(s).replace(/\+/g, ' '); }
 }
+
+/* ---------------------------------------------------------------
+ * Airports: code (e.g. KEF) → name + location, looked up once
+ * ------------------------------------------------------------- */
+function fillAirports(o, patch, before) {
+  ['from', 'to'].forEach(function (side) {
+    const code = String(o[side + '_code'] || '').trim().toUpperCase();
+    patch[side + '_code'] = code;
+    if (!code) { patch[side + '_name'] = ''; patch[side + '_lat'] = ''; patch[side + '_lng'] = ''; return; }
+    if (before && before[side + '_code'] === code && before[side + '_lat'] !== '') return;
+    const a = airportLookup(code);
+    if (a) { patch[side + '_name'] = a.name; patch[side + '_lat'] = a.lat; patch[side + '_lng'] = a.lng; }
+  });
+}
+
+function airportLookup(code) {
+  const props = PropertiesService.getScriptProperties();
+  const cached = props.getProperty('AP_' + code);
+  if (cached) return JSON.parse(cached);
+  const key = props.getProperty('PLACES_KEY');
+  if (!key) return null;
+  try {
+    const res = UrlFetchApp.fetch('https://places.googleapis.com/v1/places:searchText', {
+      method: 'post', contentType: 'application/json',
+      payload: JSON.stringify({ textQuery: code + ' airport', includedType: 'airport', pageSize: 1 }),
+      headers: { 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': 'places.displayName,places.location' },
+      muteHttpExceptions: true,
+    });
+    const pl = (JSON.parse(res.getContentText()).places || [])[0];
+    if (!pl || !pl.location) return null;
+    const a = { name: (pl.displayName && pl.displayName.text) || code, lat: pl.location.latitude, lng: pl.location.longitude };
+    props.setProperty('AP_' + code, JSON.stringify(a));
+    return a;
+  } catch (e) { return null; }
+}
+
+/** Run from the editor to check airport lookups. */
+function testAirport() { Logger.log(JSON.stringify(airportLookup('KEF'))); }
 
 function textSearch(query, lat, lng, key) {
   const body = { textQuery: query, pageSize: 1 };

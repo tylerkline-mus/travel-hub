@@ -188,6 +188,13 @@ main { padding: 6px 16px 24px; max-width: 720px; margin: 0 auto; }
 .leaflet-popup-content b { font-size: 14px; }
 .pop-btn { display: inline-block; margin-top: 6px; border: 0; background: var(--accent); color: #fff; border-radius: 8px; padding: 5px 10px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .leaflet-container { font-family: var(--sans); }
+.ap-pin span { display: inline-block; padding: 3px 6px; border-radius: 6px; background: var(--fixed); color: #fff; font: 700 11px var(--sans); letter-spacing: .04em; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35); white-space: nowrap; }
+.pri { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; margin-right: 6px; vertical-align: 2px; }
+.pri.must { background: var(--accent); color: var(--accent-ink); }
+.pri.maybe { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--muted); }
+.rate { font-weight: 600; margin-right: 6px; }
+.rate.loved { color: #c2405a; } .rate.liked { color: var(--idea); } .rate.meh { color: var(--muted); }
+.route-codes { font-weight: 700; letter-spacing: .03em; }
 .leaflet-tile-pane { filter: saturate(.75) sepia(.12); }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.88) saturate(.5); }
@@ -263,6 +270,9 @@ nav.tabs .add svg { width: 26px; height: 26px; }
   background: var(--ink); color: var(--paper); padding: 10px 16px; border-radius: 12px; font-size: 14px; z-index: 2000;
   opacity: 0; transition: all .2s; max-width: calc(100% - 32px); text-align: center; pointer-events: none; }
 .toast.show { opacity: 1; transform: translateX(-50%); }
+.toast.has-action { pointer-events: auto; display: flex; align-items: center; gap: 14px; }
+.toast button { border: 0; background: none; color: var(--accent); font-weight: 700; font-size: 14px; padding: 2px 0; cursor: pointer; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .toast button { color: #b9532c; } }
 .demo-tag { font-size: 11px; font-weight: 600; background: #d8a136; color: #2a1c05; padding: 3px 7px; border-radius: 6px; }
 </style>
 </head>
@@ -296,6 +306,16 @@ const KIND_COLOR = { fixed: 'var(--fixed)', place: 'var(--place)', idea: 'var(--
 const FIXED_CATS = ['Flight', 'Stay', 'Tour', 'Tickets', 'Reservation', 'Transit', 'Other'];
 const MODES = [['walk', 'Walk'], ['transit', 'Transit'], ['train', 'Train'], ['car', 'Car / taxi'], ['tour', 'Tour bus'], ['bike', 'Bike']];
 const MODE_LABEL = Object.fromEntries(MODES);
+const PRIOS = [['must', 'Must'], ['want', 'Want'], ['maybe', 'Maybe']];
+const PRIO_RANK = { must: 0, want: 1, '': 2, maybe: 3 };
+const prioRank = i => PRIO_RANK[i.priority || ''] ?? 2;
+const RATINGS = [['loved', '♥ Loved'], ['liked', '✓ Liked'], ['meh', '– Meh']];
+const ratingOf = l => l.rating || (l.would_return ? 'loved' : '');
+function prioBadge(i) { return i.priority === 'must' ? '<span class="pri must">Must</span>' : i.priority === 'maybe' ? '<span class="pri maybe">Maybe</span>' : ''; }
+function rateBadge(l) { const r = ratingOf(l); const lab = RATINGS.find(x => x[0] === r); return lab ? `<span class="rate ${r}">${lab[1]}</span>` : ''; }
+function flightCodes(i) { return [i.from_code, i.to_code].filter(Boolean).join(' → '); }
+// codes to show under a flight's title, unless the title already says them
+function flightCodesExtra(i) { const c = flightCodes(i); return c && !String(i.title || '').includes(c) ? c : ''; }
 
 /* ---------- helpers ---------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -351,11 +371,19 @@ function tripStatus(t) {
   return { label: 'Past', cls: '' };
 }
 function tripDays(t) {
-  if (!t.start) return [];
-  const end = t.end && t.end >= t.start ? t.end : t.start;
-  const out = []; let d = t.start;
-  while (d <= end && out.length < 120) { out.push(d); d = addDays(d, 1); }
+  // Trip dates, stretched to cover bookings that fall outside them (e.g. a travel day)
+  let first = t.start || '', last = t.end && t.end >= (t.start || '') ? t.end : t.start || '';
+  db.items.filter(i => i.trip_id === t.id && i.kind === 'fixed' && !i.parent_id).forEach(i => {
+    [i.day, i.end_day].filter(Boolean).forEach(x => { if (!first || x < first) first = x; if (!last || x > last) last = x; });
+  });
+  if (!first) return [];
+  const out = []; let d = first;
+  while (d <= last && out.length < 120) { out.push(d); d = addDays(d, 1); }
   return out;
+}
+function dayLabel(t, d) {
+  if (!t.start || d < t.start || (t.end && d > t.end)) return 'Travel day';
+  return 'Day ' + (Math.round((parseDate(d) - parseDate(t.start)) / 86400000) + 1);
 }
 function hue(id) { let h = 0; for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) % 360; return `hsl(${h} 45% 48%)`; }
 function tripById(id) { return db.trips.find(t => t.id === id); }
@@ -415,7 +443,7 @@ function fixedEvents(tripId, d) {
   const out = [];
   topItemsFor(tripId).filter(i => i.kind === 'fixed').forEach(i => {
     const multi = i.end_day && i.end_day !== i.day;
-    if (i.day === d) out.push({ i, label: isStay(i) ? 'Check in' : isFlight(i) ? 'Depart' : '', time: i.start_time, end: multi ? '' : i.end_time, start: true });
+    if (i.day === d) out.push({ i, label: isStay(i) ? 'Check in' : isFlight(i) ? (multi ? 'Depart' : '') : '', time: i.start_time, end: multi ? '' : i.end_time, start: true });
     if (multi && i.end_day === d) out.push({ i, label: isStay(i) ? 'Check out' : isFlight(i) ? 'Arrive' : 'Ends', time: i.end_time, end: '', start: false });
   });
   return out.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
@@ -428,10 +456,31 @@ function topLogs(tripId, d) { return logsFor(tripId, d).filter(l => !l.parent_id
 function logKids(id) { return db.log.filter(l => l.parent_id === id).sort((a, b) => seqOf(a) - seqOf(b)); }
 function flatLogs(tripId, d) { return topLogs(tripId, d).flatMap(l => [l, ...logKids(l.id)]); }
 
-function toast(msg) {
-  const el = $('#toast'); el.textContent = msg; el.classList.add('show');
-  clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove('show'), 2400);
+function toast(msg, opts = {}) {
+  const el = $('#toast');
+  el.innerHTML = `<span>${esc(msg)}</span>${opts.action ? `<button>${esc(opts.action)}</button>` : ''}`;
+  el.classList.toggle('has-action', !!opts.action);
+  if (opts.action) $('button', el).onclick = () => { el.classList.remove('show'); opts.onAction(); };
+  el.classList.add('show');
+  clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove('show'), opts.ms || 2400);
 }
+
+/* Deletes wait a few seconds so they can be undone. If the app is closed in that
+   window, the delete is sent immediately rather than lost. */
+const pendingDeletes = [];
+function undoable(msg, removeLocal, commit) {
+  const snap = JSON.stringify({ trips: db.trips, items: db.items, log: db.log });
+  removeLocal(); saveLocal(); render();
+  const job = { done: false, run() { if (this.done) return; this.done = true; commit(); } };
+  pendingDeletes.push(job);
+  const timer = setTimeout(() => job.run(), 6000);
+  toast(msg, { action: 'Undo', ms: 6000, onAction: () => {
+    if (job.done) return toast('Too late — already saved');
+    job.done = true; clearTimeout(timer);
+    Object.assign(db, JSON.parse(snap)); saveLocal(); render(); toast('Restored');
+  } });
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') pendingDeletes.forEach(j => j.run()); });
 
 /* ---------- icons ---------- */
 const I = {
@@ -682,12 +731,14 @@ function evRow(e) {
   const i = e.i, c = isTour(i) ? 'var(--tour)' : 'var(--fixed)';
   const kids = e.start && isTour(i) ? childrenOf(i.id) : [];
   const reorder = ui.reorder === 'tour:' + i.id;
-  const metaBits = [i.category && !e.label ? i.category : '', e.end ? 'until ' + fmtTime(e.end) : '', i.confirmation ? '#' + i.confirmation : ''].filter(Boolean);
+  const fl = isFlight(i);
+  const metaBits = [fl ? '' : (i.category && !e.label ? i.category : ''), e.end ? (fl ? 'lands ' : 'until ') + fmtTime(e.end) : '', i.confirmation ? '#' + i.confirmation : ''].filter(Boolean);
+  const codes = fl && flightCodesExtra(i) ? `<span class="route-codes">${esc(flightCodesExtra(i))}</span>` : '';
   return `<div class="ev" data-item="${esc(i.id)}" style="--c:${c}">
     <div class="ev-time">${esc(fmtTime(e.time))}</div>
     <div class="ev-body">
       <div class="title">${e.label ? `<span class="ev-label">${esc(e.label)}</span>` : ''}${esc(i.title)}</div>
-      ${metaBits.length ? `<div class="meta">${esc(metaBits.join(' · '))}</div>` : ''}
+      ${metaBits.length || codes ? `<div class="meta">${[codes, esc(metaBits.join(' · '))].filter(Boolean).join(' · ')}</div>` : ''}
       ${kids.length ? `<ol class="stops">${kids.map((s, k) => stopRow(s, k, 'tour:' + i.id, kids.length, reorder, null, 'var(--tour)')).join('')}</ol>
         ${kids.length > 1 ? `<button class="linkbtn" data-reorder="tour:${esc(i.id)}">${reorder ? 'Done' : 'Reorder stops'}</button>` : ''}` : ''}
     </div>
@@ -704,7 +755,7 @@ function stopRow(s, k, listKey, n, reorder, dow, color) {
   const meta = [esc(placeLine(s)), hint].filter(Boolean).join(' · ');
   return `<li class="stop ${s.status === 'done' ? 'done' : ''} ${s._pending ? 'pending' : ''}" data-item="${esc(s.id)}" style="--c:${color || (s.kind === 'idea' ? 'var(--idea)' : 'var(--place)')}">
     <span class="num ${s.kind === 'idea' ? 'hollow' : ''}">${k + 1}</span>
-    <div class="body"><div class="title">${esc(s.title)}</div>${meta ? `<div class="meta">${meta}</div>` : ''}</div>
+    <div class="body"><div class="title">${prioBadge(s)}${esc(s.title)}</div>${meta ? `<div class="meta">${meta}</div>` : ''}</div>
     ${reorder ? `<div class="moves"><button data-move="up" data-list="${esc(listKey)}" data-id="${esc(s.id)}" ${k === 0 ? 'disabled' : ''}>↑</button><button data-move="down" data-list="${esc(listKey)}" data-id="${esc(s.id)}" ${k === n - 1 ? 'disabled' : ''}>↓</button></div>` : ''}
   </li>`;
 }
@@ -718,7 +769,7 @@ function dayCard(t, d, idx, today) {
   const reorder = ui.reorder === key;
   const logged = logsFor(t.id, d).length;
   return `<section class="day ${d === today ? 'today' : ''}" id="day-${d}">
-    <div class="day-h"><div><div class="d">${esc(fmtDay(d))}</div><div class="n">Day ${idx + 1}${d === today ? ' · Today' : ''}${logged ? ` · ${logged} logged` : ''}</div></div><span class="sp"></span>
+    <div class="day-h"><div><div class="d">${esc(fmtDay(d))}</div><div class="n">${dayLabel(t, d)}${d === today ? ' · Today' : ''}${logged ? ` · ${logged} logged` : ''}</div></div><span class="sp"></span>
       <button class="linkbtn" data-mapday="${d}">Map</button>${logged || d <= today ? `<button class="linkbtn" data-logday="${d}">Log</button>` : ''}</div>
     ${events.map(evRow).join('')}
     <div class="plan-h"><span>Plan</span><span class="sp"></span>
@@ -739,7 +790,7 @@ function itemCard(i, showDay) {
   const meta = i._pending ? 'Looking up…' : [placeLine(i) || (i.kind === 'idea' ? (i.notes || 'Idea') : i.address || ''), kids ? kids + ' stops' : ''].filter(Boolean).join(' · ');
   return `<div class="item kind-${esc(i.kind)} ${i.status === 'done' ? 'done' : ''} ${i._pending ? 'pending' : ''}" style="--c:${c}" data-item="${esc(i.id)}">
     <span class="mark"></span>
-    <div class="body"><div class="title">${esc(i.title)}</div><div class="meta">${esc(meta)}</div></div>
+    <div class="body"><div class="title">${prioBadge(i)}${esc(i.title)}</div><div class="meta">${isFlight(i) && flightCodesExtra(i) ? `<span class="route-codes">${esc(flightCodesExtra(i))}</span>${meta ? ' · ' : ''}` : ''}${esc(meta)}</div></div>
     ${when ? `<div class="when">${esc(when)}</div>` : ''}
   </div>`;
 }
@@ -756,7 +807,7 @@ function savedContent(t) {
     if (fixed.length) body += `<div class="section-title">Fixed <span class="count">${fixed.length}</span></div>` + fixed.map(i => itemCard(i, false)).join('');
   }
   if (show('place')) {
-    const places = its.filter(i => i.kind === 'place').sort((a, b) => (a.day ? 1 : 0) - (b.day ? 1 : 0) || (a.day || '').localeCompare(b.day || '') || a.title.localeCompare(b.title));
+    const places = its.filter(i => i.kind === 'place').sort((a, b) => (a.day ? 1 : 0) - (b.day ? 1 : 0) || prioRank(a) - prioRank(b) || (a.day || '').localeCompare(b.day || '') || a.title.localeCompare(b.title));
     if (places.length) body += `<div class="section-title">Places <span class="count">${places.length}</span></div>` + places.map(i => itemCard(i, true)).join('');
   }
   if (show('idea')) {
@@ -800,10 +851,11 @@ function logContent(t) {
     if (k > 0) list += `<div class="leg"><button data-mode="${esc(l.id)}">${esc(MODE_LABEL[l.mode] || 'How did you get here?')}</button></div>`;
     const kids = logKids(l.id);
     const meta = [l.time ? fmtTime(l.time) : '', l.city, l.note].filter(Boolean).join(' · ');
+    const rb = rateBadge(l);
     list += `<div class="entry ${l._pending ? 'pending' : ''}" data-log="${esc(l.id)}">
       <span class="num" style="--c:${l.origin === 'found' ? 'var(--found)' : 'var(--place)'}">${k + 1}</span>
       <div class="body"><div class="title">${esc(l.title)}</div>
-        <div class="meta">${l.origin ? `<span class="badge ${esc(l.origin)}">${l.origin === 'found' ? 'Found' : 'Planned'}</span>` : ''}${esc(meta)}</div>
+        <div class="meta">${l.origin ? `<span class="badge ${esc(l.origin)}">${l.origin === 'found' ? 'Found' : 'Planned'}</span>` : ''}${rb}${esc(meta)}</div>
         ${kids.length ? `<ul class="kids">${kids.map((c, j) => `<li data-log="${esc(c.id)}"><span class="num" style="--c:var(--tour)">${j + 1}</span>${esc(c.title)}</li>`).join('')}</ul>` : ''}
       </div>
       ${reorder ? `<div class="moves"><button data-move="up" data-list="${key}" data-id="${esc(l.id)}" ${k === 0 ? 'disabled' : ''}>↑</button><button data-move="down" data-list="${key}" data-id="${esc(l.id)}" ${k === tops.length - 1 ? 'disabled' : ''}>↓</button></div>` : ''}
@@ -812,7 +864,7 @@ function logContent(t) {
   if (!tops.length) list = `<div class="empty" style="padding:26px 10px"><div class="big">Nothing logged ${d === tzNow(t.timezone).day ? 'yet today' : 'this day'}</div>Tap “I’m here” at each stop, or fill the day in tonight. Order matters more than times.</div>`;
 
   return `${chips}
-    <div class="log-head"><div class="d">${esc(fmtDay(d))}</div><div class="s">${idx >= 0 ? 'Day ' + (idx + 1) + ' · ' : ''}${all.length} stop${all.length === 1 ? '' : 's'}${found ? ` · ${found} found` : ''}</div></div>
+    <div class="log-head"><div class="d">${esc(fmtDay(d))}</div><div class="s">${dayLabel(t, d)} · ${all.length} stop${all.length === 1 ? '' : 's'}${found ? ` · ${found} found` : ''}</div></div>
     <div class="log-actions">
       <button class="btn" data-act="here">I’m here</button>
       <button class="btn ghost" data-act="review">Review plan${toReview ? ` (${toReview})` : ''}</button>
@@ -859,7 +911,7 @@ function mapLayerToggle(t) {
   return `<div class="map-layer"><button class="${ui.mapLayer === 'plan' ? 'on' : ''}" data-maplayer="plan">Plan</button><button class="${ui.mapLayer === 'lived' ? 'on' : ''}" data-maplayer="lived">Lived${logsFor(t.id, d).length ? '' : ' (0)'}</button></div>`;
 }
 function mapSignature(tripId) {
-  return JSON.stringify([ui.mapDay, ui.mapLayer, db.items.filter(i => i.trip_id === tripId).map(i => [i.id, i.lat, i.day, i.seq, i.parent_id, i.status]), db.log.filter(l => l.trip_id === tripId).map(l => [l.id, l.lat, l.day, l.seq, l.mode, l.parent_id])]);
+  return JSON.stringify([ui.mapDay, ui.mapLayer, db.items.filter(i => i.trip_id === tripId).map(i => [i.id, i.lat, i.day, i.end_day, i.seq, i.parent_id, i.status, i.priority, i.from_lat, i.to_lat]), db.log.filter(l => l.trip_id === tripId).map(l => [l.id, l.lat, l.day, l.seq, l.mode, l.parent_id, l.rating])]);
 }
 function sizeMap() {
   const el = $('#map'); if (!el) return;
@@ -888,6 +940,7 @@ function initMap(tripId) {
   const pts = drawMap(t, layer);
   const viewKey = t.id + '|' + ui.mapDay + '|' + ui.mapLayer;
   if (ui.mapView && ui.mapView.key === viewKey) map.setView(ui.mapView.center, ui.mapView.zoom);
+  else if (!pts.length && drawMap._flightPts.length > 1) map.fitBounds(L.latLngBounds(drawMap._flightPts), { padding: [60, 40] });
   else if (pts.length > 1) map.fitBounds(L.latLngBounds(pts), { padding: [60, 40] });
   else if (pts.length === 1) map.setView(pts[0], 15);
   else map.setView([30, 0], 2);
@@ -902,8 +955,18 @@ function initMap(tripId) {
 function pinNum(n, color) { return L.divIcon({ className: 'num-pin', html: `<span style="background:${color}">${n}</span>`, iconSize: [26, 26], iconAnchor: [13, 13], popupAnchor: [0, -12] }); }
 function pinHome() { return L.divIcon({ className: 'home-pin', html: `<span>${I.home}</span>`, iconSize: [30, 30], iconAnchor: [15, 15], popupAnchor: [0, -14] }); }
 function popup(o, kind) {
-  const sub = kind === 'log' ? [o.time ? fmtTime(o.time) : '', o.origin === 'found' ? 'Found' : 'Planned'].filter(Boolean).join(' · ') : placeLine(o);
+  const r = RATINGS.find(x => x[0] === ratingOf(o));
+  const sub = kind === 'log' ? [o.time ? fmtTime(o.time) : '', o.origin === 'found' ? 'Found' : 'Planned', r ? r[1] : ''].filter(Boolean).join(' · ') : [o.priority === 'must' ? 'Must' : '', placeLine(o)].filter(Boolean).join(' · ');
   return `<b>${esc(o.title)}</b>${sub ? `<br><span style="color:#7a7064;font-size:12px">${esc(sub)}</span>` : ''}<br><button class="pop-btn" data-pop="${kind}:${esc(o.id)}">Details</button>`;
+}
+/** A gentle curve between two points, for flights */
+function flightArc(a, b) {
+  const [y1, x1] = a, [y2, x2] = b;
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, dx = x2 - x1, dy = y2 - y1;
+  const cx = mx - dy * 0.22, cy = my + dx * 0.22 * (dx >= 0 ? 1 : -1) * (dx >= 0 ? 1 : 1);
+  const pts = [];
+  for (let k = 0; k <= 32; k++) { const u = k / 32, v = 1 - u; pts.push([v * v * y1 + 2 * v * u * cy + u * u * y2, v * v * x1 + 2 * v * u * cx + u * u * x2]); }
+  return pts;
 }
 function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#b9532c'; }
 
@@ -915,7 +978,8 @@ function drawMap(t, layer) {
   const addDot = (o, color, kind = 'item') => {
     if (!hasCoords(o)) return;
     const ll = [+o.lat, +o.lng]; pts.push(ll);
-    L.circleMarker(ll, { radius: 8, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 }).bindPopup(popup(o, kind)).addTo(layer);
+    const radius = o.priority === 'must' ? 11 : o.priority === 'maybe' ? 6 : 8;
+    L.circleMarker(ll, { radius, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 }).bindPopup(popup(o, kind)).addTo(layer);
   };
   const addNum = (o, n, color, kind = 'item') => {
     if (!hasCoords(o)) return;
@@ -947,22 +1011,45 @@ function drawMap(t, layer) {
     });
   };
 
+  const seenAirports = {};
+  const drawFlights = (list, target) => {
+    list.forEach(f => {
+      let a = num(f.from_lat) !== null ? [+f.from_lat, +f.from_lng] : null;
+      let b = num(f.to_lat) !== null ? [+f.to_lat, +f.to_lng] : null;
+      if (a && seenAirports[f.from_code]) a = seenAirports[f.from_code];
+      // cross the Pacific / date line the short way, keeping both ends on the same side of the map
+      if (a && b) { if (b[1] - a[1] > 180) b = [b[0], b[1] - 360]; else if (a[1] - b[1] > 180) b = [b[0], b[1] + 360]; }
+      [[a, f.from_code, f.from_name], [b, f.to_code, f.to_name]].forEach(([ll, code, name]) => {
+        if (!ll || seenAirports[code]) return; seenAirports[code] = ll; target.push(ll);
+        L.marker(ll, { icon: L.divIcon({ className: 'ap-pin', html: `<span>${esc(code)}</span>`, iconSize: [44, 24], iconAnchor: [22, 12] }) })
+          .bindPopup(`<b>${esc(name || code)}</b>`).addTo(layer);
+      });
+      if (a && b) {
+        L.polyline(flightArc(a, b), { color: C.fixed, weight: 2.5, opacity: .8, dashArray: '2 7', lineCap: 'round' }).addTo(layer);
+      }
+    });
+  };
+  drawMap._flightPts = [];
+
   const items = itemsFor(t.id);
   const d = ui.mapDay;
   if (d === 'all' || d === 'unplanned') {
+    if (d === 'all') drawFlights(items.filter(i => isFlight(i) && !i.parent_id), drawMap._flightPts);
     items.forEach(i => {
       if (d === 'unplanned' && (i.day || i.kind === 'fixed' || i.parent_id)) return;
       if (i.kind === 'fixed' && isStay(i)) return addHome(i);
+      if (isFlight(i)) return;
       const parent = i.parent_id && itemById(i.parent_id);
       addDot(i, parent ? C.tour : i.status === 'done' ? C.found : (C[i.kind] || C.place));
     });
-    const missing = items.filter(i => !hasCoords(i) && i.kind !== 'idea').length;
+    const missing = items.filter(i => !hasCoords(i) && i.kind !== 'idea' && !isFlight(i)).length;
     say(missing ? `${missing} saved ${missing === 1 ? 'item has' : 'items have'} no location yet.` : '');
     return pts;
   }
 
   const home = stayForMorning(t.id, d);
   addHome(home);
+  drawFlights(items.filter(i => isFlight(i) && !i.parent_id && (i.day === d || i.end_day === d)), pts);
   const nightStay = stayForNight(t.id, d);
   if (nightStay && nightStay !== home) addHome(nightStay);
 
@@ -976,7 +1063,7 @@ function drawMap(t, layer) {
 
   // Plan: fixed events, tours, planned stops
   fixedEvents(t.id, d).forEach(e => {
-    if (isStay(e.i)) return;
+    if (isStay(e.i) || isFlight(e.i)) return;
     if (isTour(e.i) && e.start) {
       const kids = childrenOf(e.i.id);
       addDot(e.i, C.tour);
@@ -1093,12 +1180,18 @@ function openCapture() {
     <div class="seg" id="cap-kind">
       <button data-k="place">Place</button><button data-k="idea" class="on">Idea</button><button data-k="fixed">Fixed</button>
     </div>
+    <div id="cap-prio-wrap"><div class="field" style="margin-bottom:6px"><label>Priority</label></div>
+      <div class="seg" id="cap-prio"><button data-p="" class="on">—</button>${PRIOS.map(([k, l]) => `<button data-p="${k}">${l}</button>`).join('')}</div></div>
     <div id="cap-fixed" hidden>
       <div class="two">
         <div class="field"><label>Type</label><select id="cap-cat">${FIXED_CATS.map(c => `<option>${c}</option>`).join('')}</select></div>
         <div class="field"><label>Confirmation #</label><input id="cap-conf" autocomplete="off"></div>
       </div>
-      <div class="field"><label>Name (if not a Maps link)</label><input id="cap-title" placeholder="e.g. UA 1234 BNA → KEF"></div>
+      <div class="two" id="cap-air" hidden>
+        <div class="field"><label>From (airport code)</label><input id="cap-from" maxlength="4" placeholder="BNA" autocapitalize="characters" autocomplete="off"></div>
+        <div class="field"><label>To</label><input id="cap-to" maxlength="4" placeholder="ORD" autocapitalize="characters" autocomplete="off"></div>
+      </div>
+      <div class="field"><label id="cap-title-l">Name (if not a Maps link)</label><input id="cap-title" placeholder="e.g. Hotel Exeter"></div>
       <div class="two">
         <div class="field"><label id="cap-start-l">Starts</label><input type="date" id="cap-day"></div>
         <div class="field"><label>&nbsp;</label><input type="time" id="cap-time"></div>
@@ -1114,17 +1207,23 @@ function openCapture() {
       <button class="btn" id="cap-save">Save</button>
     </div>`, sh => {
     const ta = $('#cap-text', sh), hint = $('#cap-hint', sh);
+    let prio = '';
     const setKind = k => {
       kind = k;
       $$('#cap-kind button', sh).forEach(b => b.classList.toggle('on', b.dataset.k === k));
       $('#cap-fixed', sh).hidden = k !== 'fixed';
+      $('#cap-prio-wrap', sh).hidden = k === 'fixed';
     };
+    $$('#cap-prio button', sh).forEach(b => b.onclick = () => { prio = b.dataset.p; $$('#cap-prio button', sh).forEach(x => x.classList.toggle('on', x === b)); });
     const labels = () => {
       const c = $('#cap-cat', sh).value;
+      $('#cap-air', sh).hidden = c !== 'Flight';
+      $('#cap-title-l', sh).textContent = c === 'Flight' ? 'Flight number (optional)' : 'Name (if not a Maps link)';
+      $('#cap-title', sh).placeholder = c === 'Flight' ? 'UA 3412' : 'e.g. Hotel Exeter';
       $('#cap-start-l', sh).textContent = c === 'Stay' ? 'Check in' : c === 'Flight' ? 'Departs' : c === 'Tour' ? 'Pickup' : 'Starts';
       $('#cap-end-l', sh).textContent = c === 'Stay' ? 'Check out' : c === 'Flight' ? 'Arrives' : c === 'Tour' ? 'Return' : 'Ends';
     };
-    $('#cap-cat', sh).onchange = labels;
+    $('#cap-cat', sh).onchange = labels; labels();
     const detect = () => {
       const v = ta.value.trim();
       if (!v) { hint.innerHTML = '&nbsp;'; return; }
@@ -1145,7 +1244,10 @@ function openCapture() {
     $('#cap-save', sh).onclick = () => {
       const text = ta.value.trim();
       const fixed = kind === 'fixed';
-      const title = fixed ? $('#cap-title', sh).value.trim() : '';
+      const isFl = fixed && $('#cap-cat', sh).value === 'Flight';
+      const fromC = isFl ? $('#cap-from', sh).value.trim().toUpperCase() : '', toC = isFl ? $('#cap-to', sh).value.trim().toUpperCase() : '';
+      let title = fixed ? $('#cap-title', sh).value.trim() : '';
+      if (isFl && !title && (fromC || toC)) title = [fromC, toC].filter(Boolean).join(' → ');
       if (!text && !title) { ta.focus(); return; }
       const day = fixed ? $('#cap-day', sh).value : '';
       let endDay = fixed ? $('#cap-end-day', sh).value : '';
@@ -1157,11 +1259,13 @@ function openCapture() {
         confirmation: fixed ? $('#cap-conf', sh).value.trim() : undefined,
         day: day || undefined, start_time: fixed ? $('#cap-time', sh).value : undefined,
         end_day: endDay || undefined, end_time: fixed ? $('#cap-end-time', sh).value : undefined,
+        priority: fixed ? undefined : prio || undefined, from_code: fromC || undefined, to_code: toC || undefined,
       };
       const local = {
         id: payload.id, trip_id: payload.trip === 'someday' ? '' : payload.trip, kind,
         category: payload.category || '', title: title || (isUrl(text) ? linkTitle(text) : text),
         day: day || '', start_time: payload.start_time || '', end_day: endDay, end_time: payload.end_time || '',
+        priority: payload.priority || '', from_code: fromC, to_code: toC,
         confirmation: payload.confirmation || '', status: 'open', source: text, _pending: isMapsUrl(text),
       };
       queue('add', payload, () => db.items.push(local));
@@ -1194,6 +1298,8 @@ function openItem(id) {
     <div class="field"><input id="it-title" value="${esc(i.title)}" style="font-family:var(--serif);font-size:20px;font-weight:600;border:0;background:none;padding:4px 2px"></div>
     ${parent ? `<div class="hint" style="margin-top:-10px">Stop on <a href="#" id="it-parent">${esc(parent.title)}</a></div>` : ''}
     <div class="seg" id="it-kind">${['place', 'idea', 'fixed'].map(k => `<button data-k="${k}" class="${k === kind ? 'on' : ''}">${KIND[k]}</button>`).join('')}</div>
+    <div id="it-prio-wrap" ${kind === 'fixed' ? 'hidden' : ''}><div class="field" style="margin-bottom:6px"><label>Priority</label></div>
+      <div class="seg" id="it-prio"><button data-p="" class="${!i.priority ? 'on' : ''}">—</button>${PRIOS.map(([k, l]) => `<button data-p="${k}" class="${i.priority === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
     ${(i.address || hoursHtml || i.maps_url || i.website) ? `<div class="info">
       ${i.address ? `<div>${esc(i.address)}</div>` : ''}
       ${hoursHtml}
@@ -1207,6 +1313,10 @@ function openItem(id) {
       <div class="field"><label>Category</label><input id="it-cat" value="${esc(i.category)}" list="cats"><datalist id="cats">${FIXED_CATS.map(c => `<option>${c}</option>`).join('')}</datalist></div>
     </div>
     <div id="it-when-fixed" ${kind === 'fixed' ? '' : 'hidden'}>
+      <div class="two" id="it-air" ${fl ? '' : 'hidden'}>
+        <div class="field"><label>From (airport code)</label><input id="it-from" value="${esc(i.from_code || '')}" maxlength="4" autocapitalize="characters" autocomplete="off"></div>
+        <div class="field"><label>To</label><input id="it-to" value="${esc(i.to_code || '')}" maxlength="4" autocapitalize="characters" autocomplete="off"></div>
+      </div>
       <div class="two">
         <div class="field"><label>${startL}</label><input type="date" id="it-day" value="${esc(i.day)}"></div>
         <div class="field"><label>&nbsp;</label><input type="time" id="it-time" value="${esc(i.start_time)}"></div>
@@ -1228,12 +1338,16 @@ function openItem(id) {
     <div class="field"><label>Notes</label><textarea id="it-notes" placeholder="Why it’s on the list, who recommended it, what to order…">${esc(i.notes)}</textarea></div>
     <div class="btnrow"><button class="btn danger" id="it-del">Delete</button><button class="btn" id="it-save">Save</button></div>
   `, sh => {
+    let prio = i.priority || '';
     $$('#it-kind button', sh).forEach(b => b.onclick = () => {
       kind = b.dataset.k;
       $$('#it-kind button', sh).forEach(x => x.classList.toggle('on', x === b));
       $('#it-when-fixed', sh).hidden = kind !== 'fixed';
       $('#it-when-plain', sh).hidden = kind === 'fixed' || !!parent;
+      $('#it-prio-wrap', sh).hidden = kind === 'fixed';
     });
+    $$('#it-prio button', sh).forEach(b => b.onclick = () => { prio = b.dataset.p; $$('#it-prio button', sh).forEach(x => x.classList.toggle('on', x === b)); });
+    $('#it-cat', sh).oninput = () => { $('#it-air', sh).hidden = !/^flight$/i.test($('#it-cat', sh).value.trim()); };
     const pl = $('#it-parent', sh); if (pl) pl.onclick = e => { e.preventDefault(); openItem(parent.id); };
     $('#it-day', sh).onchange = () => { const e = $('#it-end-day', sh); if (e.value && e.value < $('#it-day', sh).value) e.value = $('#it-day', sh).value; };
     const collect = () => {
@@ -1247,9 +1361,17 @@ function openItem(id) {
         patch.day = $('#it-day', sh).value; patch.start_time = $('#it-time', sh).value;
         patch.end_day = $('#it-end-day', sh).value === patch.day ? '' : $('#it-end-day', sh).value;
         patch.end_time = $('#it-end-time', sh).value; patch.confirmation = $('#it-conf', sh).value.trim();
-      } else if (!parent) {
-        const nd = $('#it-pday', sh).value;
-        if (nd !== i.day) { patch.day = nd; patch.seq = nd ? String(plannedStops(i.trip_id, nd).length) : ''; }
+        if (!$('#it-air', sh).hidden) {
+          patch.from_code = $('#it-from', sh).value.trim().toUpperCase(); patch.to_code = $('#it-to', sh).value.trim().toUpperCase();
+          if (patch.from_code !== (i.from_code || '')) { patch.from_lat = ''; patch.from_lng = ''; }
+          if (patch.to_code !== (i.to_code || '')) { patch.to_lat = ''; patch.to_lng = ''; }
+        }
+      } else {
+        patch.priority = prio;
+        if (!parent) {
+          const nd = $('#it-pday', sh).value;
+          if (nd !== i.day) { patch.day = nd; patch.seq = nd ? String(plannedStops(i.trip_id, nd).length) : ''; }
+        }
       }
       if (patch.trip_id !== i.trip_id && !fixed) patch.day = '';
       return patch;
@@ -1264,12 +1386,11 @@ function openItem(id) {
       closeSheet();
     };
     $('#it-del', sh).onclick = () => {
-      if (!confirm('Delete “' + i.title + '”?')) return;
-      queue('deleteItem', { id: i.id }, () => {
+      closeSheet();
+      undoable('Deleted ' + i.title, () => {
         db.items.forEach(c => { if (c.parent_id === i.id) c.parent_id = ''; });
         db.items = db.items.filter(x => x.id !== i.id);
-      });
-      closeSheet();
+      }, () => queue('deleteItem', { id: i.id }));
     };
     const rf = $('#it-refresh', sh);
     if (rf) rf.onclick = e => { e.preventDefault(); i._pending = true; queue('refreshItem', { id: i.id }); closeSheet(); toast('Refreshing from Google…'); };
@@ -1306,11 +1427,11 @@ function openAddToDay(tripId, d) {
   const base = stayForNight(tripId, d) || stayForMorning(tripId, d);
   const cands = topItemsFor(tripId).filter(i => i.kind !== 'fixed' && !i.day).map(i => ({
     i, open: openOn(i, dow), dist: base && hasCoords(base) && hasCoords(i) ? meters(base, i) : null,
-  })).sort((a, b) => (a.open === false) - (b.open === false) || (a.dist ?? 1e9) - (b.dist ?? 1e9) || a.i.title.localeCompare(b.i.title));
+  })).sort((a, b) => (a.open === false) - (b.open === false) || prioRank(a.i) - prioRank(b.i) || (a.dist ?? 1e9) - (b.dist ?? 1e9) || a.i.title.localeCompare(b.i.title));
   openSheet(`
     <h3>Plan ${esc(fmtDay(d))}</h3>
     ${cands.length ? `<p class="hint" style="margin:-6px 2px 10px">${base && hasCoords(base) ? 'Closest to ' + esc(base.title) + ' first.' : 'Your saved places without a day.'}</p>
-    <div>${cands.map(c => `<label class="check"><input type="checkbox" value="${esc(c.i.id)}"><span>${esc(c.i.title)}<small>${[esc(placeLine(c.i)), c.dist != null ? fmtDist(c.dist) + ' away' : '', c.open === false ? `<span class="warn">Closed ${DOW[dow]}</span>` : esc(hoursOn(c.i, dow))].filter(Boolean).join(' · ')}</small></span></label>`).join('')}</div>
+    <div>${cands.map(c => `<label class="check"><input type="checkbox" value="${esc(c.i.id)}"><span>${prioBadge(c.i)}${esc(c.i.title)}<small>${[esc(placeLine(c.i)), c.dist != null ? fmtDist(c.dist) + ' away' : '', c.open === false ? `<span class="warn">Closed ${DOW[dow]}</span>` : esc(hoursOn(c.i, dow))].filter(Boolean).join(' · ')}</small></span></label>`).join('')}</div>
     <div class="btnrow" style="margin-top:16px"><button class="btn ghost" id="ad-cancel">Cancel</button><button class="btn" id="ad-go">Add to day</button></div>`
     : `<div class="empty">Every saved place already has a day. Tap + to save more.</div>`}
   `, sh => {
@@ -1426,12 +1547,18 @@ function openLogEntry(id) {
     </div>
     <div class="field"><label>Got here by</label><select id="lg-mode"><option value="">—</option>${MODES.map(([k, n]) => `<option value="${k}" ${k === l.mode ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
     <div class="field"><label>Note</label><textarea id="lg-note">${esc(l.note)}</textarea></div>
-    <label class="check" style="border:0"><input type="checkbox" id="lg-ret" ${l.would_return ? 'checked' : ''}><span>Would go back</span></label>
+    <div class="field" style="margin-bottom:6px"><label>How was it?</label></div>
+    <div class="seg" id="lg-rate">${RATINGS.map(([k, n]) => `<button data-r="${k}" class="${ratingOf(l) === k ? 'on' : ''}">${n}</button>`).join('')}</div>
     <div class="btnrow"><button class="btn danger" id="lg-del">Delete</button><button class="btn" id="lg-save">Save</button></div>
   `, sh => {
+    let rating = ratingOf(l);
+    $$('#lg-rate button', sh).forEach(b => b.onclick = () => {
+      rating = rating === b.dataset.r ? '' : b.dataset.r;
+      $$('#lg-rate button', sh).forEach(x => x.classList.toggle('on', x.dataset.r === rating));
+    });
     $('#lg-save', sh).onclick = () => {
       const patch = { title: $('#lg-title', sh).value.trim() || l.title, day: $('#lg-day', sh).value || l.day, time: $('#lg-time', sh).value,
-        mode: $('#lg-mode', sh).value, note: $('#lg-note', sh).value, would_return: $('#lg-ret', sh).checked ? 'yes' : '' };
+        mode: $('#lg-mode', sh).value, note: $('#lg-note', sh).value, rating, would_return: '' };
       if (patch.day !== l.day && !l.parent_id) patch.seq = String(topLogs(l.trip_id, patch.day).length);
       queue('updateLog', { id: l.id, patch }, () => {
         Object.assign(l, patch);
@@ -1440,14 +1567,13 @@ function openLogEntry(id) {
       closeSheet();
     };
     $('#lg-del', sh).onclick = () => {
-      if (!confirm('Remove this stop from the log?')) return;
       const kids = logKids(l.id);
-      kids.forEach(k => queue('deleteLog', { id: k.id }, () => { db.log = db.log.filter(x => x.id !== k.id); }));
-      queue('deleteLog', { id: l.id }, () => {
-        db.log = db.log.filter(x => x.id !== l.id);
-        [l, ...kids].forEach(x => { if (x.item_id && !db.log.some(y => y.item_id === x.item_id)) { const it = itemById(x.item_id); if (it) it.status = 'open'; } });
-      });
       closeSheet();
+      undoable('Removed ' + l.title, () => {
+        const gone = new Set([l.id, ...kids.map(k => k.id)]);
+        db.log = db.log.filter(x => !gone.has(x.id));
+        [l, ...kids].forEach(x => { if (x.item_id && !db.log.some(y => y.item_id === x.item_id)) { const it = itemById(x.item_id); if (it) it.status = 'open'; } });
+      }, () => { kids.forEach(k => queue('deleteLog', { id: k.id })); queue('deleteLog', { id: l.id }); });
     };
   });
 }
@@ -1538,12 +1664,14 @@ function openTripForm(id) {
     };
     const del = $('#tr-del', sh);
     if (del) del.onclick = () => {
-      if (!confirm('Delete “' + t.name + '”? Its places go back to Someday.')) return;
-      queue('deleteTrip', { id: t.id }, () => {
+      const typed = prompt('To delete this trip, type its name: ' + t.name + '\n\nIts places go back to Someday.');
+      if (typed === null) return;
+      if (typed.trim().toLowerCase() !== t.name.trim().toLowerCase()) { toast('Name didn’t match — trip kept'); return; }
+      closeSheet(); location.hash = '#/';
+      undoable('Deleted ' + t.name, () => {
         db.items.forEach(i => { if (i.trip_id === t.id) { i.trip_id = ''; i.day = ''; } });
         db.trips = db.trips.filter(x => x.id !== t.id);
-      });
-      closeSheet(); location.hash = '#/';
+      }, () => queue('deleteTrip', { id: t.id }));
     };
   });
 }
@@ -1651,11 +1779,12 @@ function demoData() {
   return {
     places: true, plan: [],
     trips: [
-      { id: 'tr_demo1', name: 'Tokyo', destination: 'Tokyo, Japan', start: d(-2), end: d(5), timezone: 'Asia/Tokyo', notes: '' },
+      { id: 'tr_demo1', name: 'Tokyo', destination: 'Tokyo, Japan', start: d(-1), end: d(5), timezone: 'Asia/Tokyo', notes: '' },
       { id: 'tr_demo2', name: 'Lisbon weekend', destination: 'Lisbon, Portugal', start: '', end: '', timezone: 'Europe/Lisbon', notes: '' },
     ],
     items: [
-      P('f1', { kind: 'fixed', category: 'Flight', title: 'NH 11 · ORD → HND', day: d(-2), start_time: '11:25', end_day: d(-1), end_time: '15:05', confirmation: 'K7Q2XD', lat: 35.5494, lng: 139.7798 }),
+      P('f0', { kind: 'fixed', category: 'Flight', title: 'UA 3412', from_code: 'BNA', to_code: 'ORD', from_name: 'Nashville International Airport', to_name: "O'Hare International Airport", from_lat: 36.1263, from_lng: -86.6774, to_lat: 41.9786, to_lng: -87.9048, day: d(-2), start_time: '06:10', end_time: '07:25', confirmation: 'K7Q2XD', city: '', region: '', country: '' }),
+      P('f1', { kind: 'fixed', category: 'Flight', title: 'NH 11', from_code: 'ORD', to_code: 'HND', from_name: "O'Hare International Airport", to_name: 'Haneda Airport', from_lat: 41.9786, from_lng: -87.9048, to_lat: 35.5494, to_lng: 139.7798, day: d(-2), start_time: '11:25', end_day: d(-1), end_time: '15:05', confirmation: 'K7Q2XD' }),
       P('f2', { kind: 'fixed', category: 'Stay', title: 'Hotel in Kuramae', city: 'Taito City', day: d(-1), start_time: '15:00', end_day: d(5), end_time: '11:00', address: 'Kuramae, Taito City, Tokyo', lat: 35.7037, lng: 139.7930 }),
       P('f3', { kind: 'fixed', category: 'Tour', title: 'Nikko day tour', day: d(1), start_time: '07:30', end_time: '19:00', lat: 35.7111, lng: 139.7976, address: 'Pickup at Asakusa Station' }),
       P('c1', { parent_id: 'f3', seq: '0', day: d(1), category: 'Shrine', title: 'Nikkō Tōshō-gū', city: 'Nikko', region: 'Tochigi', lat: 36.7580, lng: 139.5987 }),
@@ -1663,12 +1792,12 @@ function demoData() {
       P('c3', { parent_id: 'f3', seq: '2', day: d(1), category: 'Lake', title: 'Lake Chūzenji', city: 'Nikko', region: 'Tochigi', lat: 36.7340, lng: 139.4860 }),
       P('f4', { kind: 'fixed', category: 'Tickets', title: 'Concert at Suntory Hall', day: d(3), start_time: '19:00', city: 'Minato City', lat: 35.6680, lng: 139.7408 }),
       P('p1', { category: 'Temple', title: 'Sensō-ji', city: 'Taito City', day: d(0), seq: '0', status: 'done', hours: every('6:00 AM', '5:00 PM'), lat: 35.7148, lng: 139.7967 }),
-      P('p2', { category: 'Coffee shop', title: 'Kissa in Yanaka', city: 'Taito City', day: d(0), seq: '1', hours: every('8:00 AM', '6:00 PM'), lat: 35.7262, lng: 139.7695 }),
-      P('p3', { category: 'Shopping street', title: 'Yanaka Ginza', city: 'Taito City', day: d(0), seq: '2', lat: 35.7275, lng: 139.7660 }),
-      P('p4', { category: 'Bar', title: 'Golden Gai', city: 'Shinjuku City', day: d(2), seq: '0', hours: every('7:00 PM', '2:00 AM'), lat: 35.6938, lng: 139.7036 }),
+      P('p2', { priority: 'must', category: 'Coffee shop', title: 'Kissa in Yanaka', city: 'Taito City', day: d(0), seq: '1', hours: every('8:00 AM', '6:00 PM'), lat: 35.7262, lng: 139.7695 }),
+      P('p3', { priority: 'maybe', category: 'Shopping street', title: 'Yanaka Ginza', city: 'Taito City', day: d(0), seq: '2', lat: 35.7275, lng: 139.7660 }),
+      P('p4', { priority: 'must', category: 'Bar', title: 'Golden Gai', city: 'Shinjuku City', day: d(2), seq: '0', hours: every('7:00 PM', '2:00 AM'), lat: 35.6938, lng: 139.7036 }),
       P('p5', { category: 'Record store', title: 'Disk Union Shinjuku', city: 'Shinjuku City', day: d(2), seq: '1', hours: every('11:00 AM', '9:00 PM'), lat: 35.6920, lng: 139.7030 }),
-      P('p6', { category: 'Museum', title: 'Nezu Museum', city: 'Minato City', hours: closedMon, lat: 35.6624, lng: 139.7175 }),
-      P('p7', { category: 'Temple', title: 'Gōtoku-ji', city: 'Setagaya City', lat: 35.6489, lng: 139.6474 }),
+      P('p6', { priority: 'want', category: 'Museum', title: 'Nezu Museum', city: 'Minato City', hours: closedMon, lat: 35.6624, lng: 139.7175 }),
+      P('p7', { priority: 'maybe', category: 'Temple', title: 'Gōtoku-ji', city: 'Setagaya City', lat: 35.6489, lng: 139.6474 }),
       P('i1', { kind: 'idea', title: 'A snack bar night', notes: 'Somewhere small, near the hotel' }),
       P('i2', { kind: 'idea', title: 'Onsen on a rainy day' }),
       { id: 's1', trip_id: '', kind: 'place', category: 'Bakery', title: 'A bakery in Kyoto', city: 'Kyoto', region: 'Kyoto', country: 'Japan', status: 'open' },
@@ -1678,9 +1807,9 @@ function demoData() {
     log: [
       { id: 'l1', trip_id: 'tr_demo1', day: d(-1), seq: '0', title: 'Haneda Airport', origin: 'found', time: '15:20', lat: 35.5494, lng: 139.7798 },
       { id: 'l2', trip_id: 'tr_demo1', day: d(-1), seq: '1', item_id: 'f2', title: 'Hotel in Kuramae', origin: 'planned', mode: 'train', time: '17:05', lat: 35.7037, lng: 139.7930 },
-      { id: 'l3', trip_id: 'tr_demo1', day: d(-1), seq: '2', title: 'Ramen counter near Kuramae', origin: 'found', mode: 'walk', note: 'Shio ramen, 8 seats', would_return: 'yes', lat: 35.7045, lng: 139.7925 },
-      { id: 'l4', trip_id: 'tr_demo1', day: d(0), seq: '0', item_id: 'p1', title: 'Sensō-ji', origin: 'planned', mode: 'walk', time: '08:10', lat: 35.7148, lng: 139.7967 },
-      { id: 'l5', trip_id: 'tr_demo1', day: d(0), seq: '1', title: 'Kappabashi kitchen street', origin: 'found', mode: 'walk', note: 'Bought a knife', lat: 35.7130, lng: 139.7890 },
+      { id: 'l3', rating: 'loved', trip_id: 'tr_demo1', day: d(-1), seq: '2', title: 'Ramen counter near Kuramae', origin: 'found', mode: 'walk', note: 'Shio ramen, 8 seats', would_return: 'yes', lat: 35.7045, lng: 139.7925 },
+      { id: 'l4', rating: 'loved', trip_id: 'tr_demo1', day: d(0), seq: '0', item_id: 'p1', title: 'Sensō-ji', origin: 'planned', mode: 'walk', time: '08:10', lat: 35.7148, lng: 139.7967 },
+      { id: 'l5', rating: 'liked', trip_id: 'tr_demo1', day: d(0), seq: '1', title: 'Kappabashi kitchen street', origin: 'found', mode: 'walk', note: 'Bought a knife', lat: 35.7130, lng: 139.7890 },
     ],
   };
 }

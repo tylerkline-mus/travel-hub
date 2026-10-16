@@ -23,4 +23,5 @@ No data, keys or passphrases live in this repo. The app asks for the web app URL
 1. ✅ Trips, capture (Maps links, ideas, fixed bookings), Someday bucket, offline queue
 2. ✅ Start/end dates on bookings, tours with nested stops, day-by-day plan with ordering and opening-hours hints, map with routes
 3. ✅ Travelogue: ordered "I'm here" logging, planned vs. found, travel mode per leg, end-of-day review
-4. Photos, journal view, suggestion workflows
+4. ✅ Flights with airport codes and arcs, Must/Want/Maybe priority, Loved/Liked/Meh ratings, undo on deletes, travel days, offline map tiles
+5. Trip recap + poster export for socials, photos, suggestion workflows
