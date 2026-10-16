@@ -273,6 +273,32 @@ nav.tabs .add svg { width: 26px; height: 26px; }
 .stoprow { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .stoprow .body { flex: 1; min-width: 0; }
 
+/* ---------- Ask Claude ---------- */
+.badge.ask { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.badge.answered { background: color-mix(in srgb, var(--ink) 7%, transparent); color: var(--muted); }
+.badge.sugg { background: color-mix(in srgb, var(--idea) 16%, transparent); color: var(--idea); }
+.sugs { list-style: none; margin: 8px 0 0; padding: 0; border-left: 2px solid color-mix(in srgb, var(--idea) 35%, var(--line)); }
+.sugs li { display: flex; gap: 8px; align-items: center; padding: 6px 0 6px 10px; cursor: pointer; }
+.sugs li + li { border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
+.sugs .body { flex: 1; min-width: 0; }
+.sugs .t { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sugs .meta { margin-top: 1px; font-size: 12px; }
+.sheet .sugs { margin: 0 0 14px; }
+.mini { flex: none; height: 34px; padding: 0 11px; border-radius: 9px; border: 1px solid var(--line); background: var(--paper);
+  font-size: 13px; font-weight: 600; color: var(--ink); cursor: pointer; }
+.mini.keep { color: var(--idea); border-color: color-mix(in srgb, var(--idea) 40%, var(--line)); }
+.mini.x { width: 34px; padding: 0; color: var(--muted); font-weight: 500; }
+.ask-row { display: flex; align-items: center; gap: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; margin-bottom: 14px; }
+.ask-row .body { flex: 1; min-width: 0; }
+.ask-row .t { font-weight: 600; font-size: 15px; }
+.ask-row .s { font-size: 13px; color: var(--muted); margin-top: 2px; line-height: 1.35; }
+.switch { flex: none; width: 50px; height: 30px; border-radius: 15px; border: 0; padding: 0; position: relative; cursor: pointer;
+  background: color-mix(in srgb, var(--ink) 18%, transparent); transition: background .15s; }
+.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .15s; }
+.switch.on { background: var(--accent); }
+.switch.on::after { transform: translateX(20px); }
+
 /* ---------- setup ---------- */
 .setup { max-width: 440px; margin: 0 auto; padding: calc(48px + env(safe-area-inset-top)) 22px 40px; }
 .setup .logo { font-family: var(--serif); font-size: 38px; font-weight: 600; letter-spacing: -.02em; line-height: 1.05; margin-bottom: 10px; }
@@ -408,6 +434,9 @@ function childrenOf(id) { return db.items.filter(i => i.parent_id === id).sort((
 const isStay = i => /^(stay|hotel|lodging|airbnb|hostel)$/i.test(i.category || '');
 const isFlight = i => /^flight$/i.test(i.category || '');
 const isTour = i => i.kind === 'fixed' && (/^tour$/i.test(i.category || '') || db.items.some(c => c.parent_id === i.id));
+/* Ask Claude: suggestions are places nested under an idea until Tyler keeps or dismisses them */
+const isSuggestion = i => !!i.parent_id && ((itemById(i.parent_id) || {}).kind === 'idea' || i.source === 'claude');
+const suggestionsOf = id => childrenOf(id).filter(c => c.kind !== 'fixed');
 function placeLine(i) { return [i.category, i.city || i.region || i.country].filter(Boolean).join(' · '); }
 
 function meters(a, b) {
@@ -440,7 +469,7 @@ function somedayMatches(trip) {
   const toks = String(trip.destination || trip.name || '').toLowerCase()
     .split(/,|\/|\band\b|&/).map(s => s.trim()).filter(s => s.length > 1);
   if (!toks.length) return [];
-  return db.items.filter(i => !i.trip_id && [i.city, i.region, i.country].some(f => {
+  return db.items.filter(i => !i.trip_id && !isSuggestion(i) && [i.city, i.region, i.country].some(f => {
     f = String(f || '').toLowerCase();
     return f && toks.some(t => f === t || f.includes(t) || t.includes(f));
   }));
@@ -572,6 +601,7 @@ async function pull() {
   try {
     const data = await api('bootstrap');
     db = Object.assign(EMPTY_DB(), data); syncState = 'ok'; saveLocal(); render();
+    lookUpSuggestions();
   } catch (e) {
     syncState = 'offline'; render();
     if (e.server) toast(e.message);
@@ -795,6 +825,38 @@ function dayCard(t, d, idx, today) {
   </section>`;
 }
 
+/* ---------- Ask Claude suggestions ---------- */
+function suggestionList(sugs) {
+  return `<ul class="sugs">${sugs.map(s => `<li data-item="${esc(s.id)}">
+    <div class="body"><div class="t">${esc(s.title)}</div>
+      <div class="meta"><span class="badge sugg">Suggested</span>${esc(s._pending ? 'Looking up…' : [placeLine(s), s.notes].filter(Boolean).join(' · '))}</div></div>
+    <button class="mini keep" data-keep="${esc(s.id)}">Keep</button><button class="mini x" data-dismiss="${esc(s.id)}" aria-label="Dismiss ${esc(s.title)}">✕</button>
+  </li>`).join('')}</ul>`;
+}
+function keepSuggestion(id) {
+  const s = itemById(id); if (!s) return;
+  queue('updateItem', { id, patch: { parent_id: '' } }, () => { s.parent_id = ''; });
+  toast('Kept ' + s.title + ' — it’s with your places now');
+}
+function dismissSuggestion(id) {
+  const s = itemById(id); if (!s) return;
+  undoable('Dismissed ' + s.title, () => { db.items = db.items.filter(x => x.id !== id); }, () => queue('deleteItem', { id }));
+}
+function bindSuggestionButtons(root, after) {
+  $$('[data-keep]', root).forEach(b => b.onclick = e => { e.stopPropagation(); keepSuggestion(b.dataset.keep); if (after) after(b); });
+  $$('[data-dismiss]', root).forEach(b => b.onclick = e => { e.stopPropagation(); dismissSuggestion(b.dataset.dismiss); if (after) after(b); });
+}
+/* Claude saves suggestions with a Maps search link only; look each one up with Google once so it gets coords, hours and types */
+function lookUpSuggestions() {
+  if (!cfg || cfg.demo || !db.places) return;
+  const done = new Set(store.get('th_sug_looked', []));
+  const todo = db.items.filter(i => isSuggestion(i) && i.maps_url && !i.types && !i.place_id && !done.has(i.id)).slice(0, 12);
+  if (!todo.length) return;
+  todo.forEach(i => { done.add(i.id); i._pending = true; outbox.push({ action: 'refreshItem', payload: { id: i.id } }); });
+  store.set('th_sug_looked', [...done].slice(-300));
+  saveLocal(); render(); flush();
+}
+
 /* ---------- Saved (list) ---------- */
 function itemCard(i, showDay, extraHtml) {
   const c = isTour(i) ? 'var(--tour)' : KIND_COLOR[i.kind] || 'var(--idea)';
@@ -803,9 +865,11 @@ function itemCard(i, showDay, extraHtml) {
   else if (i.day && showDay) when = fmtDay(i.day, true);
   const kids = isTour(i) ? childrenOf(i.id).length : 0;
   const meta = i._pending ? 'Looking up…' : [placeLine(i) || (i.kind === 'idea' ? (i.notes || 'Idea') : i.address || ''), kids ? kids + ' stops' : ''].filter(Boolean).join(' · ');
+  const sugs = i.kind === 'idea' ? suggestionsOf(i.id) : [];
+  const ask = i.kind !== 'idea' ? '' : i.status === 'ask' ? '<span class="badge ask">Asked Claude</span>' : i.status === 'answered' ? '<span class="badge answered">Answered</span>' : '';
   return `<div class="item kind-${esc(i.kind)} ${i.status === 'done' ? 'done' : ''} ${i._pending ? 'pending' : ''}" style="--c:${c}" data-item="${esc(i.id)}">
     <span class="mark"></span>
-    <div class="body"><div class="title">${prioBadge(i)}${esc(i.title)}</div><div class="meta">${isFlight(i) && flightCodesExtra(i) ? `<span class="route-codes">${esc(flightCodesExtra(i))}</span>${meta ? ' · ' : ''}` : ''}${esc(meta)}${extraHtml ? (meta ? ' · ' : '') + extraHtml : ''}</div></div>
+    <div class="body"><div class="title">${prioBadge(i)}${esc(i.title)}</div><div class="meta">${ask}${isFlight(i) && flightCodesExtra(i) ? `<span class="route-codes">${esc(flightCodesExtra(i))}</span>${meta ? ' · ' : ''}` : ''}${esc(meta)}${extraHtml ? (meta ? ' · ' : '') + extraHtml : ''}</div>${sugs.length ? suggestionList(sugs) : ''}</div>
     ${when ? `<div class="when">${esc(when)}</div>` : ''}
   </div>`;
 }
@@ -1146,12 +1210,13 @@ function drawMap(t, layer) {
     if (d === 'all') drawFlights(items.filter(i => isFlight(i) && !i.parent_id), drawMap._flightPts);
     items.forEach(i => {
       if (d === 'unplanned' && (i.day || i.kind === 'fixed' || i.parent_id)) return;
+      if (isSuggestion(i)) return; // not on the map until kept
       if (i.kind === 'fixed' && isStay(i)) return addHome(i);
       if (isFlight(i)) return;
       const parent = i.parent_id && itemById(i.parent_id);
       addDot(i, parent ? C.tour : i.status === 'done' ? C.found : (C[i.kind] || C.place));
     });
-    const missing = items.filter(i => !hasCoords(i) && i.kind !== 'idea' && !isFlight(i)).length;
+    const missing = items.filter(i => !hasCoords(i) && i.kind !== 'idea' && !isFlight(i) && !isSuggestion(i)).length;
     say(missing ? `${missing} saved ${missing === 1 ? 'item has' : 'items have'} no location yet.` : '');
     return pts;
   }
@@ -1235,7 +1300,8 @@ function bindCommon() {
     render();
   });
   $$('[data-go]').forEach(el => el.onclick = e => { e.stopPropagation(); location.hash = el.dataset.go; });
-  $$('[data-item]').forEach(el => el.onclick = e => { if (e.target.closest('.moves, [data-reorder]')) return; e.stopPropagation(); openItem(el.dataset.item); });
+  $$('[data-item]').forEach(el => el.onclick = e => { if (e.target.closest('.moves, [data-reorder], [data-keep], [data-dismiss]')) return; e.stopPropagation(); openItem(el.dataset.item); });
+  bindSuggestionButtons(document);
   $$('[data-log]').forEach(el => el.onclick = e => { if (e.target.closest('.moves')) return; e.stopPropagation(); openLogEntry(el.dataset.log); });
   $$('[data-filter]').forEach(el => el.onclick = () => { ui.filter = el.dataset.filter; render(); });
   $$('[data-reorder]').forEach(el => el.onclick = e => { e.stopPropagation(); ui.reorder = ui.reorder === el.dataset.reorder ? null : el.dataset.reorder; render(); });
@@ -1442,11 +1508,22 @@ function openItem(id) {
   const st = isStay(i), fl = isFlight(i), tour = /^tour$/i.test(i.category || '');
   const startL = st ? 'Check in' : fl ? 'Departs' : tour ? 'Pickup' : 'Starts';
   const endL = st ? 'Check out' : fl ? 'Arrives' : tour ? 'Return' : 'Ends';
+  const sugFor = parent && isSuggestion(i) ? parent : null;   // this is one of Claude's suggestions
+  const sugs = i.kind === 'idea' ? suggestionsOf(i.id) : [];
+  const restStatus = i.status === 'answered' || sugs.length ? 'answered' : 'open'; // what "off" goes back to
+  const reply = ((i.notes || '').match(/(?:^|\n)Claude: ([\s\S]+)$/) || [])[1];  // Claude's answer, appended to the notes
+  const askText = s => s === 'ask' ? 'Claude will look into this next time you say “check my asks.”'
+    : s === 'answered' ? (reply ? `Claude: ${reply.trim()}` : 'Claude answered — suggestions are below.') + ' Turn on to ask again.'
+    : 'Want real options? Turn on, then say “check my asks” to Claude.';
 
   openSheet(`
     <div class="field"><input id="it-title" value="${esc(i.title)}" style="font-family:var(--serif);font-size:20px;font-weight:600;border:0;background:none;padding:4px 2px"></div>
-    ${parent ? `<div class="hint" style="margin-top:-10px">Stop on <a href="#" id="it-parent">${esc(parent.title)}</a></div>` : ''}
-    <div class="seg" id="it-kind">${['place', 'idea', 'fixed'].map(k => `<button data-k="${k}" class="${k === kind ? 'on' : ''}">${KIND[k]}</button>`).join('')}</div>
+    ${sugFor ? `<div class="hint" style="margin-top:-10px"><span class="badge sugg">Suggested</span>for <a href="#" id="it-parent">${esc(parent.title)}</a></div>`
+      : parent ? `<div class="hint" style="margin-top:-10px">Stop on <a href="#" id="it-parent">${esc(parent.title)}</a></div>` : ''}
+    <div class="seg" id="it-kind" ${sugFor ? 'hidden' : ''}>${['place', 'idea', 'fixed'].map(k => `<button data-k="${k}" class="${k === kind ? 'on' : ''}">${KIND[k]}</button>`).join('')}</div>
+    ${i.kind === 'idea' ? `<div class="ask-row"><div class="body"><div class="t">Ask Claude</div><div class="s" id="it-ask-s">${esc(askText(i.status))}</div></div>
+      <button class="switch ${i.status === 'ask' ? 'on' : ''}" id="it-ask" role="switch" aria-checked="${i.status === 'ask'}" aria-label="Ask Claude"></button></div>` : ''}
+    ${sugs.length ? `<h4>Suggestions</h4><div id="it-sugs">${suggestionList(sugs)}</div>` : ''}
     <div id="it-prio-wrap" ${kind === 'fixed' ? 'hidden' : ''}><div class="field" style="margin-bottom:6px"><label>Priority</label></div>
       <div class="seg" id="it-prio"><button data-p="" class="${!i.priority ? 'on' : ''}">—</button>${PRIOS.map(([k, l]) => `<button data-p="${k}" class="${i.priority === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
     ${(i.address || hoursHtml || i.maps_url || i.website) ? `<div class="info">
@@ -1487,7 +1564,8 @@ function openItem(id) {
       <div class="field" style="margin-top:10px"><textarea id="it-newstops" placeholder="Paste Google Maps links for stops — one per line"></textarea></div>
       <button class="btn ghost" id="it-addstops" style="margin-bottom:14px">Add stops</button>` : ''}
     <div class="field"><label>Notes</label><textarea id="it-notes" placeholder="Why it’s on the list, who recommended it, what to order…">${esc(i.notes)}</textarea></div>
-    <div class="btnrow"><button class="btn danger" id="it-del">Delete</button><button class="btn" id="it-save">Save</button></div>
+    ${sugFor ? `<div class="btnrow"><button class="btn danger" id="it-dismiss">Dismiss</button><button class="btn" id="it-keep">Keep</button></div>`
+      : `<div class="btnrow"><button class="btn danger" id="it-del">Delete</button><button class="btn" id="it-save">Save</button></div>`}
   `, sh => {
     let prio = i.priority || '';
     $$('#it-kind button', sh).forEach(b => b.onclick = () => {
@@ -1534,22 +1612,55 @@ function openItem(id) {
       if (patch.trip_id !== i.trip_id && !fixed) patch.day = '';
       return patch;
     };
-    $('#it-save', sh).onclick = () => {
+    const save = $('#it-save', sh);
+    if (save) save.onclick = () => {
       const patch = collect();
       queue('updateItem', { id: i.id, patch }, () => {
         Object.assign(i, patch);
         // stops follow their tour's day
-        if (patch.day !== undefined) childrenOf(i.id).forEach(c => { if (c.day !== patch.day) { c.day = patch.day; queue('updateItem', { id: c.id, patch: { day: patch.day } }); } });
+        if (patch.day !== undefined && i.kind === 'fixed') childrenOf(i.id).forEach(c => { if (c.day !== patch.day) { c.day = patch.day; queue('updateItem', { id: c.id, patch: { day: patch.day } }); } });
+        // an idea's suggestions follow it to another trip
+        suggestionsOf(i.id).forEach(c => { if ((c.trip_id || '') !== (i.trip_id || '')) { c.trip_id = i.trip_id; queue('updateItem', { id: c.id, patch: { trip_id: i.trip_id } }); } });
       });
       closeSheet();
     };
-    $('#it-del', sh).onclick = () => {
+    const del = $('#it-del', sh);
+    if (del) del.onclick = () => {
       closeSheet();
-      undoable('Deleted ' + i.title, () => {
+      const gone = suggestionsOf(i.id).filter(isSuggestion).map(s => s.id); // an idea takes its suggestions with it
+      undoable('Deleted ' + i.title + (gone.length ? ` and ${gone.length} suggestion${gone.length === 1 ? '' : 's'}` : ''), () => {
         db.items.forEach(c => { if (c.parent_id === i.id) c.parent_id = ''; });
-        db.items = db.items.filter(x => x.id !== i.id);
-      }, () => queue('deleteItem', { id: i.id }));
+        db.items = db.items.filter(x => x.id !== i.id && !gone.includes(x.id));
+      }, () => { gone.forEach(id => queue('deleteItem', { id })); queue('deleteItem', { id: i.id }); });
     };
+    // Ask Claude toggle — saved right away
+    const askBtn = $('#it-ask', sh);
+    if (askBtn) askBtn.onclick = () => {
+      const on = !askBtn.classList.contains('on');
+      const status = on ? 'ask' : restStatus;
+      askBtn.classList.toggle('on', on); askBtn.setAttribute('aria-checked', on);
+      $('#it-ask-s', sh).textContent = askText(status);
+      queue('updateItem', { id: i.id, patch: { status } }, () => { i.status = status; });
+      if (on) toast('Say “check my asks” to Claude when you’re ready');
+    };
+    // Suggestions inside an idea: keep / dismiss in place
+    bindSuggestionButtons(sh, b => {
+      const li = b.closest('li'); if (li) li.remove();
+      const box = $('#it-sugs', sh);
+      if (box && !$('li', box)) box.innerHTML = '<div class="hint" style="margin:0 2px 8px">All sorted.</div>';
+    });
+    $$('#it-sugs [data-item]', sh).forEach(el => el.onclick = e => { if (e.target.closest('[data-keep], [data-dismiss]')) return; openItem(el.dataset.item); });
+    // A suggestion's own sheet
+    const keep = $('#it-keep', sh);
+    if (keep) keep.onclick = () => {
+      const patch = collect();
+      delete patch.trip_id; delete patch.kind;
+      patch.parent_id = '';
+      queue('updateItem', { id: i.id, patch }, () => Object.assign(i, patch));
+      closeSheet(); toast('Kept ' + (patch.title || i.title));
+    };
+    const dis = $('#it-dismiss', sh);
+    if (dis) dis.onclick = () => { closeSheet(); dismissSuggestion(i.id); };
     const rf = $('#it-refresh', sh);
     if (rf) rf.onclick = e => { e.preventDefault(); i._pending = true; queue('refreshItem', { id: i.id }); closeSheet(); toast('Refreshing from Google…'); };
     $$('[data-smove]', sh).forEach(b => b.onclick = () => { moveIn('tour:' + i.id, b.dataset.id, b.dataset.smove); openItem(i.id); });
@@ -1847,10 +1958,12 @@ function openPull(tripId) {
   `, sh => {
     $('#pl-skip', sh).onclick = () => closeSheet();
     $('#pl-go', sh).onclick = () => {
-      const ids = $$('input:checked', sh).map(x => x.value);
+      const picked = $$('input:checked', sh).map(x => x.value);
+      // An idea's suggestions move with it
+      const ids = [...picked, ...picked.flatMap(id => suggestionsOf(id).map(s => s.id))];
       if (ids.length) queue('attach', { ids, trip_id: t.id }, () => db.items.forEach(i => { if (ids.includes(i.id)) i.trip_id = t.id; }));
       closeSheet();
-      if (ids.length) toast(`Added ${ids.length} to ${t.name}`);
+      if (picked.length) toast(`Added ${picked.length} to ${t.name}`);
     };
   });
 }
@@ -1964,8 +2077,10 @@ function demoData() {
       P('p8', { category: 'Ramen restaurant', title: 'Fuunji', city: 'Shibuya City', types: 'ramen_restaurant,restaurant,food', hours: every('11:00 AM', '9:00 PM'), lat: 35.6866, lng: 139.6982 }),
       P('p9', { category: 'Izakaya', title: 'Torikizoku Kuramae', city: 'Taito City', types: 'bar,japanese_restaurant,restaurant', hours: every('5:00 PM', '11:30 PM'), lat: 35.7030, lng: 139.7915, priority: 'must' }),
       P('p10', { category: 'Bakery', title: 'Bricolage Bread & Co.', city: 'Minato City', types: 'bakery,cafe,food', hours: every('8:00 AM', '6:00 PM'), lat: 35.6605, lng: 139.7293 }),
-      P('i1', { kind: 'idea', title: 'A snack bar night', notes: 'Somewhere small, near the hotel' }),
-      P('i2', { kind: 'idea', title: 'Onsen on a rainy day' }),
+      P('i1', { kind: 'idea', title: 'A snack bar night', status: 'answered', notes: 'Somewhere small, near the hotel\n\nClaude: Two tiny ones within a 6-minute walk of the hotel. Both get going after 9 pm.' }),
+      P('g1', { parent_id: 'i1', source: 'claude', priority: 'maybe', category: 'Bar', title: 'Snack Mimi (sample)', city: 'Taito City', notes: '8 seats, karaoke, 5 min walk from the hotel', hours: every('8:00 PM', '1:00 AM'), lat: 35.7021, lng: 139.7921 }),
+      P('g2', { parent_id: 'i1', source: 'claude', priority: 'maybe', category: 'Bar', title: 'Kuramae Nightcap (sample)', city: 'Taito City', notes: 'Quiet whisky counter, owner is friendly to first-timers', hours: every('7:00 PM', '12:00 AM'), lat: 35.7050, lng: 139.7940 }),
+      P('i2', { kind: 'idea', title: 'Onsen on a rainy day', status: 'ask' }),
       { id: 's1', trip_id: '', kind: 'place', category: 'Bakery', title: 'A bakery in Kyoto', city: 'Kyoto', region: 'Kyoto', country: 'Japan', status: 'open' },
       { id: 's2', trip_id: '', kind: 'place', category: 'Concert hall', title: 'Harpa', city: 'Reykjavík', country: 'Iceland', status: 'open' },
       { id: 's3', trip_id: '', kind: 'idea', title: 'Night train somewhere', status: 'open' },

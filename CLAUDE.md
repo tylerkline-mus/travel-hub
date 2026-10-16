@@ -38,7 +38,15 @@ Sample mode runs fully offline. Test with Playwright at 390×844 @2x: route `cdn
 - Tyler prefers complete code blocks when he has to paste code himself.
 - Commit as Tyler; end commit messages with the Co-Authored-By / Claude-Session trailer the session provides.
 
-## Next up: "Ask Claude" on ideas (agreed design)
+## Ask Claude (built Oct 2026)
+
+- Idea `status`: `open` · `ask` (Ask Claude toggle on) · `answered`. Toggle saves immediately; turning it off goes back to `answered` if the idea has suggestions, else `open`.
+- Suggestions = non-fixed children of an idea (`isSuggestion`, `suggestionsOf`). Shown nested under the idea card and in its sheet with **Suggested** badge, **Keep** (clears `parent_id`) and **✕ Dismiss** (deleteItem, undoable). Excluded from day planning (they have a parent), the map, and Someday matches. Deleting an idea deletes its suggestions; moving an idea to another trip moves them.
+- Claude's reply goes at the end of the idea's `notes` as a paragraph starting `Claude: `; the sheet shows it in the Ask Claude row.
+- After each sync the app looks up new suggestions once (`lookUpSuggestions` → `refreshItem`, remembered in `th_sug_looked`), so Claude only needs to write a Maps search URL. No script change was needed.
+- The "check my asks" procedure lives in Tyler's `travel-hub-asks` skill (holds the Sheet ID — never put it here).
+
+## Original design notes for Ask Claude
 
 1. Ideas get an **Ask Claude** toggle → `status: 'ask'`. Personal notes stay `open`.
 2. Tyler says "check my asks" in chat. Claude reads the Sheet lean (above), considers lodging (`Stay` items), free days, and the idea's notes; researches; then writes back:
