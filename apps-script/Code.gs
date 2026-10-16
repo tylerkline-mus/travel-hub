@@ -17,7 +17,7 @@ const SHEETS = {
           'lat', 'lng', 'place_id', 'maps_url', 'hours', 'website', 'day', 'start_time', 'end_time',
           'confirmation', 'status', 'source', 'notes', 'created', 'updated',
           'end_day', 'parent_id', 'seq', 'priority',
-          'from_code', 'to_code', 'from_name', 'to_name', 'from_lat', 'from_lng', 'to_lat', 'to_lng'],
+          'from_code', 'to_code', 'from_name', 'to_name', 'from_lat', 'from_lng', 'to_lat', 'to_lng', 'types'],
   Plan:  ['trip_id', 'day', 'item_id', 'order', 'note'],
   Log:   ['id', 'trip_id', 'item_id', 'place_id', 'title', 'lat', 'lng', 'logged_at', 'timezone',
           'origin', 'note', 'would_return', 'cost', 'currency', 'photo_url', 'created',
@@ -25,11 +25,14 @@ const SHEETS = {
   Routes: ['key', 'polyline', 'duration', 'distance', 'created'],
 };
 
+// What a Google lookup is allowed to fill in on an existing item
+const LOCATION_FIELDS = ['city', 'region', 'country', 'address', 'lat', 'lng', 'place_id', 'maps_url', 'hours', 'website', 'types'];
+
 // How each travel mode is asked of the Google Routes API
 const ROUTE_MODES = { walk: 'WALK', transit: 'TRANSIT', train: 'TRANSIT', car: 'DRIVE', tour: 'DRIVE', bike: 'BICYCLE' };
 
 const PLACE_FIELDS = ['id', 'displayName', 'formattedAddress', 'location', 'regularOpeningHours',
-  'websiteUri', 'googleMapsUri', 'primaryTypeDisplayName', 'addressComponents', 'utcOffsetMinutes'];
+  'websiteUri', 'googleMapsUri', 'primaryTypeDisplayName', 'addressComponents', 'utcOffsetMinutes', 'types'];
 
 /* ---------------------------------------------------------------
  * One-time setup: creates the tabs and headers, keeps every cell
@@ -152,6 +155,7 @@ const ACTIONS = {
         maps_url: resolved.maps_url || '',
         hours: resolved.hours || '',
         website: resolved.website || '',
+        types: resolved.types || '',
         day: p.day || '', start_time: p.start_time || '', end_time: p.end_time || '',
         end_day: p.end_day || '',
         parent_id: p.parent_id || '',
@@ -306,6 +310,13 @@ const ACTIONS = {
       patch.updated = new Date().toISOString();
       const cur = findRow('Items', p.id);
       if (cur && ('from_code' in patch || 'to_code' in patch)) fillAirports(Object.assign({}, cur.obj, patch), patch, cur.obj);
+      // A pasted Maps link sets where this is (a tour's pickup, an event's venue) without renaming it
+      if (patch._link) {
+        const r = resolveText(String(patch._link));
+        LOCATION_FIELDS.forEach(function (k) { if (r[k] != null && r[k] !== '') patch[k] = r[k]; });
+        if (!r.place_id && r.maps_url) patch.maps_url = r.maps_url;
+      }
+      delete patch._link;
       return updateRow('Items', p.id, patch);
     });
   },
@@ -379,10 +390,27 @@ const ACTIONS = {
       const src = row.obj.maps_url || row.obj.source || row.obj.title;
       const r = resolveText(src);
       const patch = { updated: new Date().toISOString() };
-      ['city', 'region', 'country', 'address', 'lat', 'lng', 'place_id', 'maps_url', 'hours', 'website']
-        .forEach(function (k) { if (r[k] != null && r[k] !== '') patch[k] = r[k]; });
+      LOCATION_FIELDS.forEach(function (k) { if (r[k] != null && r[k] !== '') patch[k] = r[k]; });
       return updateRow('Items', p.id, patch);
     });
+  },
+
+  /** Re-run the Google lookup for saved places missing newer details. A few at a time; call until remaining is 0. */
+  refreshAll: function (p) {
+    const tripId = p.trip === 'someday' ? '' : String(p.trip || '');
+    const todo = readTable('Items').filter(function (i) {
+      return i.trip_id === tripId && i.maps_url && !i.types && i.kind !== 'fixed';
+    });
+    const batch = todo.slice(0, 15);
+    const updated = batch.map(function (i) {
+      try {
+        const r = resolveText(i.maps_url);
+        const patch = { updated: new Date().toISOString(), types: r.types || '-' };
+        LOCATION_FIELDS.forEach(function (k) { if (r[k] != null && r[k] !== '') patch[k] = r[k]; });
+        return withLock(function () { return updateRow('Items', i.id, patch); });
+      } catch (e) { return null; }
+    }).filter(Boolean);
+    return { updated: updated, remaining: todo.length - batch.length };
   },
 };
 
@@ -563,6 +591,7 @@ function fromPlace(pl, originalUrl) {
     city: comp(['locality', 'postal_town']) || comp(['administrative_area_level_2']),
     region: comp(['administrative_area_level_1']),
     country: comp(['country']),
+    types: (pl.types || []).filter(function (t) { return t !== 'point_of_interest' && t !== 'establishment'; }).join(','),
     hours: oh ? JSON.stringify({ weekday: oh.weekdayDescriptions || [], periods: oh.periods || [],
                                  utcOffset: pl.utcOffsetMinutes }) : '',
   };
