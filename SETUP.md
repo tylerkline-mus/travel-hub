@@ -27,6 +27,14 @@ Without this, Maps links still save, just with less detail.
 6. Back in Apps Script: **Project Settings → Script Properties → Add**, name `PLACES_KEY`, and paste the key.
 7. Run **testPlaces** from the function dropdown. The log should show Harpa with an address and hours.
 
+### 2b. Real routes on the map (optional)
+
+Without this, the map connects stops with dashed straight lines. With it, you get actual walking / transit / driving paths. Each leg is looked up once and saved to the **Routes** tab, so revisiting a day costs nothing.
+
+1. **APIs & Services → Library**. Enable **Routes API**.
+2. **APIs & Services → Credentials** → your key → **API restrictions**: tick **Routes API** in addition to Places API (New). Save.
+3. Run **testRoutes** from the function dropdown. The log should say `Routes OK`.
+
 ## 3. Deploy the script as a web app
 
 1. In Apps Script: **Deploy → New deployment**.
@@ -35,7 +43,12 @@ Without this, Maps links still save, just with less detail.
    - Who has access: **Anyone**. This is required so your phone can reach it. The passphrase is what keeps it private.
 3. **Deploy**, then copy the **Web app URL** (ends in `/exec`).
 
-> If you change `Code.gs` later: **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**. That keeps the same URL. A *new deployment* would give you a new URL.
+### Updating the script later
+
+1. Open https://raw.githubusercontent.com/tylerkline-mus/travel-hub/main/apps-script/Code.gs, select all, copy.
+2. In Apps Script, select all of `Code.gs`, delete, paste, save.
+3. Run **setup** once. It adds any new columns and tabs without touching your data.
+4. **Deploy → Manage deployments → ✏️ → Version: New version → Deploy**. That keeps the same URL. (A *new deployment* would give you a new URL.)
 
 ## 4. Turn on GitHub Pages
 

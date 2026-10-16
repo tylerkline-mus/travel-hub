@@ -16,6 +16,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" defer></script>
 <style>
 :root {
   --paper: #f4efe5;
@@ -28,7 +30,9 @@
   --fixed: #2f4b6e;
   --place: #b9532c;
   --idea: #66773a;
-  --found: #8a5a9e;
+  --found: #8a4fa8;
+  --tour: #1f7a6d;
+  --warn: #b0661c;
   --shadow: 0 1px 2px rgba(40,30,15,.06), 0 4px 14px rgba(40,30,15,.06);
   --radius: 14px;
   --serif: "Fraunces", Georgia, "Times New Roman", serif;
@@ -37,13 +41,14 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --paper: #171513; --card: #221f1b; --ink: #f1ebe0; --muted: #a39887; --line: #35302a;
-    --accent: #e0774b; --fixed: #8fb0d8; --place: #e0774b; --idea: #a9bd72; --found: #c49ad6;
+    --accent: #e0774b; --fixed: #8fb0d8; --place: #e0774b; --idea: #a9bd72; --found: #c49ad6; --tour: #5cc2b1; --warn: #e3a35a;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.25);
   }
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--sans); font-size: 16px; }
 body { min-height: 100vh; padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
+body.mapmode { padding-bottom: 0; overflow: hidden; }
 button, input, select, textarea { font: inherit; color: inherit; }
 a { color: var(--accent); }
 
@@ -56,7 +61,7 @@ a { color: var(--accent); }
 .top h1 { font-family: var(--serif); font-weight: 600; font-size: 22px; margin: 0; flex: 1; letter-spacing: -.01em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .iconbtn { width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line); background: var(--card);
-  display: grid; place-items: center; cursor: pointer; flex: none; }
+  display: grid; place-items: center; cursor: pointer; flex: none; padding: 0; }
 .iconbtn svg { width: 18px; height: 18px; }
 .sync { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idea); }
@@ -78,23 +83,26 @@ main { padding: 6px 16px 24px; max-width: 720px; margin: 0 auto; }
 .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 500; padding: 4px 9px;
   border-radius: 999px; background: color-mix(in srgb, var(--ink) 7%, transparent); color: var(--ink); white-space: nowrap; }
 .chip.now { background: var(--accent); color: var(--accent-ink); }
-.tally { display: flex; gap: 12px; font-size: 12px; color: var(--muted); margin-top: 10px; }
+.tally { display: flex; gap: 12px; font-size: 12px; color: var(--muted); margin-top: 10px; flex-wrap: wrap; }
 .tally span::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: var(--c); }
 
-/* ---------- trip header ---------- */
-.trip-head { padding: 6px 2px 4px; }
-.trip-head .dest { color: var(--muted); font-size: 14px; margin-top: 2px; }
-.trip-head .row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+/* ---------- trip header + tabs ---------- */
+.trip-head { padding: 2px 2px 0; }
+.trip-head .row { display: flex; gap: 6px; flex-wrap: wrap; }
+.subtabs { display: flex; background: color-mix(in srgb, var(--ink) 7%, transparent); border-radius: 12px; padding: 3px; margin: 12px 0 4px; }
+.subtabs button { flex: 1; border: 0; background: none; padding: 8px 4px; border-radius: 9px; font-size: 14px; font-weight: 500; cursor: pointer; color: var(--muted); }
+.subtabs button.on { background: var(--card); color: var(--ink); box-shadow: var(--shadow); }
 
 .banner { background: color-mix(in srgb, var(--accent) 12%, var(--card)); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
-  border-radius: var(--radius); padding: 12px 14px; margin-top: 14px; display: flex; align-items: center; gap: 12px; font-size: 14px; }
+  border-radius: var(--radius); padding: 12px 14px; margin-top: 12px; display: flex; align-items: center; gap: 12px; font-size: 14px; }
 .banner b { font-weight: 600; }
 .banner button { margin-left: auto; }
 
-.filters { display: flex; gap: 6px; margin-top: 16px; overflow-x: auto; scrollbar-width: none; }
+.filters { display: flex; gap: 6px; margin-top: 14px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
 .filters::-webkit-scrollbar { display: none; }
-.filters button { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 7px 13px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.filters button { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 7px 13px; font-size: 13px; cursor: pointer; white-space: nowrap; position: relative; }
 .filters button.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.filters button.has::after { content: ""; position: absolute; top: 4px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 
 /* ---------- item cards ---------- */
 .item { display: flex; gap: 12px; align-items: flex-start; background: var(--card); border: 1px solid var(--line);
@@ -102,18 +110,87 @@ main { padding: 6px 16px 24px; max-width: 720px; margin: 0 auto; }
 .item .mark { width: 10px; height: 10px; border-radius: 3px; background: var(--c); margin-top: 6px; flex: none; }
 .item.kind-idea .mark { border-radius: 50%; background: transparent; border: 2px solid var(--c); }
 .item .body { flex: 1; min-width: 0; }
-.item .title { font-weight: 600; font-size: 15px; line-height: 1.3; }
-.item .meta { font-size: 13px; color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.title { font-weight: 600; font-size: 15px; line-height: 1.3; }
+.meta { font-size: 13px; color: var(--muted); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .item .when { font-size: 12px; font-weight: 600; color: var(--c); text-align: right; flex: none; margin-top: 2px; white-space: nowrap; }
-.item.done .title { text-decoration: line-through; text-decoration-color: var(--muted); }
-.item.pending { opacity: .6; }
+.item.done .title, .stop.done .title { text-decoration: line-through; text-decoration-color: var(--muted); }
+.pending { opacity: .6; }
 .daylabel { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 14px 2px 6px; }
+.warn { color: var(--warn); font-weight: 600; }
 
 .empty { text-align: center; color: var(--muted); padding: 36px 20px; font-size: 14px; line-height: 1.5; }
 .empty .big { font-family: var(--serif); font-size: 20px; color: var(--ink); margin-bottom: 6px; }
 
+/* ---------- days ---------- */
+.day { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); margin-top: 14px; overflow: hidden; }
+.day.today { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent); }
+.day-h { display: flex; align-items: center; gap: 10px; padding: 12px 14px 8px; }
+.day-h .d { font-family: var(--serif); font-size: 18px; font-weight: 600; }
+.day-h .n { font-size: 12px; color: var(--muted); font-weight: 500; }
+.day-h .sp { flex: 1; }
+.linkbtn { border: 0; background: none; color: var(--accent); font-size: 13px; font-weight: 600; padding: 6px 4px; cursor: pointer; }
+.ev { display: flex; gap: 12px; padding: 8px 14px; cursor: pointer; }
+.ev-time { width: 54px; flex: none; font-size: 12px; font-weight: 600; color: var(--c); padding-top: 2px; text-align: right; }
+.ev-body { flex: 1; min-width: 0; border-left: 2px solid var(--c); padding-left: 12px; }
+.ev-label { font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--c); margin-right: 4px; }
+.stops { list-style: none; margin: 8px 0 2px; padding: 0; }
+.stop { display: flex; gap: 10px; align-items: center; padding: 7px 0; cursor: pointer; }
+.num { width: 22px; height: 22px; border-radius: 50%; background: var(--c, var(--place)); color: #fff; font-size: 12px; font-weight: 700;
+  display: grid; place-items: center; flex: none; }
+.num.hollow { background: transparent; border: 2px solid var(--c); color: var(--c); }
+.stop .body { flex: 1; min-width: 0; }
+.stop .title { font-size: 14px; }
+.stop .meta { font-size: 12px; margin-top: 1px; }
+.plan-h { display: flex; align-items: center; gap: 6px; padding: 10px 14px 2px; border-top: 1px dashed var(--line); margin-top: 6px; }
+.plan-h span { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.plan-h .sp { flex: 1; }
+.plan-list { padding: 0 14px 4px; }
+.plan-empty { font-size: 13px; color: var(--muted); padding: 4px 14px 10px; }
+.night { font-size: 13px; color: var(--muted); padding: 9px 14px 11px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--fixed) 6%, transparent); display: flex; gap: 8px; align-items: center; }
+.night svg { width: 15px; height: 15px; flex: none; }
+.moves { display: flex; gap: 4px; flex: none; }
+.moves button { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: var(--paper); cursor: pointer; padding: 0; font-size: 14px; }
+.moves button:disabled { opacity: .3; }
+
+/* ---------- travelogue ---------- */
+.log-head { display: flex; align-items: baseline; gap: 10px; margin: 16px 2px 4px; }
+.log-head .d { font-family: var(--serif); font-size: 22px; font-weight: 600; }
+.log-head .s { font-size: 13px; color: var(--muted); }
+.log-actions { display: flex; gap: 10px; margin: 12px 0 6px; }
+.log-actions .btn { flex: 1; }
+.entry { display: flex; gap: 12px; align-items: flex-start; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; cursor: pointer; }
+.entry .body { flex: 1; min-width: 0; }
+.badge { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; margin-right: 6px; vertical-align: 1px; }
+.badge.planned { background: color-mix(in srgb, var(--place) 16%, transparent); color: var(--place); }
+.badge.found { background: color-mix(in srgb, var(--found) 18%, transparent); color: var(--found); }
+.leg { display: flex; align-items: center; gap: 8px; padding: 2px 0 2px 22px; }
+.leg::before { content: ""; width: 2px; height: 26px; background: var(--line); margin-left: -1px; }
+.leg button { border: 1px dashed var(--line); background: none; border-radius: 999px; font-size: 12px; color: var(--muted); padding: 3px 10px; cursor: pointer; }
+.kids { margin: 8px 0 0; padding: 0; list-style: none; }
+.kids li { display: flex; gap: 8px; align-items: center; font-size: 13px; padding: 4px 0; }
+.kids .num { width: 18px; height: 18px; font-size: 10px; }
+
+/* ---------- map ---------- */
+#mapwrap { position: relative; }
+#map { width: 100%; background: var(--line); }
+.map-chips { position: absolute; top: 10px; left: 0; right: 0; z-index: 500; display: flex; gap: 6px; overflow-x: auto; padding: 0 12px; scrollbar-width: none; }
+.map-chips::-webkit-scrollbar { display: none; }
+.map-chips button { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 7px 12px; font-size: 13px; cursor: pointer; white-space: nowrap; box-shadow: var(--shadow); }
+.map-chips button.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.map-layer { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 500; display: flex; background: var(--card); border-radius: 999px; padding: 3px; box-shadow: var(--shadow); border: 1px solid var(--line); }
+.map-layer button { border: 0; background: none; padding: 7px 16px; border-radius: 999px; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.map-layer button.on { background: var(--ink); color: var(--paper); }
+.map-note { position: absolute; bottom: 64px; left: 12px; right: 12px; z-index: 500; background: var(--card); border-radius: 10px; padding: 8px 12px; font-size: 12px; color: var(--muted); box-shadow: var(--shadow); text-align: center; }
+.num-pin span { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; color: #fff; font: 700 12px var(--sans); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+.home-pin span { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; background: var(--fixed); color: #fff; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+.home-pin svg { width: 16px; height: 16px; }
+.leaflet-popup-content { font-family: var(--sans); margin: 10px 14px; }
+.leaflet-popup-content b { font-size: 14px; }
+.pop-btn { display: inline-block; margin-top: 6px; border: 0; background: var(--accent); color: #fff; border-radius: 8px; padding: 5px 10px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.leaflet-container { font-family: var(--sans); }
+
 /* ---------- bottom nav ---------- */
-nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; display: flex; justify-content: space-around; align-items: center;
+nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 600; display: flex; justify-content: space-around; align-items: center;
   padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--card) 92%, transparent);
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-top: 1px solid var(--line); }
 nav.tabs button { background: none; border: 0; display: flex; flex-direction: column; align-items: center; gap: 3px;
@@ -125,25 +202,29 @@ nav.tabs .add { width: 56px; height: 56px; border-radius: 50%; background: var(-
 nav.tabs .add svg { width: 26px; height: 26px; }
 
 /* ---------- sheets ---------- */
-.scrim { position: fixed; inset: 0; background: rgba(20,15,10,.38); z-index: 20; opacity: 0; transition: opacity .2s; }
+.scrim { position: fixed; inset: 0; background: rgba(20,15,10,.38); z-index: 1000; opacity: 0; transition: opacity .2s; }
 .scrim.open { opacity: 1; }
-.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 21; background: var(--paper); border-radius: 20px 20px 0 0;
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1001; background: var(--paper); border-radius: 20px 20px 0 0;
   max-height: 92vh; overflow-y: auto; padding: 8px 16px calc(20px + env(safe-area-inset-bottom));
   transform: translateY(100%); transition: transform .25s cubic-bezier(.2,.8,.2,1); max-width: 720px; margin: 0 auto; }
 .sheet.open { transform: none; }
 .grab { width: 38px; height: 5px; border-radius: 3px; background: var(--line); margin: 4px auto 12px; }
 .sheet h3 { font-family: var(--serif); font-size: 21px; font-weight: 600; margin: 0 0 14px; }
+.sheet h4 { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 18px 2px 8px; }
 .field { margin-bottom: 14px; }
 .field label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 2px 6px; letter-spacing: .02em; }
 .field input, .field select, .field textarea { width: 100%; border: 1px solid var(--line); background: var(--card);
-  border-radius: 10px; padding: 11px 12px; font-size: 16px; outline: none; }
+  border-radius: 10px; padding: 11px 12px; font-size: 16px; outline: none; min-height: 46px; }
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); }
 .field textarea { resize: vertical; min-height: 64px; }
-.capture-box { min-height: 96px !important; font-size: 17px !important; }
+.capture-box { min-height: 88px !important; font-size: 17px !important; }
 .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.inline { display: flex; gap: 8px; }
+.inline input { flex: 1; }
+.inline .btn { width: auto; }
 .hint { font-size: 13px; color: var(--muted); margin: -6px 2px 14px; min-height: 18px; }
-.seg { display: flex; background: color-mix(in srgb, var(--ink) 7%, transparent); border-radius: 10px; padding: 3px; margin-bottom: 14px; }
-.seg button { flex: 1; border: 0; background: none; padding: 8px 4px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; color: var(--muted); }
+.seg { display: flex; background: color-mix(in srgb, var(--ink) 7%, transparent); border-radius: 10px; padding: 3px; margin-bottom: 14px; flex-wrap: wrap; }
+.seg button { flex: 1; border: 0; background: none; padding: 8px 6px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; color: var(--muted); white-space: nowrap; }
 .seg button.on { background: var(--card); color: var(--ink); box-shadow: var(--shadow); }
 .btn { border: 0; background: var(--accent); color: var(--accent-ink); font-weight: 600; border-radius: 12px; padding: 13px 16px; font-size: 16px; cursor: pointer; width: 100%; }
 .btn.ghost { background: var(--card); color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
@@ -156,8 +237,17 @@ nav.tabs .add svg { width: 26px; height: 26px; }
 .hours { margin: 8px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--muted); }
 .hours li.today { color: var(--ink); font-weight: 600; }
 .check { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 1px solid var(--line); font-size: 15px; }
-.check input { width: 20px; height: 20px; accent-color: var(--accent); }
+.check input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+.check span { flex: 1; min-width: 0; }
 .check small { color: var(--muted); display: block; font-size: 12px; }
+.pick { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); background: var(--card); border-radius: 10px; margin-bottom: 6px; cursor: pointer; }
+.pick.on { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); }
+.pick .body { flex: 1; min-width: 0; }
+.review-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.review-row .body { flex: 1; min-width: 0; }
+.review-row .btn { padding: 7px 10px; font-size: 13px; }
+.stoprow { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.stoprow .body { flex: 1; min-width: 0; }
 
 /* ---------- setup ---------- */
 .setup { max-width: 440px; margin: 0 auto; padding: calc(48px + env(safe-area-inset-top)) 22px 40px; }
@@ -166,7 +256,7 @@ nav.tabs .add svg { width: 26px; height: 26px; }
 .setup .or { text-align: center; color: var(--muted); font-size: 13px; margin: 16px 0; }
 
 .toast { position: fixed; left: 50%; bottom: calc(100px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(20px);
-  background: var(--ink); color: var(--paper); padding: 10px 16px; border-radius: 12px; font-size: 14px; z-index: 40;
+  background: var(--ink); color: var(--paper); padding: 10px 16px; border-radius: 12px; font-size: 14px; z-index: 2000;
   opacity: 0; transition: all .2s; max-width: calc(100% - 32px); text-align: center; pointer-events: none; }
 .toast.show { opacity: 1; transform: translateX(-50%); }
 .demo-tag { font-size: 11px; font-weight: 600; background: #d8a136; color: #2a1c05; padding: 3px 7px; border-radius: 6px; }
@@ -178,8 +268,8 @@ nav.tabs .add svg { width: 26px; height: 26px; }
 
 <script>
 /* ============================================================
- * Travel Hub — step 1: trips, capture, Someday
- * Data lives in your Google Sheet via the Apps Script web app.
+ * Travel Hub
+ *   Days · Map · Saved · Log — backed by your Google Sheet
  * ============================================================ */
 
 /* ---------- storage (safe) ---------- */
@@ -189,24 +279,34 @@ const store = {
   del(k) { try { localStorage.removeItem(k); } catch (e) {} },
 };
 
+const EMPTY_DB = () => ({ trips: [], items: [], plan: [], log: [], places: false });
 let cfg = store.get('th_cfg', null);          // { url, token, sheetUrl, demo }
-let db = store.get('th_cache', { trips: [], items: [], plan: [], log: [], places: false });
+let db = Object.assign(EMPTY_DB(), store.get('th_cache', {}));
 let outbox = store.get('th_outbox', []);
+let routeCache = store.get('th_routes', {});
 let syncState = 'ok';                          // ok | pending | offline
-let ui = { filter: 'all' };
+let ui = { filter: 'all', reorder: null, mapDay: 'all', mapLayer: 'plan', logDay: {}, mapView: null, noRoutes: false };
 
 const KIND = { fixed: 'Fixed', place: 'Place', idea: 'Idea' };
 const KIND_COLOR = { fixed: 'var(--fixed)', place: 'var(--place)', idea: 'var(--idea)' };
 const FIXED_CATS = ['Flight', 'Stay', 'Tour', 'Tickets', 'Reservation', 'Transit', 'Other'];
+const MODES = [['walk', 'Walk'], ['transit', 'Transit'], ['train', 'Train'], ['car', 'Car / taxi'], ['tour', 'Tour bus'], ['bike', 'Bike']];
+const MODE_LABEL = Object.fromEntries(MODES);
 
 /* ---------- helpers ---------- */
 const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = p => p + '_' + Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
 const isUrl = s => /https?:\/\/\S+/.test(s);
 const isMapsUrl = s => /(maps\.app\.goo\.gl|goo\.gl\/maps|google\.[a-z.]+\/maps|maps\.google\.)/i.test(s);
 const parseDate = s => { if (!s) return null; const [y, m, d] = String(s).split('-').map(Number); return y ? new Date(y, m - 1, d) : null; };
-const todayStr = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+const ymd = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+const todayStr = () => ymd(new Date());
+const addDays = (s, n) => { const d = parseDate(s); d.setDate(d.getDate() + n); return ymd(d); };
+const num = v => (v === '' || v == null || isNaN(+v)) ? null : +v;
+const hasCoords = o => num(o.lat) !== null && num(o.lng) !== null;
+const seqOf = o => (o.seq === '' || o.seq == null) ? 9999 : +o.seq;
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -215,6 +315,7 @@ function fmtDay(s, withDow = true) {
   const d = parseDate(s); if (!d) return '';
   return (withDow ? DOW[d.getDay()] + ', ' : '') + MON[d.getMonth()] + ' ' + d.getDate();
 }
+function fmtShortDay(s) { const d = parseDate(s); return d ? DOW[d.getDay()] + ' ' + d.getDate() : ''; }
 function fmtRange(a, b) {
   const s = parseDate(a), e = parseDate(b);
   if (!s && !e) return 'No dates yet';
@@ -229,8 +330,15 @@ function fmtTime(t) {
   const [h, m] = t.split(':').map(Number);
   return ((h % 12) || 12) + (m ? ':' + String(m).padStart(2, '0') : '') + (h < 12 ? 'am' : 'pm');
 }
+function tzNow(tz) {
+  try {
+    const f = new Intl.DateTimeFormat('en-CA', { timeZone: tz || undefined, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+    const p = Object.fromEntries(f.formatToParts(new Date()).map(x => [x.type, x.value]));
+    return { day: `${p.year}-${p.month}-${p.day}`, time: `${p.hour === '24' ? '00' : p.hour}:${p.minute}` };
+  } catch (e) { const n = new Date(); return { day: todayStr(), time: String(n.getHours()).padStart(2, '0') + ':' + String(n.getMinutes()).padStart(2, '0') }; }
+}
 function tripStatus(t) {
-  const now = parseDate(todayStr()), s = parseDate(t.start), e = parseDate(t.end);
+  const now = parseDate(tzNow(t.timezone).day), s = parseDate(t.start), e = parseDate(t.end);
   if (!s) return { label: 'Dreaming', cls: '' };
   const day = 86400000;
   if (now < s) { const n = Math.round((s - now) / day); return { label: n === 1 ? 'Tomorrow' : `In ${n} days`, cls: '' }; }
@@ -238,10 +346,49 @@ function tripStatus(t) {
     return { label: total ? `Day ${n} of ${total}` : `Day ${n}`, cls: 'now' }; }
   return { label: 'Past', cls: '' };
 }
+function tripDays(t) {
+  if (!t.start) return [];
+  const end = t.end && t.end >= t.start ? t.end : t.start;
+  const out = []; let d = t.start;
+  while (d <= end && out.length < 120) { out.push(d); d = addDays(d, 1); }
+  return out;
+}
 function hue(id) { let h = 0; for (const c of String(id)) h = (h * 31 + c.charCodeAt(0)) % 360; return `hsl(${h} 45% 48%)`; }
 function tripById(id) { return db.trips.find(t => t.id === id); }
+function itemById(id) { return db.items.find(i => i.id === id); }
 function itemsFor(tripId) { return db.items.filter(i => (i.trip_id || '') === (tripId || '')); }
+function topItemsFor(tripId) { return itemsFor(tripId).filter(i => !i.parent_id); }
+function childrenOf(id) { return db.items.filter(i => i.parent_id === id).sort((a, b) => seqOf(a) - seqOf(b)); }
+const isStay = i => /^(stay|hotel|lodging|airbnb|hostel)$/i.test(i.category || '');
+const isFlight = i => /^flight$/i.test(i.category || '');
+const isTour = i => i.kind === 'fixed' && (/^tour$/i.test(i.category || '') || db.items.some(c => c.parent_id === i.id));
 function placeLine(i) { return [i.category, i.city || i.region || i.country].filter(Boolean).join(' · '); }
+
+function meters(a, b) {
+  const R = 6371000, r = x => x * Math.PI / 180;
+  const dLat = r(+b.lat - +a.lat), dLng = r(+b.lng - +a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(+a.lat)) * Math.cos(r(+b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+function fmtDist(m) { return m < 1000 ? Math.round(m / 10) * 10 + ' m' : (m / 1000).toFixed(m < 10000 ? 1 : 0) + ' km'; }
+
+/** true = open that weekday, false = closed, null = unknown */
+function openOn(i, dow) {
+  let h; try { h = i.hours ? JSON.parse(i.hours) : null; } catch (e) { return null; }
+  if (!h) return null;
+  const p = h.periods;
+  if (Array.isArray(p) && p.length) {
+    if (p.length === 1 && p[0].open && !p[0].close) return true;
+    return p.some(x => x.open && x.open.day === dow);
+  }
+  const line = (h.weekday || []).find(l => l.startsWith(DOW_LONG[dow]));
+  return line ? !/closed/i.test(line) : null;
+}
+function hoursOn(i, dow) {
+  let h; try { h = i.hours ? JSON.parse(i.hours) : null; } catch (e) { return ''; }
+  const line = h && (h.weekday || []).find(l => l.startsWith(DOW_LONG[dow]));
+  return line ? line.slice(line.indexOf(':') + 1).trim().replace(/ /g, ' ') : '';
+}
 
 function somedayMatches(trip) {
   const toks = String(trip.destination || trip.name || '').toLowerCase()
@@ -252,6 +399,30 @@ function somedayMatches(trip) {
     return f && toks.some(t => f === t || f.includes(t) || t.includes(f));
   }));
 }
+
+/* ----- day model ----- */
+function stayForNight(tripId, d) {
+  return topItemsFor(tripId).find(i => i.kind === 'fixed' && isStay(i) && i.day && i.day <= d && (i.end_day ? d < i.end_day : d === i.day));
+}
+function stayForMorning(tripId, d) {
+  return stayForNight(tripId, addDays(d, -1)) || stayForNight(tripId, d);
+}
+function fixedEvents(tripId, d) {
+  const out = [];
+  topItemsFor(tripId).filter(i => i.kind === 'fixed').forEach(i => {
+    const multi = i.end_day && i.end_day !== i.day;
+    if (i.day === d) out.push({ i, label: isStay(i) ? 'Check in' : isFlight(i) ? 'Depart' : '', time: i.start_time, end: multi ? '' : i.end_time, start: true });
+    if (multi && i.end_day === d) out.push({ i, label: isStay(i) ? 'Check out' : isFlight(i) ? 'Arrive' : 'Ends', time: i.end_time, end: '', start: false });
+  });
+  return out.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+}
+function plannedStops(tripId, d) {
+  return topItemsFor(tripId).filter(i => i.kind !== 'fixed' && i.day === d).sort((a, b) => seqOf(a) - seqOf(b) || a.title.localeCompare(b.title));
+}
+function logsFor(tripId, d) { return db.log.filter(l => l.trip_id === tripId && l.day === d); }
+function topLogs(tripId, d) { return logsFor(tripId, d).filter(l => !l.parent_id).sort((a, b) => seqOf(a) - seqOf(b)); }
+function logKids(id) { return db.log.filter(l => l.parent_id === id).sort((a, b) => seqOf(a) - seqOf(b)); }
+function flatLogs(tripId, d) { return topLogs(tripId, d).flatMap(l => [l, ...logKids(l.id)]); }
 
 function toast(msg) {
   const el = $('#toast'); el.textContent = msg; el.classList.add('show');
@@ -266,6 +437,8 @@ const I = {
   someday: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
   gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
   edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+  moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
+  home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
 };
 
 /* ============================================================
@@ -289,11 +462,17 @@ function reconcile(action, data) {
     swap('items', data);
   } else if (action === 'attach' && Array.isArray(data)) data.forEach(o => swap('items', o));
   else if (action === 'addTrip' || action === 'updateTrip') swap('trips', data);
+  else if (action === 'addLog' || action === 'updateLog') {
+    swap('log', data);
+    if (data.item_id) { const it = itemById(data.item_id); if (it) it.status = 'done'; }
+  }
 }
 
 /** Apply locally right away, then send to the Sheet (queued if offline). */
+let inFlight = null;
 function queue(action, payload, applyLocal) {
   if (applyLocal) applyLocal();
+  if (action === 'reorder' && payload.key) outbox = outbox.filter(o => o === inFlight || !(o.action === 'reorder' && o.payload.key === payload.key));
   outbox.push({ action, payload });
   saveLocal(); render(); flush();
 }
@@ -303,10 +482,9 @@ async function flush() {
   if (flushing || !cfg) return;
   flushing = true;
   while (outbox.length) {
-    const op = outbox[0];
+    const op = outbox[0]; inFlight = op;
     try {
       const data = await api(op.action, op.payload);
-      // drop the stand-in for a duplicate add
       if (op.action === 'add' && data && data._duplicate) db.items = db.items.filter(i => i.id !== op.payload.id);
       reconcile(op.action, data);
       outbox.shift(); saveLocal();
@@ -315,6 +493,7 @@ async function flush() {
       else { syncState = 'offline'; break; }
     }
   }
+  inFlight = null;
   if (!outbox.length) syncState = 'ok';
   flushing = false; render();
 }
@@ -325,7 +504,7 @@ async function pull() {
   if (outbox.length) return;
   try {
     const data = await api('bootstrap');
-    db = data; syncState = 'ok'; saveLocal(); render();
+    db = Object.assign(EMPTY_DB(), data); syncState = 'ok'; saveLocal(); render();
   } catch (e) {
     syncState = 'offline'; render();
     if (e.server) toast(e.message);
@@ -335,16 +514,59 @@ async function pull() {
 window.addEventListener('online', () => pull());
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pull(); });
 
+/* ---------- routes (cached on phone and in the Sheet) ---------- */
+function routeKey(leg) {
+  const f = n => Number(n).toFixed(5);
+  return `${f(leg.from[0])},${f(leg.from[1])}>${f(leg.to[0])},${f(leg.to[1])}|${leg.mode || 'walk'}`;
+}
+async function getRoutes(legs) {
+  const out = legs.map(l => routeCache[routeKey(l)] || null);
+  const missIdx = out.map((r, i) => r ? -1 : i).filter(i => i >= 0);
+  if (!missIdx.length || (cfg && cfg.demo) || ui.noRoutes || !navigator.onLine) return out;
+  try {
+    const res = await api('routes', { legs: missIdx.map(i => legs[i]) });
+    let anyOk = false;
+    missIdx.forEach((li, k) => {
+      const r = res && res[k];
+      if (r && r.polyline) { routeCache[routeKey(legs[li])] = r.polyline; out[li] = r.polyline; anyOk = true; }
+    });
+    if (!anyOk && res && res.some(r => r && r.error)) ui.noRoutes = true;
+    store.set('th_routes', routeCache);
+  } catch (e) { ui.noRoutes = true; }
+  return out;
+}
+function decodePolyline(str) {
+  let i = 0, lat = 0, lng = 0; const out = [];
+  while (i < str.length) {
+    let b, shift = 0, res = 0;
+    do { b = str.charCodeAt(i++) - 63; res |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += (res & 1) ? ~(res >> 1) : (res >> 1);
+    shift = 0; res = 0;
+    do { b = str.charCodeAt(i++) - 63; res |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lng += (res & 1) ? ~(res >> 1) : (res >> 1);
+    out.push([lat / 1e5, lng / 1e5]);
+  }
+  return out;
+}
+const guessMode = (a, b) => meters(a, b) < 1800 ? 'walk' : 'transit';
+
 /* ============================================================
  * Routing + rendering
  * ============================================================ */
 function route() {
   const h = location.hash.replace(/^#\/?/, '').split('/');
-  if (h[0] === 'trip' && h[1]) return { name: 'trip', id: decodeURIComponent(h[1]) };
+  if (h[0] === 'trip' && h[1]) return { name: 'trip', id: decodeURIComponent(h[1]), sub: h[2] || 'days' };
   if (h[0] === 'someday') return { name: 'someday' };
   return { name: 'trips' };
 }
-window.addEventListener('hashchange', () => { ui.filter = 'all'; render(); window.scrollTo(0, 0); });
+let lastRoute = '';
+window.addEventListener('hashchange', () => {
+  const r = route();
+  const key = r.name + (r.id || '');
+  if (key !== lastRoute) { ui.filter = 'all'; ui.reorder = null; }
+  lastRoute = key;
+  render(); window.scrollTo(0, 0);
+});
 window.addEventListener('scroll', () => { const t = $('.top'); if (t) t.classList.toggle('scrolled', window.scrollY > 4); }, { passive: true });
 
 function syncBadge() {
@@ -355,17 +577,29 @@ function syncBadge() {
   return `<div class="sync">${cfg && cfg.demo ? '' : `<span class="dot ${state}"></span>`}${label}</div>`;
 }
 
+let map = null;
 function render() {
   const app = $('#app');
-  if (!cfg) { app.innerHTML = setupView(); bindSetup(); return; }
+  // Don't rebuild the map just because a background save finished
   const r = route();
+  if (map && r.name === 'trip' && r.sub === 'map' && render._mapSig === mapSignature(r.id) && $('#map')) {
+    const sb = $('.top .sync'); if (sb) sb.outerHTML = syncBadge();
+    return;
+  }
+  if (map) { try { map.remove(); } catch (e) {} map = null; }
+  document.body.classList.remove('mapmode');
+  if (!cfg) { app.innerHTML = setupView(); bindSetup(); return; }
   let html = '';
-  if (r.name === 'trip') html = tripView(r.id);
+  if (r.name === 'trip') html = tripView(r.id, r.sub);
   else if (r.name === 'someday') html = somedayView();
   else html = tripsView();
   html += navView(r.name);
   app.innerHTML = html;
   bindCommon();
+  if (r.name === 'trip' && r.sub === 'map') initMap(r.id);
+  if (r.name === 'trip' && r.sub === 'days' && !render._scrolled) {
+    const td = $('.day.today'); if (td) { render._scrolled = true; setTimeout(() => td.scrollIntoView({ block: 'start', behavior: 'instant' }), 0); }
+  }
 }
 
 function navView(active) {
@@ -384,13 +618,14 @@ function tripsView() {
   const past = sorted.filter(t => t.end && t.end < today).reverse();
   const card = t => {
     const st = tripStatus(t);
-    const its = itemsFor(t.id);
+    const its = topItemsFor(t.id);
     const n = k => its.filter(i => i.kind === k).length;
+    const logged = db.log.filter(l => l.trip_id === t.id).length;
     return `<div class="trip-card" style="--hue:${hue(t.id)}" data-go="#/trip/${encodeURIComponent(t.id)}">
       <h2>${esc(t.name)}</h2>
       ${t.destination ? `<div class="dest">${esc(t.destination)}</div>` : ''}
       <div class="row"><span class="dates">${esc(fmtRange(t.start, t.end))}</span><span class="chip ${st.cls}">${st.label}</span></div>
-      <div class="tally"><span style="--c:var(--fixed)">${n('fixed')} fixed</span><span style="--c:var(--place)">${n('place')} places</span><span style="--c:var(--idea)">${n('idea')} ideas</span></div>
+      <div class="tally"><span style="--c:var(--fixed)">${n('fixed')} fixed</span><span style="--c:var(--place)">${n('place')} places</span><span style="--c:var(--idea)">${n('idea')} ideas</span>${logged ? `<span style="--c:var(--found)">${logged} logged</span>` : ''}</div>
     </div>`;
   };
   return `<header class="top"><h1>Trips</h1>${syncBadge()}<button class="iconbtn" data-act="settings" aria-label="Settings">${I.gear}</button></header>
@@ -401,13 +636,103 @@ function tripsView() {
   </main>`;
 }
 
-/* ---------- Trip detail ---------- */
+/* ---------- Trip shell ---------- */
+function tripView(id, sub) {
+  const t = tripById(id);
+  if (!t) return `<header class="top"><button class="iconbtn" data-go="#/">${I.back}</button><h1>Not found</h1></header><main><div class="empty">This trip isn’t in your Sheet anymore.</div></main>`;
+  const st = tripStatus(t);
+  const base = '#/trip/' + encodeURIComponent(t.id);
+  const tabs = [['days', 'Days'], ['map', 'Map'], ['saved', 'Saved'], ['log', 'Log']];
+  const head = `<header class="top"><button class="iconbtn" data-go="#/" aria-label="Back">${I.back}</button><h1>${esc(t.name)}</h1>${syncBadge()}<button class="iconbtn" data-act="editTrip" data-id="${esc(t.id)}" aria-label="Edit trip">${I.edit}</button></header>`;
+  const tabbar = `<div class="subtabs">${tabs.map(([k, l]) => `<button class="${sub === k ? 'on' : ''}" data-go="${base}/${k}">${l}</button>`).join('')}</div>`;
+  if (sub === 'map') {
+    return head + `<div style="padding:0 16px">${tabbar}</div><div id="mapwrap">${mapChips(t)}<div id="map"></div>${mapLayerToggle(t)}<div class="map-note" id="map-note" hidden></div></div>`;
+  }
+  const meta = `<div class="trip-head"><div class="row">
+      <span class="chip">${esc(fmtRange(t.start, t.end))}</span><span class="chip ${st.cls}">${st.label}</span>
+      ${t.timezone ? `<span class="chip">${esc(t.timezone.split('/').pop().replace(/_/g, ' '))} time</span>` : ''}
+    </div></div>`;
+  let body = '';
+  if (sub === 'saved') body = savedContent(t);
+  else if (sub === 'log') body = logContent(t);
+  else body = daysContent(t);
+  return head + `<main>${meta}${tabbar}${body}</main>`;
+}
+
+function matchesBanner(t) {
+  const m = somedayMatches(t);
+  return m.length ? `<div class="banner"><div><b>${m.length} saved in Someday</b> match ${esc(t.destination || t.name)}.</div><button class="btn small" data-act="pullSomeday" data-id="${esc(t.id)}">Review</button></div>` : '';
+}
+
+/* ---------- Days ---------- */
+function daysContent(t) {
+  const days = tripDays(t);
+  if (!days.length) return matchesBanner(t) + `<div class="empty"><div class="big">Add dates to see your days</div>Then stays, bookings and planned stops line up day by day.<br><br><button class="btn small" data-act="editTrip" data-id="${esc(t.id)}">Add dates</button></div>`;
+  const today = tzNow(t.timezone).day;
+  const unscheduled = topItemsFor(t.id).filter(i => i.kind !== 'fixed' && !i.day).length;
+  return matchesBanner(t) + days.map((d, k) => dayCard(t, d, k, today)).join('') +
+    (unscheduled ? `<div class="empty" style="padding:24px 10px">${unscheduled} saved ${unscheduled === 1 ? 'place has' : 'places have'} no day yet.<br><button class="linkbtn" data-go="#/trip/${encodeURIComponent(t.id)}/saved">See them in Saved</button></div>` : '<div style="height:12px"></div>');
+}
+
+function evRow(e) {
+  const i = e.i, c = isTour(i) ? 'var(--tour)' : 'var(--fixed)';
+  const kids = e.start && isTour(i) ? childrenOf(i.id) : [];
+  const reorder = ui.reorder === 'tour:' + i.id;
+  const metaBits = [i.category && !e.label ? i.category : '', e.end ? 'until ' + fmtTime(e.end) : '', i.confirmation ? '#' + i.confirmation : ''].filter(Boolean);
+  return `<div class="ev" data-item="${esc(i.id)}" style="--c:${c}">
+    <div class="ev-time">${esc(fmtTime(e.time))}</div>
+    <div class="ev-body">
+      <div class="title">${e.label ? `<span class="ev-label">${esc(e.label)}</span>` : ''}${esc(i.title)}</div>
+      ${metaBits.length ? `<div class="meta">${esc(metaBits.join(' · '))}</div>` : ''}
+      ${kids.length ? `<ol class="stops">${kids.map((s, k) => stopRow(s, k, 'tour:' + i.id, kids.length, reorder, null, 'var(--tour)')).join('')}</ol>
+        ${kids.length > 1 ? `<button class="linkbtn" data-reorder="tour:${esc(i.id)}">${reorder ? 'Done' : 'Reorder stops'}</button>` : ''}` : ''}
+    </div>
+  </div>`;
+}
+
+function stopRow(s, k, listKey, n, reorder, dow, color) {
+  let hint = '';
+  if (dow != null) {
+    const o = openOn(s, dow);
+    if (o === false) hint = `<span class="warn">Closed ${DOW[dow]}</span>`;
+    else { const h = hoursOn(s, dow); if (h) hint = esc(h); }
+  }
+  const meta = [esc(placeLine(s)), hint].filter(Boolean).join(' · ');
+  return `<li class="stop ${s.status === 'done' ? 'done' : ''} ${s._pending ? 'pending' : ''}" data-item="${esc(s.id)}" style="--c:${color || (s.kind === 'idea' ? 'var(--idea)' : 'var(--place)')}">
+    <span class="num ${s.kind === 'idea' ? 'hollow' : ''}">${k + 1}</span>
+    <div class="body"><div class="title">${esc(s.title)}</div>${meta ? `<div class="meta">${meta}</div>` : ''}</div>
+    ${reorder ? `<div class="moves"><button data-move="up" data-list="${esc(listKey)}" data-id="${esc(s.id)}" ${k === 0 ? 'disabled' : ''}>↑</button><button data-move="down" data-list="${esc(listKey)}" data-id="${esc(s.id)}" ${k === n - 1 ? 'disabled' : ''}>↓</button></div>` : ''}
+  </li>`;
+}
+
+function dayCard(t, d, idx, today) {
+  const dow = parseDate(d).getDay();
+  const events = fixedEvents(t.id, d);
+  const stops = plannedStops(t.id, d);
+  const night = stayForNight(t.id, d);
+  const key = 'day:' + d;
+  const reorder = ui.reorder === key;
+  const logged = logsFor(t.id, d).length;
+  return `<section class="day ${d === today ? 'today' : ''}" id="day-${d}">
+    <div class="day-h"><div><div class="d">${esc(fmtDay(d))}</div><div class="n">Day ${idx + 1}${d === today ? ' · Today' : ''}${logged ? ` · ${logged} logged` : ''}</div></div><span class="sp"></span>
+      <button class="linkbtn" data-mapday="${d}">Map</button>${logged || d <= today ? `<button class="linkbtn" data-logday="${d}">Log</button>` : ''}</div>
+    ${events.map(evRow).join('')}
+    <div class="plan-h"><span>Plan</span><span class="sp"></span>
+      ${stops.length > 1 ? `<button class="linkbtn" data-reorder="${key}">${reorder ? 'Done' : 'Reorder'}</button>` : ''}
+      <button class="linkbtn" data-addday="${d}">+ Add</button></div>
+    ${stops.length ? `<ol class="stops plan-list">${stops.map((s, k) => stopRow(s, k, key, stops.length, reorder, dow)).join('')}</ol>` : `<div class="plan-empty">Nothing planned yet.</div>`}
+    ${night ? `<div class="night">${I.moon}<span>Night at <b>${esc(night.title)}</b></span></div>` : ''}
+  </section>`;
+}
+
+/* ---------- Saved (list) ---------- */
 function itemCard(i, showDay) {
-  const c = KIND_COLOR[i.kind] || 'var(--idea)';
+  const c = isTour(i) ? 'var(--tour)' : KIND_COLOR[i.kind] || 'var(--idea)';
   let when = '';
-  if (i.kind === 'fixed') when = [i.start_time && fmtTime(i.start_time)].filter(Boolean).join('');
+  if (i.kind === 'fixed') when = [i.day ? fmtDay(i.day, false) : '', i.start_time ? fmtTime(i.start_time) : ''].filter(Boolean).join(' ');
   else if (i.day && showDay) when = fmtDay(i.day, true);
-  const meta = i._pending ? 'Looking up…' : (placeLine(i) || (i.kind === 'idea' ? (i.notes || 'Idea') : i.address || ''));
+  const kids = isTour(i) ? childrenOf(i.id).length : 0;
+  const meta = i._pending ? 'Looking up…' : [placeLine(i) || (i.kind === 'idea' ? (i.notes || 'Idea') : i.address || ''), kids ? kids + ' stops' : ''].filter(Boolean).join(' · ');
   return `<div class="item kind-${esc(i.kind)} ${i.status === 'done' ? 'done' : ''} ${i._pending ? 'pending' : ''}" style="--c:${c}" data-item="${esc(i.id)}">
     <span class="mark"></span>
     <div class="body"><div class="title">${esc(i.title)}</div><div class="meta">${esc(meta)}</div></div>
@@ -415,32 +740,19 @@ function itemCard(i, showDay) {
   </div>`;
 }
 
-function tripView(id) {
-  const t = tripById(id);
-  if (!t) return `<header class="top"><button class="iconbtn" data-go="#/">${I.back}</button><h1>Not found</h1></header><main><div class="empty">This trip isn’t in your Sheet anymore.</div></main>`;
-  const st = tripStatus(t);
-  const its = itemsFor(t.id);
-  const matches = somedayMatches(t);
+function savedContent(t) {
+  const its = topItemsFor(t.id);
   const f = ui.filter;
   const counts = { fixed: 0, place: 0, idea: 0 };
   its.forEach(i => counts[i.kind] = (counts[i.kind] || 0) + 1);
-
   let body = '';
   const show = k => f === 'all' || f === k;
-
   if (show('fixed')) {
     const fixed = its.filter(i => i.kind === 'fixed').sort((a, b) => (a.day || '9').localeCompare(b.day || '9') || (a.start_time || '').localeCompare(b.start_time || ''));
-    if (fixed.length) {
-      body += `<div class="section-title">Fixed <span class="count">${fixed.length}</span></div>`;
-      let lastDay = null;
-      fixed.forEach(i => {
-        if (i.day !== lastDay) { body += `<div class="daylabel">${i.day ? esc(fmtDay(i.day)) : 'No date'}</div>`; lastDay = i.day; }
-        body += itemCard(i, false);
-      });
-    }
+    if (fixed.length) body += `<div class="section-title">Fixed <span class="count">${fixed.length}</span></div>` + fixed.map(i => itemCard(i, false)).join('');
   }
   if (show('place')) {
-    const places = its.filter(i => i.kind === 'place').sort((a, b) => (a.day ? 0 : 1) - (b.day ? 0 : 1) || (a.day || '').localeCompare(b.day || '') || a.title.localeCompare(b.title));
+    const places = its.filter(i => i.kind === 'place').sort((a, b) => (a.day ? 1 : 0) - (b.day ? 1 : 0) || (a.day || '').localeCompare(b.day || '') || a.title.localeCompare(b.title));
     if (places.length) body += `<div class="section-title">Places <span class="count">${places.length}</span></div>` + places.map(i => itemCard(i, true)).join('');
   }
   if (show('idea')) {
@@ -448,24 +760,69 @@ function tripView(id) {
     if (ideas.length) body += `<div class="section-title">Ideas <span class="count">${ideas.length}</span></div>` + ideas.map(i => itemCard(i, true)).join('');
   }
   if (!body) body = `<div class="empty"><div class="big">Nothing here yet</div>Tap + to paste a Google Maps link, add a booking, or jot down an idea.</div>`;
+  return matchesBanner(t) + `<div class="filters">
+      ${['all', 'fixed', 'place', 'idea'].map(k => `<button class="${f === k ? 'on' : ''}" data-filter="${k}">${k === 'all' ? `All ${its.length}` : `${KIND[k]}${k === 'fixed' ? '' : 's'} ${counts[k] || 0}`}</button>`).join('')}
+    </div>` + body;
+}
 
-  return `<header class="top"><button class="iconbtn" data-go="#/" aria-label="Back">${I.back}</button><h1>${esc(t.name)}</h1>${syncBadge()}<button class="iconbtn" data-act="editTrip" data-id="${esc(t.id)}" aria-label="Edit trip">${I.edit}</button></header>
-  <main>
-    <div class="trip-head">
-      ${t.destination ? `<div class="dest">${esc(t.destination)}</div>` : ''}
-      <div class="row"><span class="chip">${esc(fmtRange(t.start, t.end))}</span><span class="chip ${st.cls}">${st.label}</span>${t.timezone ? `<span class="chip">${esc(t.timezone.split('/').pop().replace(/_/g, ' '))} time</span>` : ''}</div>
+/* ---------- Log (travelogue) ---------- */
+function logDays(t) {
+  const days = tripDays(t);
+  const extra = [...new Set(db.log.filter(l => l.trip_id === t.id && l.day && !days.includes(l.day)).map(l => l.day))];
+  return [...days, ...extra].sort();
+}
+function currentLogDay(t) {
+  if (ui.logDay[t.id]) return ui.logDay[t.id];
+  const days = logDays(t), today = tzNow(t.timezone).day;
+  if (days.includes(today)) return today;
+  const withLogs = days.filter(d => logsFor(t.id, d).length);
+  if (withLogs.length) return withLogs[withLogs.length - 1];
+  return days[0] || today;
+}
+function logContent(t) {
+  const days = logDays(t);
+  const d = currentLogDay(t);
+  const idx = tripDays(t).indexOf(d);
+  const tops = topLogs(t.id, d);
+  const all = logsFor(t.id, d);
+  const found = all.filter(l => l.origin === 'found').length;
+  const toReview = plannedStops(t.id, d).filter(s => s.status !== 'done' && s.status !== 'skipped').length;
+  const key = 'log:' + d;
+  const reorder = ui.reorder === key;
+
+  const chips = days.length ? `<div class="filters">${days.map(x => `<button class="${x === d ? 'on' : ''} ${logsFor(t.id, x).length ? 'has' : ''}" data-logday="${x}">${esc(fmtShortDay(x))}</button>`).join('')}</div>` : '';
+  let list = '';
+  tops.forEach((l, k) => {
+    if (k > 0) list += `<div class="leg"><button data-mode="${esc(l.id)}">${esc(MODE_LABEL[l.mode] || 'How did you get here?')}</button></div>`;
+    const kids = logKids(l.id);
+    const meta = [l.time ? fmtTime(l.time) : '', l.city, l.note].filter(Boolean).join(' · ');
+    list += `<div class="entry ${l._pending ? 'pending' : ''}" data-log="${esc(l.id)}">
+      <span class="num" style="--c:${l.origin === 'found' ? 'var(--found)' : 'var(--place)'}">${k + 1}</span>
+      <div class="body"><div class="title">${esc(l.title)}</div>
+        <div class="meta">${l.origin ? `<span class="badge ${esc(l.origin)}">${l.origin === 'found' ? 'Found' : 'Planned'}</span>` : ''}${esc(meta)}</div>
+        ${kids.length ? `<ul class="kids">${kids.map((c, j) => `<li data-log="${esc(c.id)}"><span class="num" style="--c:var(--tour)">${j + 1}</span>${esc(c.title)}</li>`).join('')}</ul>` : ''}
+      </div>
+      ${reorder ? `<div class="moves"><button data-move="up" data-list="${key}" data-id="${esc(l.id)}" ${k === 0 ? 'disabled' : ''}>↑</button><button data-move="down" data-list="${key}" data-id="${esc(l.id)}" ${k === tops.length - 1 ? 'disabled' : ''}>↓</button></div>` : ''}
+    </div>`;
+  });
+  if (!tops.length) list = `<div class="empty" style="padding:26px 10px"><div class="big">Nothing logged ${d === tzNow(t.timezone).day ? 'yet today' : 'this day'}</div>Tap “I’m here” at each stop, or fill the day in tonight. Order matters more than times.</div>`;
+
+  return `${chips}
+    <div class="log-head"><div class="d">${esc(fmtDay(d))}</div><div class="s">${idx >= 0 ? 'Day ' + (idx + 1) + ' · ' : ''}${all.length} stop${all.length === 1 ? '' : 's'}${found ? ` · ${found} found` : ''}</div></div>
+    <div class="log-actions">
+      <button class="btn" data-act="here">I’m here</button>
+      <button class="btn ghost" data-act="review">Review plan${toReview ? ` (${toReview})` : ''}</button>
     </div>
-    ${matches.length ? `<div class="banner"><div><b>${matches.length} saved in Someday</b> match ${esc(t.destination || t.name)}.</div><button class="btn small" data-act="pullSomeday" data-id="${esc(t.id)}">Review</button></div>` : ''}
-    <div class="filters">
-      ${['all', 'fixed', 'place', 'idea'].map(k => `<button class="${f === k ? 'on' : ''}" data-filter="${k}">${k === 'all' ? `All ${its.length}` : `${KIND[k]}${k === 'idea' ? 's' : k === 'place' ? 's' : ''} ${counts[k] || 0}`}</button>`).join('')}
-    </div>
-    ${body}
-  </main>`;
+    ${list}
+    <div style="display:flex;gap:6px;justify-content:center;margin-top:10px">
+      ${tops.length > 1 ? `<button class="linkbtn" data-reorder="${key}">${reorder ? 'Done reordering' : 'Reorder'}</button>` : ''}
+      ${all.length ? `<button class="linkbtn" data-maplived="${d}">See on map</button>` : ''}
+    </div>`;
 }
 
 /* ---------- Someday ---------- */
 function somedayView() {
-  const its = itemsFor('');
+  const its = itemsFor('').filter(i => !i.parent_id);
   const groups = {};
   its.forEach(i => {
     const country = i.country || (i.kind === 'idea' ? 'Ideas' : 'Elsewhere');
@@ -484,18 +841,203 @@ function somedayView() {
   return `<header class="top"><h1>Someday</h1>${syncBadge()}<button class="iconbtn" data-act="settings" aria-label="Settings">${I.gear}</button></header><main>${body}</main>`;
 }
 
-/* ---------- binding ---------- */
+/* ============================================================
+ * Map
+ * ============================================================ */
+function mapChips(t) {
+  const days = tripDays(t);
+  const opt = [['all', 'All'], ['unplanned', 'No day yet'], ...days.map(d => [d, fmtShortDay(d)])];
+  return `<div class="map-chips">${opt.map(([k, l]) => `<button class="${ui.mapDay === k ? 'on' : ''}" data-mapchip="${k}">${esc(l)}</button>`).join('')}</div>`;
+}
+function mapLayerToggle(t) {
+  const d = ui.mapDay;
+  if (d === 'all' || d === 'unplanned') return '';
+  return `<div class="map-layer"><button class="${ui.mapLayer === 'plan' ? 'on' : ''}" data-maplayer="plan">Plan</button><button class="${ui.mapLayer === 'lived' ? 'on' : ''}" data-maplayer="lived">Lived${logsFor(t.id, d).length ? '' : ' (0)'}</button></div>`;
+}
+function mapSignature(tripId) {
+  return JSON.stringify([ui.mapDay, ui.mapLayer, db.items.filter(i => i.trip_id === tripId).map(i => [i.id, i.lat, i.day, i.seq, i.parent_id, i.status]), db.log.filter(l => l.trip_id === tripId).map(l => [l.id, l.lat, l.day, l.seq, l.mode, l.parent_id])]);
+}
+function sizeMap() {
+  const el = $('#map'); if (!el) return;
+  const nav = $('nav.tabs');
+  el.style.height = Math.max(240, window.innerHeight - el.getBoundingClientRect().top - (nav ? nav.offsetHeight : 0)) + 'px';
+}
+window.addEventListener('resize', () => { if (map) { sizeMap(); map.invalidateSize(); } });
+
+function initMap(tripId) {
+  const t = tripById(tripId); const el = $('#map');
+  if (!t || !el) return;
+  document.body.classList.add('mapmode');
+  if (!window.L) {
+    sizeMap();
+    el.innerHTML = '<div class="empty">The map needs a connection to load the first time.</div>';
+    setTimeout(() => { if (window.L && route().sub === 'map') render(); }, 1500);
+    return;
+  }
+  sizeMap();
+  map = L.map(el, { zoomControl: false, attributionControl: true });
+  const dark = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
+  L.tileLayer(`https://{s}.basemaps.cartocdn.com/${dark ? 'dark_all' : 'rastertiles/voyager'}/{z}/{x}/{y}{r}.png`, {
+    maxZoom: 19, subdomains: 'abcd', attribution: '&copy; OpenStreetMap &copy; CARTO',
+  }).addTo(map);
+  const layer = L.layerGroup().addTo(map);
+  const pts = drawMap(t, layer);
+  const viewKey = t.id + '|' + ui.mapDay + '|' + ui.mapLayer;
+  if (ui.mapView && ui.mapView.key === viewKey) map.setView(ui.mapView.center, ui.mapView.zoom);
+  else if (pts.length > 1) map.fitBounds(L.latLngBounds(pts), { padding: [60, 40] });
+  else if (pts.length === 1) map.setView(pts[0], 15);
+  else map.setView([30, 0], 2);
+  map.on('moveend', () => { ui.mapView = { key: viewKey, center: map.getCenter(), zoom: map.getZoom() }; });
+  map.on('popupopen', e => {
+    const b = e.popup.getElement().querySelector('[data-pop]');
+    if (b) b.onclick = () => { const [k, id] = b.dataset.pop.split(':'); k === 'log' ? openLogEntry(id) : openItem(id); };
+  });
+  render._mapSig = mapSignature(t.id);
+}
+
+function pinNum(n, color) { return L.divIcon({ className: 'num-pin', html: `<span style="background:${color}">${n}</span>`, iconSize: [26, 26], iconAnchor: [13, 13], popupAnchor: [0, -12] }); }
+function pinHome() { return L.divIcon({ className: 'home-pin', html: `<span>${I.home}</span>`, iconSize: [30, 30], iconAnchor: [15, 15], popupAnchor: [0, -14] }); }
+function popup(o, kind) {
+  const sub = kind === 'log' ? [o.time ? fmtTime(o.time) : '', o.origin === 'found' ? 'Found' : 'Planned'].filter(Boolean).join(' · ') : placeLine(o);
+  return `<b>${esc(o.title)}</b>${sub ? `<br><span style="color:#7a7064;font-size:12px">${esc(sub)}</span>` : ''}<br><button class="pop-btn" data-pop="${kind}:${esc(o.id)}">Details</button>`;
+}
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#b9532c'; }
+
+function drawMap(t, layer) {
+  const pts = [];
+  const C = { place: cssVar('--place'), idea: cssVar('--idea'), fixed: cssVar('--fixed'), tour: cssVar('--tour'), found: cssVar('--found') };
+  const note = $('#map-note');
+  const say = msg => { if (note) { note.hidden = !msg; note.textContent = msg || ''; } };
+  const addDot = (o, color, kind = 'item') => {
+    if (!hasCoords(o)) return;
+    const ll = [+o.lat, +o.lng]; pts.push(ll);
+    L.circleMarker(ll, { radius: 8, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 }).bindPopup(popup(o, kind)).addTo(layer);
+  };
+  const addNum = (o, n, color, kind = 'item') => {
+    if (!hasCoords(o)) return;
+    const ll = [+o.lat, +o.lng]; pts.push(ll);
+    L.marker(ll, { icon: pinNum(n, color) }).bindPopup(popup(o, kind)).addTo(layer);
+  };
+  const addHome = o => {
+    if (!o || !hasCoords(o)) return;
+    const ll = [+o.lat, +o.lng]; pts.push(ll);
+    L.marker(ll, { icon: pinHome(), zIndexOffset: -100 }).bindPopup(popup(o, 'item')).addTo(layer);
+  };
+  const drawLegs = (seq, color, fixedMode) => {
+    const located = seq.filter(hasCoords);
+    const legs = [];
+    for (let k = 1; k < located.length; k++) {
+      const a = located[k - 1], b = located[k];
+      legs.push({ from: [+a.lat, +a.lng], to: [+b.lat, +b.lng], mode: fixedMode || b.mode || guessMode(a, b) });
+    }
+    if (!legs.length) return;
+    const straight = legs.map(l => L.polyline([l.from, l.to], { color, weight: 3, opacity: .7, dashArray: '6 8' }).addTo(layer));
+    getRoutes(legs).then(res => {
+      if (!map || !map.hasLayer(layer)) return;
+      res.forEach((pl, k) => {
+        if (!pl) return;
+        layer.removeLayer(straight[k]);
+        L.polyline(decodePolyline(pl), { color, weight: 4, opacity: .85 }).addTo(layer);
+      });
+      if (res.some(r => !r)) say(ui.noRoutes && !(cfg && cfg.demo) ? 'Dashed lines are straight-line. Turn on the Routes API for real paths.' : '');
+    });
+  };
+
+  const items = itemsFor(t.id);
+  const d = ui.mapDay;
+  if (d === 'all' || d === 'unplanned') {
+    items.forEach(i => {
+      if (d === 'unplanned' && (i.day || i.kind === 'fixed' || i.parent_id)) return;
+      if (i.kind === 'fixed' && isStay(i)) return addHome(i);
+      const parent = i.parent_id && itemById(i.parent_id);
+      addDot(i, parent ? C.tour : i.status === 'done' ? C.found : (C[i.kind] || C.place));
+    });
+    const missing = items.filter(i => !hasCoords(i) && i.kind !== 'idea').length;
+    say(missing ? `${missing} saved ${missing === 1 ? 'item has' : 'items have'} no location yet.` : '');
+    return pts;
+  }
+
+  const home = stayForMorning(t.id, d);
+  addHome(home);
+  const nightStay = stayForNight(t.id, d);
+  if (nightStay && nightStay !== home) addHome(nightStay);
+
+  if (ui.mapLayer === 'lived') {
+    const seq = flatLogs(t.id, d);
+    seq.forEach((l, k) => addNum(l, k + 1, l.parent_id ? C.tour : l.origin === 'found' ? C.found : C.place, 'log'));
+    drawLegs(home ? [home, ...seq] : seq, C.found);
+    say(seq.length ? '' : 'Nothing logged this day yet.');
+    return pts;
+  }
+
+  // Plan: fixed events, tours, planned stops
+  fixedEvents(t.id, d).forEach(e => {
+    if (isStay(e.i)) return;
+    if (isTour(e.i) && e.start) {
+      const kids = childrenOf(e.i.id);
+      addDot(e.i, C.tour);
+      kids.forEach((s, k) => addNum(s, k + 1, C.tour));
+      drawLegs([e.i, ...kids], C.tour, 'tour');
+    } else addDot(e.i, C.fixed);
+  });
+  const stops = plannedStops(t.id, d);
+  stops.forEach((s, k) => addNum(s, k + 1, s.kind === 'idea' ? C.idea : C.place));
+  drawLegs(home ? [home, ...stops] : stops, C.place);
+  const unlocated = stops.filter(s => !hasCoords(s)).length;
+  say(!stops.length && !fixedEvents(t.id, d).length ? 'Nothing planned this day yet.' : unlocated ? `${unlocated} planned ${unlocated === 1 ? 'stop has' : 'stops have'} no location.` : '');
+  return pts;
+}
+
+/* ============================================================
+ * Binding
+ * ============================================================ */
+function listForKey(key) {
+  const r = route(); const tid = r.id;
+  const [kind, val] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':') + 1)];
+  if (kind === 'day') return { sheet: 'Items', list: plannedStops(tid, val) };
+  if (kind === 'tour') return { sheet: 'Items', list: childrenOf(val) };
+  if (kind === 'log') return { sheet: 'Log', list: topLogs(tid, val) };
+  return { sheet: 'Items', list: [] };
+}
+function moveIn(key, id, dir) {
+  const { sheet, list } = listForKey(key);
+  const ids = list.map(x => x.id);
+  const k = ids.indexOf(id), j = dir === 'up' ? k - 1 : k + 1;
+  if (k < 0 || j < 0 || j >= ids.length) return;
+  [ids[k], ids[j]] = [ids[j], ids[k]];
+  queue('reorder', { sheet, ids, key }, () => {
+    const src = sheet === 'Log' ? db.log : db.items;
+    ids.forEach((x, n) => { const o = src.find(y => y.id === x); if (o) o.seq = String(n); });
+  });
+}
+
 function bindCommon() {
-  document.querySelectorAll('[data-go]').forEach(el => el.onclick = () => { location.hash = el.dataset.go; });
-  document.querySelectorAll('[data-item]').forEach(el => el.onclick = () => openItem(el.dataset.item));
-  document.querySelectorAll('[data-filter]').forEach(el => el.onclick = () => { ui.filter = el.dataset.filter; render(); });
-  document.querySelectorAll('[data-act]').forEach(el => el.onclick = () => {
+  const r = route();
+  $$('[data-go]').forEach(el => el.onclick = e => { e.stopPropagation(); location.hash = el.dataset.go; });
+  $$('[data-item]').forEach(el => el.onclick = e => { if (e.target.closest('.moves, [data-reorder]')) return; e.stopPropagation(); openItem(el.dataset.item); });
+  $$('[data-log]').forEach(el => el.onclick = e => { if (e.target.closest('.moves')) return; e.stopPropagation(); openLogEntry(el.dataset.log); });
+  $$('[data-filter]').forEach(el => el.onclick = () => { ui.filter = el.dataset.filter; render(); });
+  $$('[data-reorder]').forEach(el => el.onclick = e => { e.stopPropagation(); ui.reorder = ui.reorder === el.dataset.reorder ? null : el.dataset.reorder; render(); });
+  $$('[data-move]').forEach(el => el.onclick = e => { e.stopPropagation(); moveIn(el.dataset.list, el.dataset.id, el.dataset.move); });
+  $$('[data-addday]').forEach(el => el.onclick = () => openAddToDay(r.id, el.dataset.addday));
+  $$('[data-mapday]').forEach(el => el.onclick = () => { ui.mapDay = el.dataset.mapday; ui.mapLayer = 'plan'; location.hash = `#/trip/${encodeURIComponent(r.id)}/map`; });
+  $$('[data-maplived]').forEach(el => el.onclick = () => { ui.mapDay = el.dataset.maplived; ui.mapLayer = 'lived'; location.hash = `#/trip/${encodeURIComponent(r.id)}/map`; });
+  $$('[data-logday]').forEach(el => el.onclick = () => {
+    ui.logDay[r.id] = el.dataset.logday; ui.reorder = null;
+    if (r.sub !== 'log') location.hash = `#/trip/${encodeURIComponent(r.id)}/log`; else render();
+  });
+  $$('[data-mapchip]').forEach(el => el.onclick = () => { ui.mapDay = el.dataset.mapchip; render(); });
+  $$('[data-maplayer]').forEach(el => el.onclick = () => { ui.mapLayer = el.dataset.maplayer; render(); });
+  $$('[data-mode]').forEach(el => el.onclick = e => { e.stopPropagation(); openMode(el.dataset.mode); });
+  $$('[data-act]').forEach(el => el.onclick = () => {
     const a = el.dataset.act;
     if (a === 'capture') openCapture();
     else if (a === 'settings') openSettings();
     else if (a === 'newTrip') openTripForm();
     else if (a === 'editTrip') openTripForm(el.dataset.id);
     else if (a === 'pullSomeday') openPull(el.dataset.id);
+    else if (a === 'here') openHere(r.id, currentLogDay(tripById(r.id)));
+    else if (a === 'review') openReview(r.id, currentLogDay(tripById(r.id)));
   });
 }
 
@@ -513,7 +1055,7 @@ function openSheet(html, onMount) {
   return sh;
 }
 function closeSheet(instant) {
-  document.querySelectorAll('.scrim, .sheet').forEach(el => {
+  $$('.scrim, .sheet').forEach(el => {
     if (instant) return el.remove();
     el.classList.remove('open'); setTimeout(() => el.remove(), 260);
   });
@@ -528,13 +1070,19 @@ function tripOptions(selected) {
   return `<option value="">Someday (no trip yet)</option>` +
     trips.map(t => `<option value="${esc(t.id)}" ${t.id === selected ? 'selected' : ''}>${esc(t.name)}${t.start ? ' · ' + esc(fmtRange(t.start, t.end)) : ''}</option>`).join('');
 }
+function dayOptions(t, selected, blankLabel = 'No day yet') {
+  const days = t ? tripDays(t) : [];
+  if (selected && !days.includes(selected)) days.push(selected);
+  return `<option value="">${blankLabel}</option>` + days.sort().map(d => `<option value="${d}" ${d === selected ? 'selected' : ''}>${esc(fmtDay(d))}</option>`).join('');
+}
+function linkTitle(text) { return text.split('\n').find(l => l.trim() && !isUrl(l)) || 'Saved place'; }
 
 /* ---------- Capture ---------- */
 function openCapture() {
   const r = route();
   const defaultTrip = r.name === 'trip' ? r.id : '';
   let kind = 'idea', manualKind = false;
-  const sh = openSheet(`
+  openSheet(`
     <h3>Add to a trip</h3>
     <div class="field"><textarea class="capture-box" id="cap-text" placeholder="Paste a Google Maps link, or jot an idea — “snack bar near the hotel”"></textarea></div>
     <div class="hint" id="cap-hint">&nbsp;</div>
@@ -548,8 +1096,12 @@ function openCapture() {
       </div>
       <div class="field"><label>Name (if not a Maps link)</label><input id="cap-title" placeholder="e.g. UA 1234 BNA → KEF"></div>
       <div class="two">
-        <div class="field"><label>Date</label><input type="date" id="cap-day"></div>
-        <div class="field"><label>Time</label><input type="time" id="cap-time"></div>
+        <div class="field"><label id="cap-start-l">Starts</label><input type="date" id="cap-day"></div>
+        <div class="field"><label>&nbsp;</label><input type="time" id="cap-time"></div>
+      </div>
+      <div class="two">
+        <div class="field"><label id="cap-end-l">Ends</label><input type="date" id="cap-end-day"></div>
+        <div class="field"><label>&nbsp;</label><input type="time" id="cap-end-time"></div>
       </div>
     </div>
     <div class="field"><label>Trip</label><select id="cap-trip">${tripOptions(defaultTrip)}</select></div>
@@ -560,42 +1112,53 @@ function openCapture() {
     const ta = $('#cap-text', sh), hint = $('#cap-hint', sh);
     const setKind = k => {
       kind = k;
-      sh.querySelectorAll('#cap-kind button').forEach(b => b.classList.toggle('on', b.dataset.k === k));
+      $$('#cap-kind button', sh).forEach(b => b.classList.toggle('on', b.dataset.k === k));
       $('#cap-fixed', sh).hidden = k !== 'fixed';
     };
+    const labels = () => {
+      const c = $('#cap-cat', sh).value;
+      $('#cap-start-l', sh).textContent = c === 'Stay' ? 'Check in' : c === 'Flight' ? 'Departs' : c === 'Tour' ? 'Pickup' : 'Starts';
+      $('#cap-end-l', sh).textContent = c === 'Stay' ? 'Check out' : c === 'Flight' ? 'Arrives' : c === 'Tour' ? 'Return' : 'Ends';
+    };
+    $('#cap-cat', sh).onchange = labels;
     const detect = () => {
       const v = ta.value.trim();
       if (!v) { hint.innerHTML = '&nbsp;'; return; }
-      if (isMapsUrl(v)) { hint.textContent = db.places || (cfg && cfg.demo) ? 'Google Maps link — name, address and hours will fill in.' : 'Google Maps link — will save with its name (add a Places key for hours).'; if (!manualKind) setKind('place'); }
+      if (isMapsUrl(v)) { hint.textContent = db.places || (cfg && cfg.demo) ? 'Google Maps link — name, address and hours will fill in.' : 'Google Maps link — will save with its name.'; if (!manualKind) setKind('place'); }
       else if (isUrl(v)) { hint.textContent = 'Web link — saved as an idea with the link attached.'; if (!manualKind) setKind('idea'); }
       else { hint.textContent = 'Saved as an idea. I can turn it into real options later.'; if (!manualKind) setKind('idea'); }
     };
     ta.oninput = detect;
-    sh.querySelectorAll('#cap-kind button').forEach(b => b.onclick = () => { manualKind = true; setKind(b.dataset.k); });
-    const syncDayBounds = () => {
-      const t = tripById($('#cap-trip', sh).value), d = $('#cap-day', sh);
-      d.min = t && t.start ? t.start : ''; d.max = t && t.end ? t.end : '';
+    $$('#cap-kind button', sh).forEach(b => b.onclick = () => { manualKind = true; setKind(b.dataset.k); });
+    const bounds = () => {
+      const t = tripById($('#cap-trip', sh).value);
+      ['#cap-day', '#cap-end-day'].forEach(s => { const d = $(s, sh); d.min = t && t.start ? addDays(t.start, -1) : ''; d.max = t && t.end ? addDays(t.end, 1) : ''; });
     };
-    $('#cap-trip', sh).onchange = syncDayBounds; syncDayBounds();
+    $('#cap-trip', sh).onchange = bounds; bounds();
+    $('#cap-day', sh).onchange = () => { const e = $('#cap-end-day', sh); if (!e.value || e.value < $('#cap-day', sh).value) e.value = $('#cap-day', sh).value; };
     const pb = $('#cap-paste', sh);
-    if (pb) pb.onclick = async () => { try { ta.value = await navigator.clipboard.readText(); detect(); } catch (e) { toast('Clipboard not available — long-press to paste'); } };
+    if (pb) pb.onclick = async () => { try { ta.value = await navigator.clipboard.readText(); detect(); } catch (e) { toast('Long-press the box to paste'); } };
     $('#cap-save', sh).onclick = () => {
       const text = ta.value.trim();
-      const title = kind === 'fixed' ? $('#cap-title', sh).value.trim() : '';
+      const fixed = kind === 'fixed';
+      const title = fixed ? $('#cap-title', sh).value.trim() : '';
       if (!text && !title) { ta.focus(); return; }
+      const day = fixed ? $('#cap-day', sh).value : '';
+      let endDay = fixed ? $('#cap-end-day', sh).value : '';
+      if (endDay === day) endDay = '';
       const payload = {
         id: uid('it'), text, kind, trip: $('#cap-trip', sh).value || 'someday',
         title: title || undefined,
-        category: kind === 'fixed' ? $('#cap-cat', sh).value : undefined,
-        confirmation: kind === 'fixed' ? $('#cap-conf', sh).value.trim() : undefined,
-        day: kind === 'fixed' ? $('#cap-day', sh).value : undefined,
-        start_time: kind === 'fixed' ? $('#cap-time', sh).value : undefined,
+        category: fixed ? $('#cap-cat', sh).value : undefined,
+        confirmation: fixed ? $('#cap-conf', sh).value.trim() : undefined,
+        day: day || undefined, start_time: fixed ? $('#cap-time', sh).value : undefined,
+        end_day: endDay || undefined, end_time: fixed ? $('#cap-end-time', sh).value : undefined,
       };
       const local = {
         id: payload.id, trip_id: payload.trip === 'someday' ? '' : payload.trip, kind,
-        category: payload.category || '', title: title || (isUrl(text) ? (text.split('\n').find(l => !isUrl(l)) || 'Saved place') : text),
-        day: payload.day || '', start_time: payload.start_time || '', confirmation: payload.confirmation || '',
-        status: 'open', source: text, _pending: isMapsUrl(text),
+        category: payload.category || '', title: title || (isUrl(text) ? linkTitle(text) : text),
+        day: day || '', start_time: payload.start_time || '', end_day: endDay, end_time: payload.end_time || '',
+        confirmation: payload.confirmation || '', status: 'open', source: text, _pending: isMapsUrl(text),
       };
       queue('add', payload, () => db.items.push(local));
       closeSheet();
@@ -607,18 +1170,25 @@ function openCapture() {
 
 /* ---------- Item detail ---------- */
 function openItem(id) {
-  const i = db.items.find(x => x.id === id);
+  const i = itemById(id);
   if (!i) return;
   const t = tripById(i.trip_id);
+  const parent = i.parent_id ? itemById(i.parent_id) : null;
   let hours = null;
   try { hours = i.hours ? JSON.parse(i.hours) : null; } catch (e) {}
   const refDay = i.day ? parseDate(i.day).getDay() : new Date().getDay();
   const hoursHtml = hours && hours.weekday && hours.weekday.length
     ? `<ul class="hours">${hours.weekday.map(w => `<li class="${w.startsWith(DOW_LONG[refDay]) ? 'today' : ''}">${esc(w)}</li>`).join('')}</ul>` : '';
   let kind = i.kind;
+  const kids = i.kind === 'fixed' ? childrenOf(i.id) : [];
+  const showStops = i.kind === 'fixed' && (isTour(i) || kids.length);
+  const st = isStay(i), fl = isFlight(i), tour = /^tour$/i.test(i.category || '');
+  const startL = st ? 'Check in' : fl ? 'Departs' : tour ? 'Pickup' : 'Starts';
+  const endL = st ? 'Check out' : fl ? 'Arrives' : tour ? 'Return' : 'Ends';
 
   openSheet(`
     <div class="field"><input id="it-title" value="${esc(i.title)}" style="font-family:var(--serif);font-size:20px;font-weight:600;border:0;background:none;padding:4px 2px"></div>
+    ${parent ? `<div class="hint" style="margin-top:-10px">Stop on <a href="#" id="it-parent">${esc(parent.title)}</a></div>` : ''}
     <div class="seg" id="it-kind">${['place', 'idea', 'fixed'].map(k => `<button data-k="${k}" class="${k === kind ? 'on' : ''}">${KIND[k]}</button>`).join('')}</div>
     ${(i.address || hoursHtml || i.maps_url || i.website) ? `<div class="info">
       ${i.address ? `<div>${esc(i.address)}</div>` : ''}
@@ -629,43 +1199,299 @@ function openItem(id) {
         ${i.maps_url && !(cfg && cfg.demo) ? `<a href="#" id="it-refresh">Refresh details</a>` : ''}
       </div></div>` : ''}
     <div class="two">
-      <div class="field"><label>Trip</label><select id="it-trip">${tripOptions(i.trip_id)}</select></div>
+      <div class="field"><label>Trip</label><select id="it-trip" ${parent ? 'disabled' : ''}>${tripOptions(i.trip_id)}</select></div>
       <div class="field"><label>Category</label><input id="it-cat" value="${esc(i.category)}" list="cats"><datalist id="cats">${FIXED_CATS.map(c => `<option>${c}</option>`).join('')}</datalist></div>
     </div>
-    <div class="two">
-      <div class="field"><label>Day</label><input type="date" id="it-day" value="${esc(i.day)}" ${t && t.start ? `min="${esc(t.start)}"` : ''} ${t && t.end ? `max="${esc(t.end)}"` : ''}></div>
-      <div class="field"><label>Time</label><input type="time" id="it-time" value="${esc(i.start_time)}"></div>
+    <div id="it-when-fixed" ${kind === 'fixed' ? '' : 'hidden'}>
+      <div class="two">
+        <div class="field"><label>${startL}</label><input type="date" id="it-day" value="${esc(i.day)}"></div>
+        <div class="field"><label>&nbsp;</label><input type="time" id="it-time" value="${esc(i.start_time)}"></div>
+      </div>
+      <div class="two">
+        <div class="field"><label>${endL}</label><input type="date" id="it-end-day" value="${esc(i.end_day || '')}"></div>
+        <div class="field"><label>&nbsp;</label><input type="time" id="it-end-time" value="${esc(i.end_time)}"></div>
+      </div>
+      <div class="field"><label>Confirmation #</label><input id="it-conf" value="${esc(i.confirmation)}" autocomplete="off"></div>
     </div>
-    <div class="field" id="it-conf-wrap" ${kind === 'fixed' ? '' : 'hidden'}><label>Confirmation #</label><input id="it-conf" value="${esc(i.confirmation)}" autocomplete="off"></div>
+    <div id="it-when-plain" ${kind === 'fixed' || parent ? 'hidden' : ''}>
+      <div class="field"><label>Day</label><select id="it-pday">${dayOptions(t, i.day)}</select></div>
+    </div>
+    ${showStops ? `<h4>Stops</h4>
+      <div id="it-stops">${kids.map((s, k) => `<div class="stoprow"><span class="num" style="--c:var(--tour)">${k + 1}</span><div class="body"><div class="title">${esc(s.title)}</div><div class="meta">${esc(placeLine(s))}</div></div>
+        <div class="moves"><button data-smove="up" data-id="${esc(s.id)}" ${k === 0 ? 'disabled' : ''}>↑</button><button data-smove="down" data-id="${esc(s.id)}" ${k === kids.length - 1 ? 'disabled' : ''}>↓</button><button data-sremove="${esc(s.id)}" title="Remove from tour">✕</button></div></div>`).join('') || '<div class="hint" style="margin:0 2px 8px">No stops yet.</div>'}</div>
+      <div class="field" style="margin-top:10px"><textarea id="it-newstops" placeholder="Paste Google Maps links for stops — one per line"></textarea></div>
+      <button class="btn ghost" id="it-addstops" style="margin-bottom:14px">Add stops</button>` : ''}
     <div class="field"><label>Notes</label><textarea id="it-notes" placeholder="Why it’s on the list, who recommended it, what to order…">${esc(i.notes)}</textarea></div>
     <div class="btnrow"><button class="btn danger" id="it-del">Delete</button><button class="btn" id="it-save">Save</button></div>
   `, sh => {
-    sh.querySelectorAll('#it-kind button').forEach(b => b.onclick = () => {
+    $$('#it-kind button', sh).forEach(b => b.onclick = () => {
       kind = b.dataset.k;
-      sh.querySelectorAll('#it-kind button').forEach(x => x.classList.toggle('on', x === b));
-      $('#it-conf-wrap', sh).hidden = kind !== 'fixed';
+      $$('#it-kind button', sh).forEach(x => x.classList.toggle('on', x === b));
+      $('#it-when-fixed', sh).hidden = kind !== 'fixed';
+      $('#it-when-plain', sh).hidden = kind === 'fixed' || !!parent;
     });
-    $('#it-save', sh).onclick = () => {
+    const pl = $('#it-parent', sh); if (pl) pl.onclick = e => { e.preventDefault(); openItem(parent.id); };
+    $('#it-day', sh).onchange = () => { const e = $('#it-end-day', sh); if (e.value && e.value < $('#it-day', sh).value) e.value = $('#it-day', sh).value; };
+    const collect = () => {
+      const fixed = kind === 'fixed';
       const patch = {
         title: $('#it-title', sh).value.trim() || i.title, kind,
-        trip_id: $('#it-trip', sh).value, category: $('#it-cat', sh).value.trim(),
-        day: $('#it-day', sh).value, start_time: $('#it-time', sh).value,
-        confirmation: $('#it-conf', sh).value.trim(), notes: $('#it-notes', sh).value,
+        trip_id: parent ? i.trip_id : $('#it-trip', sh).value, category: $('#it-cat', sh).value.trim(),
+        notes: $('#it-notes', sh).value,
       };
-      if (patch.trip_id !== i.trip_id && patch.day) {
-        const nt = tripById(patch.trip_id);
-        if (!nt || (nt.start && patch.day < nt.start) || (nt.end && patch.day > nt.end)) patch.day = '';
+      if (fixed) {
+        patch.day = $('#it-day', sh).value; patch.start_time = $('#it-time', sh).value;
+        patch.end_day = $('#it-end-day', sh).value === patch.day ? '' : $('#it-end-day', sh).value;
+        patch.end_time = $('#it-end-time', sh).value; patch.confirmation = $('#it-conf', sh).value.trim();
+      } else if (!parent) {
+        const nd = $('#it-pday', sh).value;
+        if (nd !== i.day) { patch.day = nd; patch.seq = nd ? String(plannedStops(i.trip_id, nd).length) : ''; }
       }
-      queue('updateItem', { id: i.id, patch }, () => Object.assign(i, patch));
+      if (patch.trip_id !== i.trip_id && !fixed) patch.day = '';
+      return patch;
+    };
+    $('#it-save', sh).onclick = () => {
+      const patch = collect();
+      queue('updateItem', { id: i.id, patch }, () => {
+        Object.assign(i, patch);
+        // stops follow their tour's day
+        if (patch.day !== undefined) childrenOf(i.id).forEach(c => { if (c.day !== patch.day) { c.day = patch.day; queue('updateItem', { id: c.id, patch: { day: patch.day } }); } });
+      });
       closeSheet();
     };
     $('#it-del', sh).onclick = () => {
       if (!confirm('Delete “' + i.title + '”?')) return;
-      queue('deleteItem', { id: i.id }, () => { db.items = db.items.filter(x => x.id !== i.id); });
+      queue('deleteItem', { id: i.id }, () => {
+        db.items.forEach(c => { if (c.parent_id === i.id) c.parent_id = ''; });
+        db.items = db.items.filter(x => x.id !== i.id);
+      });
       closeSheet();
     };
     const rf = $('#it-refresh', sh);
     if (rf) rf.onclick = e => { e.preventDefault(); i._pending = true; queue('refreshItem', { id: i.id }); closeSheet(); toast('Refreshing from Google…'); };
+    $$('[data-smove]', sh).forEach(b => b.onclick = () => { moveIn('tour:' + i.id, b.dataset.id, b.dataset.smove); openItem(i.id); });
+    $$('[data-sremove]', sh).forEach(b => b.onclick = () => {
+      const c = itemById(b.dataset.sremove); if (!c) return;
+      queue('updateItem', { id: c.id, patch: { parent_id: '' } }, () => { c.parent_id = ''; });
+      openItem(i.id);
+    });
+    const as = $('#it-addstops', sh);
+    if (as) as.onclick = () => {
+      const lines = $('#it-newstops', sh).value.split('\n').map(s => s.trim()).filter(Boolean);
+      if (!lines.length) return;
+      // keep any text typed into the main fields
+      Object.assign(i, collect());
+      let n = childrenOf(i.id).length;
+      lines.forEach(line => {
+        const payload = { id: uid('it'), text: line, kind: 'place', trip: i.trip_id || 'someday', parent_id: i.id, seq: n, day: i.day || undefined };
+        const local = { id: payload.id, trip_id: i.trip_id, kind: 'place', parent_id: i.id, seq: String(n), day: i.day || '', title: isUrl(line) ? linkTitle(line) : line, status: 'open', _pending: isMapsUrl(line) };
+        n++;
+        queue('add', payload, () => db.items.push(local));
+      });
+      if (!/^tour$/i.test(i.category || '')) queue('updateItem', { id: i.id, patch: { category: 'Tour' } }, () => { i.category = 'Tour'; });
+      openItem(i.id);
+      toast(`Adding ${lines.length} stop${lines.length === 1 ? '' : 's'}…`);
+    };
+  });
+}
+
+/* ---------- Add places to a day ---------- */
+function openAddToDay(tripId, d) {
+  const t = tripById(tripId); if (!t) return;
+  const dow = parseDate(d).getDay();
+  const base = stayForNight(tripId, d) || stayForMorning(tripId, d);
+  const cands = topItemsFor(tripId).filter(i => i.kind !== 'fixed' && !i.day).map(i => ({
+    i, open: openOn(i, dow), dist: base && hasCoords(base) && hasCoords(i) ? meters(base, i) : null,
+  })).sort((a, b) => (a.open === false) - (b.open === false) || (a.dist ?? 1e9) - (b.dist ?? 1e9) || a.i.title.localeCompare(b.i.title));
+  openSheet(`
+    <h3>Plan ${esc(fmtDay(d))}</h3>
+    ${cands.length ? `<p class="hint" style="margin:-6px 2px 10px">${base && hasCoords(base) ? 'Closest to ' + esc(base.title) + ' first.' : 'Your saved places without a day.'}</p>
+    <div>${cands.map(c => `<label class="check"><input type="checkbox" value="${esc(c.i.id)}"><span>${esc(c.i.title)}<small>${[esc(placeLine(c.i)), c.dist != null ? fmtDist(c.dist) + ' away' : '', c.open === false ? `<span class="warn">Closed ${DOW[dow]}</span>` : esc(hoursOn(c.i, dow))].filter(Boolean).join(' · ')}</small></span></label>`).join('')}</div>
+    <div class="btnrow" style="margin-top:16px"><button class="btn ghost" id="ad-cancel">Cancel</button><button class="btn" id="ad-go">Add to day</button></div>`
+    : `<div class="empty">Every saved place already has a day. Tap + to save more.</div>`}
+  `, sh => {
+    const c = $('#ad-cancel', sh); if (c) c.onclick = () => closeSheet();
+    const g = $('#ad-go', sh);
+    if (g) g.onclick = () => {
+      const ids = $$('input:checked', sh).map(x => x.value);
+      let n = plannedStops(tripId, d).length;
+      ids.forEach(id => {
+        const it = itemById(id), seq = String(n++);
+        queue('updateItem', { id, patch: { day: d, seq } }, () => { it.day = d; it.seq = seq; });
+      });
+      closeSheet();
+      if (ids.length) toast(`Added ${ids.length} to ${fmtDay(d, false)}`);
+    };
+  });
+}
+
+/* ---------- Travelogue: I'm here ---------- */
+function openHere(tripId, d) {
+  const t = tripById(tripId); if (!t) return;
+  const now = tzNow(t.timezone);
+  const isToday = d === now.day;
+  const logged = new Set(db.log.filter(l => l.trip_id === tripId).map(l => l.item_id).filter(Boolean));
+  const dayPlan = plannedStops(tripId, d).concat(fixedEvents(tripId, d).filter(e => e.start).map(e => e.i)).filter(i => !logged.has(i.id));
+  const others = topItemsFor(tripId).filter(i => i.kind !== 'fixed' && !logged.has(i.id) && i.day !== d);
+  const tours = topLogs(tripId, d).filter(l => { const it = l.item_id && itemById(l.item_id); return it && isTour(it); });
+  const prev = topLogs(tripId, d).slice(-1)[0];
+  let picked = null, pos = null;
+
+  const pickRow = i => `<div class="pick" data-pick="${esc(i.id)}"><span class="num ${i.kind === 'idea' ? 'hollow' : ''}" style="--c:${i.kind === 'fixed' ? 'var(--fixed)' : 'var(--place)'}">•</span><div class="body"><div class="title">${esc(i.title)}</div><div class="meta" data-dist="${esc(i.id)}">${esc(placeLine(i))}</div></div></div>`;
+  openSheet(`
+    <h3>${isToday ? 'Where are you?' : 'Add a stop · ' + esc(fmtDay(d, false))}</h3>
+    ${dayPlan.length ? `<h4 style="margin-top:0">From the plan</h4><div id="h-plan">${dayPlan.map(pickRow).join('')}</div>` : ''}
+    ${others.length ? `<details style="margin:6px 0 12px"><summary style="font-size:14px;color:var(--muted);cursor:pointer;padding:6px 2px">Other saved places (${others.length})</summary><div id="h-others" style="margin-top:8px">${others.map(pickRow).join('')}</div></details>` : ''}
+    ${navigator.geolocation && isToday ? `<button class="linkbtn" id="h-near" style="margin:-4px 0 8px">Sort by what’s near me</button>` : ''}
+    <h4>${dayPlan.length || others.length ? 'Or somewhere new' : 'Somewhere'}</h4>
+    <div class="field"><textarea id="h-text" placeholder="Paste a Google Maps link, or type a name"></textarea></div>
+    <div class="two">
+      <div class="field"><label>Time (optional)</label><div class="inline"><input type="time" id="h-time"><button class="btn ghost small" id="h-now">Now</button></div></div>
+      <div class="field"><label>Got here by</label><select id="h-mode">${MODES.map(([k, l]) => `<option value="${k}" ${k === (prev && prev.mode) ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    </div>
+    ${tours.length ? `<div class="field"><label>Part of</label><select id="h-parent"><option value="">— (on my own)</option>${tours.map(l => `<option value="${esc(l.id)}">${esc(l.title)}</option>`).join('')}</select></div>` : ''}
+    <div class="field"><label>Note</label><input id="h-note" placeholder="What it was like, what you ordered…"></div>
+    <button class="btn" id="h-save">Log it</button>
+  `, sh => {
+    const ta = $('#h-text', sh);
+    const bindPicks = () => $$('[data-pick]', sh).forEach(el => el.onclick = () => {
+      const on = !el.classList.contains('on');
+      $$('[data-pick]', sh).forEach(x => x.classList.remove('on'));
+      if (on) { el.classList.add('on'); picked = el.dataset.pick; ta.value = ''; } else picked = null;
+    });
+    bindPicks();
+    ta.oninput = () => { if (ta.value.trim()) { picked = null; $$('[data-pick]', sh).forEach(x => x.classList.remove('on')); } };
+    $('#h-now', sh).onclick = () => { $('#h-time', sh).value = tzNow(t.timezone).time; };
+    const near = $('#h-near', sh);
+    if (near) near.onclick = () => {
+      near.textContent = 'Finding you…';
+      navigator.geolocation.getCurrentPosition(p => {
+        pos = { lat: p.coords.latitude, lng: p.coords.longitude };
+        ['#h-plan', '#h-others'].forEach(sel => {
+          const box = $(sel, sh); if (!box) return;
+          const rows = $$('[data-pick]', box).map(el => ({ el, it: itemById(el.dataset.pick) }));
+          rows.forEach(r => { r.d = hasCoords(r.it) ? meters(pos, r.it) : 1e9; const m = $('[data-dist]', r.el); if (m && r.d < 1e9) m.textContent = [placeLine(r.it), fmtDist(r.d) + ' away'].filter(Boolean).join(' · '); });
+          rows.sort((a, b) => a.d - b.d).forEach(r => box.appendChild(r.el));
+          if (sel === '#h-plan' && rows[0] && rows[0].d < 150 && !picked) rows[0].el.click();
+        });
+        const det = $('details', sh); if (det && $('#h-others .pick', sh) && meters(pos, itemById($('#h-others .pick', sh).dataset.pick)) < 150) det.open = true;
+        near.textContent = 'Sorted by distance';
+      }, () => { near.textContent = 'Couldn’t get your location'; }, { enableHighAccuracy: true, timeout: 10000 });
+    };
+    $('#h-save', sh).onclick = () => {
+      const text = ta.value.trim();
+      if (!picked && !text) { ta.focus(); return; }
+      const parentSel = $('#h-parent', sh);
+      const parent_id = parentSel ? parentSel.value : '';
+      const it = picked ? itemById(picked) : null;
+      const seq = parent_id ? logKids(parent_id).length : topLogs(tripId, d).length;
+      const mode = $('#h-mode', sh).value;
+      const payload = { id: uid('lg'), trip: tripId, day: d, seq, time: $('#h-time', sh).value, mode: seq || parent_id ? mode : '',
+        parent_id, note: $('#h-note', sh).value.trim(), timezone: t.timezone || '', item_id: it ? it.id : undefined, text: it ? undefined : text };
+      const local = { id: payload.id, trip_id: tripId, day: d, seq: String(seq), time: payload.time, mode: payload.mode, parent_id, note: payload.note,
+        item_id: it ? it.id : '', title: it ? it.title : (isUrl(text) ? linkTitle(text) : text), origin: it ? 'planned' : (isMapsUrl(text) ? '' : 'found'),
+        lat: it ? it.lat : (pos && !isMapsUrl(text) ? pos.lat : ''), lng: it ? it.lng : (pos && !isMapsUrl(text) ? pos.lng : ''), city: it ? it.city : '', _pending: !it && isMapsUrl(text) };
+      // a typed name (no link) at your current spot keeps your location
+      if (!it && !isMapsUrl(text) && pos) { payload.title = text; payload.lat = pos.lat; payload.lng = pos.lng; }
+      queue('addLog', payload, () => { db.log.push(local); if (it) it.status = 'done'; });
+      // logging a planned tour also logs its stops (delete any you skipped)
+      if (it && isTour(it)) {
+        childrenOf(it.id).forEach((c, k) => {
+          const p2 = { id: uid('lg'), trip: tripId, day: d, seq: k, parent_id: payload.id, mode: 'tour', item_id: c.id, timezone: t.timezone || '' };
+          queue('addLog', p2, () => { db.log.push({ id: p2.id, trip_id: tripId, day: d, seq: String(k), parent_id: payload.id, mode: 'tour', item_id: c.id, title: c.title, origin: 'planned', lat: c.lat, lng: c.lng }); c.status = 'done'; });
+        });
+      }
+      closeSheet();
+      toast('Logged');
+    };
+  });
+}
+
+/* ---------- Travelogue: one entry ---------- */
+function openLogEntry(id) {
+  const l = db.log.find(x => x.id === id); if (!l) return;
+  const t = tripById(l.trip_id);
+  const item = l.item_id ? itemById(l.item_id) : null;
+  openSheet(`
+    <div class="field"><input id="lg-title" value="${esc(l.title)}" style="font-family:var(--serif);font-size:20px;font-weight:600;border:0;background:none;padding:4px 2px"></div>
+    <div class="hint" style="margin-top:-8px">${l.origin === 'found' ? '<span class="badge found">Found</span>Not in your plan — discovered on the ground.' : l.origin === 'planned' ? `<span class="badge planned">Planned</span>${item ? 'From your plan: ' + esc(item.title) : 'Matched your plan.'}` : 'Matching to your plan…'}</div>
+    ${l.address || l.maps_url ? `<div class="info">${esc(l.address || '')}${l.maps_url ? `<div class="links"><a href="${esc(l.maps_url)}" target="_blank" rel="noopener">Open in Maps</a></div>` : ''}</div>` : ''}
+    <div class="two">
+      <div class="field"><label>Day</label><select id="lg-day">${dayOptions(t, l.day, '—')}</select></div>
+      <div class="field"><label>Time</label><input type="time" id="lg-time" value="${esc(l.time)}"></div>
+    </div>
+    <div class="field"><label>Got here by</label><select id="lg-mode"><option value="">—</option>${MODES.map(([k, n]) => `<option value="${k}" ${k === l.mode ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+    <div class="field"><label>Note</label><textarea id="lg-note">${esc(l.note)}</textarea></div>
+    <label class="check" style="border:0"><input type="checkbox" id="lg-ret" ${l.would_return ? 'checked' : ''}><span>Would go back</span></label>
+    <div class="btnrow"><button class="btn danger" id="lg-del">Delete</button><button class="btn" id="lg-save">Save</button></div>
+  `, sh => {
+    $('#lg-save', sh).onclick = () => {
+      const patch = { title: $('#lg-title', sh).value.trim() || l.title, day: $('#lg-day', sh).value || l.day, time: $('#lg-time', sh).value,
+        mode: $('#lg-mode', sh).value, note: $('#lg-note', sh).value, would_return: $('#lg-ret', sh).checked ? 'yes' : '' };
+      if (patch.day !== l.day && !l.parent_id) patch.seq = String(topLogs(l.trip_id, patch.day).length);
+      queue('updateLog', { id: l.id, patch }, () => {
+        Object.assign(l, patch);
+        if (patch.day !== undefined) logKids(l.id).forEach(k => { if (k.day !== patch.day) queue('updateLog', { id: k.id, patch: { day: patch.day } }, () => { k.day = patch.day; }); });
+      });
+      closeSheet();
+    };
+    $('#lg-del', sh).onclick = () => {
+      if (!confirm('Remove this stop from the log?')) return;
+      const kids = logKids(l.id);
+      kids.forEach(k => queue('deleteLog', { id: k.id }, () => { db.log = db.log.filter(x => x.id !== k.id); }));
+      queue('deleteLog', { id: l.id }, () => {
+        db.log = db.log.filter(x => x.id !== l.id);
+        [l, ...kids].forEach(x => { if (x.item_id && !db.log.some(y => y.item_id === x.item_id)) { const it = itemById(x.item_id); if (it) it.status = 'open'; } });
+      });
+      closeSheet();
+    };
+  });
+}
+
+function openMode(logId) {
+  const l = db.log.find(x => x.id === logId); if (!l) return;
+  openSheet(`<h3>How did you get to ${esc(l.title)}?</h3>
+    ${MODES.map(([k, n]) => `<button class="btn ${k === l.mode ? '' : 'ghost'}" data-m="${k}" style="margin-bottom:8px">${n}</button>`).join('')}`, sh => {
+    $$('[data-m]', sh).forEach(b => b.onclick = () => {
+      queue('updateLog', { id: l.id, patch: { mode: b.dataset.m } }, () => { l.mode = b.dataset.m; });
+      closeSheet();
+    });
+  });
+}
+
+/* ---------- Travelogue: end-of-day review ---------- */
+function openReview(tripId, d) {
+  const t = tripById(tripId); if (!t) return;
+  const left = plannedStops(tripId, d).filter(s => s.status !== 'done' && s.status !== 'skipped');
+  openSheet(`
+    <h3>${esc(fmtDay(d))} — how did it go?</h3>
+    ${left.length ? `<p class="hint" style="margin:-6px 2px 6px">Went adds it to the log in plan order. Skip sends it back to your saved places.</p>
+      <div>${left.map(s => `<div class="review-row" data-row="${esc(s.id)}"><div class="body"><div class="title">${esc(s.title)}</div><div class="meta">${esc(placeLine(s))}</div></div>
+        <button class="btn small" data-went="${esc(s.id)}">Went</button><button class="btn ghost small" data-skip="${esc(s.id)}">Skip</button>
+        <select data-movetoday="${esc(s.id)}" style="width:86px;padding:7px;border-radius:10px;border:1px solid var(--line);background:var(--card);font-size:13px">${dayOptions(t, '', 'Move…').replace(`<option value="${d}"`, `<option disabled value="${d}"`)}</select></div>`).join('')}</div>`
+      : `<div class="empty"><div class="big">All accounted for</div>Everything planned for this day is logged or moved.</div>`}
+    <div class="btnrow" style="margin-top:14px"><button class="btn ghost" id="rv-done">Done</button><button class="btn" id="rv-more">Add somewhere I found</button></div>
+  `, sh => {
+    const gone = id => { const r = $(`[data-row="${CSS.escape(id)}"]`, sh); if (r) r.remove(); };
+    $$('[data-went]', sh).forEach(b => b.onclick = () => {
+      const it = itemById(b.dataset.went);
+      const payload = { id: uid('lg'), trip: tripId, day: d, seq: topLogs(tripId, d).length, item_id: it.id, timezone: t.timezone || '' };
+      queue('addLog', payload, () => { db.log.push({ id: payload.id, trip_id: tripId, day: d, seq: String(payload.seq), item_id: it.id, title: it.title, origin: 'planned', lat: it.lat, lng: it.lng, city: it.city }); it.status = 'done'; });
+      gone(it.id);
+    });
+    $$('[data-skip]', sh).forEach(b => b.onclick = () => {
+      const it = itemById(b.dataset.skip);
+      queue('updateItem', { id: it.id, patch: { day: '', seq: '', status: 'open' } }, () => { it.day = ''; it.seq = ''; });
+      gone(it.id);
+    });
+    $$('[data-movetoday]', sh).forEach(s => s.onchange = () => {
+      const it = itemById(s.dataset.movetoday), nd = s.value;
+      const seq = nd ? String(plannedStops(tripId, nd).length) : '';
+      queue('updateItem', { id: it.id, patch: { day: nd, seq } }, () => { it.day = nd; it.seq = seq; });
+      gone(it.id);
+    });
+    $('#rv-done', sh).onclick = () => closeSheet();
+    $('#rv-more', sh).onclick = () => openHere(tripId, d);
   });
 }
 
@@ -703,8 +1529,7 @@ function openTripForm(id) {
         queue('addTrip', { trip }, () => db.trips.push(trip));
         closeSheet();
         location.hash = '#/trip/' + encodeURIComponent(trip.id);
-        const m = somedayMatches(trip);
-        if (m.length) setTimeout(() => openPull(trip.id), 350);
+        if (somedayMatches(trip).length) setTimeout(() => openPull(trip.id), 350);
       }
     };
     const del = $('#tr-del', sh);
@@ -732,7 +1557,7 @@ function openPull(tripId) {
   `, sh => {
     $('#pl-skip', sh).onclick = () => closeSheet();
     $('#pl-go', sh).onclick = () => {
-      const ids = [...sh.querySelectorAll('input:checked')].map(x => x.value);
+      const ids = $$('input:checked', sh).map(x => x.value);
       if (ids.length) queue('attach', { ids, trip_id: t.id }, () => db.items.forEach(i => { if (ids.includes(i.id)) i.trip_id = t.id; }));
       closeSheet();
       if (ids.length) toast(`Added ${ids.length} to ${t.name}`);
@@ -747,9 +1572,10 @@ function openSettings() {
     ${cfg.demo ? `<div class="info">You’re looking at sample data. Nothing here is saved to a Sheet.</div>` : `
     <div class="field"><label>Apps Script web app URL</label><input id="st-url" value="${esc(cfg.url)}" autocomplete="off"></div>
     <div class="field"><label>Passphrase</label><input id="st-token" value="${esc(cfg.token)}" autocomplete="off"></div>
-    <div class="field"><label>Google Sheet link (optional, for the shortcut below)</label><input id="st-sheet" value="${esc(cfg.sheetUrl || '')}" placeholder="https://docs.google.com/spreadsheets/…"></div>
+    <div class="field"><label>Google Sheet link (optional)</label><input id="st-sheet" value="${esc(cfg.sheetUrl || '')}" placeholder="https://docs.google.com/spreadsheets/…"></div>
     <div class="info">
       Place lookup: <b>${db.places ? 'on' : 'off — add PLACES_KEY in Apps Script'}</b><br>
+      Routed map lines: <b>${ui.noRoutes ? 'off — enable Routes API (see SETUP)' : 'on when available'}</b><br>
       Waiting to sync: <b>${outbox.length}</b>
       ${cfg.sheetUrl ? `<div class="links"><a href="${esc(cfg.sheetUrl)}" target="_blank" rel="noopener">Open the Sheet</a></div>` : ''}
     </div>`}
@@ -760,18 +1586,18 @@ function openSettings() {
     ${cfg.demo ? '' : `<button class="btn danger" id="st-out" style="margin-top:12px">Disconnect this phone</button>`}
   `, sh => {
     const ex = $('#st-exit', sh);
-    if (ex) ex.onclick = () => { cfg = null; store.del('th_cfg'); db = { trips: [], items: [], plan: [], log: [], places: false }; outbox = []; saveLocal(); closeSheet(); location.hash = '#/'; render(); };
+    if (ex) ex.onclick = () => { cfg = null; store.del('th_cfg'); db = EMPTY_DB(); outbox = []; saveLocal(); closeSheet(); location.hash = '#/'; render(); };
     const sv = $('#st-save', sh);
     if (sv) sv.onclick = () => {
       cfg = { url: $('#st-url', sh).value.trim(), token: $('#st-token', sh).value.trim(), sheetUrl: $('#st-sheet', sh).value.trim() };
-      store.set('th_cfg', cfg); closeSheet(); pull(); toast('Saved');
+      store.set('th_cfg', cfg); closeSheet(); ui.noRoutes = false; pull(); toast('Saved');
     };
     const sy = $('#st-sync', sh);
-    if (sy) sy.onclick = () => { closeSheet(); pull().then(() => toast(syncState === 'ok' ? 'Up to date' : 'Still offline')); };
+    if (sy) sy.onclick = () => { closeSheet(); ui.noRoutes = false; pull().then(() => toast(syncState === 'ok' ? 'Up to date' : 'Still offline')); };
     const out = $('#st-out', sh);
     if (out) out.onclick = () => {
       if (outbox.length && !confirm(outbox.length + ' changes haven’t reached the Sheet yet. Disconnect anyway?')) return;
-      cfg = null; store.del('th_cfg'); outbox = []; db = { trips: [], items: [], plan: [], log: [], places: false }; saveLocal(); closeSheet(); render();
+      cfg = null; store.del('th_cfg'); outbox = []; db = EMPTY_DB(); saveLocal(); closeSheet(); render();
     };
   });
 }
@@ -799,7 +1625,7 @@ function bindSetup() {
     msg.textContent = 'Connecting…';
     cfg = { url, token };
     try {
-      db = await api('bootstrap');
+      db = Object.assign(EMPTY_DB(), await api('bootstrap'));
       store.set('th_cfg', cfg); saveLocal(); render();
       toast('Connected');
     } catch (e) {
@@ -814,27 +1640,43 @@ function bindSetup() {
  * Sample data (local only)
  * ============================================================ */
 function demoData() {
-  const d = n => { const x = new Date(); x.setDate(x.getDate() + n); return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0'); };
-  const hrs = (open, close) => JSON.stringify({ weekday: DOW_LONG.slice(1).concat(DOW_LONG[0]).map(w => `${w}: ${open} – ${close}`) });
+  const d = n => addDays(tzNow('Asia/Tokyo').day, n);
+  const every = (o, c) => JSON.stringify({ weekday: DOW_LONG.slice(1).concat(DOW_LONG[0]).map(w => `${w}: ${o} – ${c}`), periods: [0, 1, 2, 3, 4, 5, 6].map(x => ({ open: { day: x } })) });
+  const closedMon = JSON.stringify({ weekday: DOW_LONG.slice(1).concat(DOW_LONG[0]).map(w => w === 'Monday' ? 'Monday: Closed' : `${w}: 10:00 AM – 5:00 PM`), periods: [0, 2, 3, 4, 5, 6].map(x => ({ open: { day: x } })) });
+  const P = (id, o) => Object.assign({ id, trip_id: 'tr_demo1', kind: 'place', status: 'open', region: 'Tokyo', country: 'Japan' }, o);
   return {
-    places: true, plan: [], log: [],
+    places: true, plan: [],
     trips: [
-      { id: 'tr_demo1', name: 'Tokyo', destination: 'Tokyo, Japan', start: d(40), end: d(49), timezone: 'Asia/Tokyo', notes: '' },
+      { id: 'tr_demo1', name: 'Tokyo', destination: 'Tokyo, Japan', start: d(-2), end: d(5), timezone: 'Asia/Tokyo', notes: '' },
       { id: 'tr_demo2', name: 'Lisbon weekend', destination: 'Lisbon, Portugal', start: '', end: '', timezone: 'Europe/Lisbon', notes: '' },
     ],
     items: [
-      { id: 'd1', trip_id: 'tr_demo1', kind: 'fixed', category: 'Flight', title: 'ANA to Haneda', day: d(40), start_time: '11:25', confirmation: 'ABC123', status: 'open' },
-      { id: 'd2', trip_id: 'tr_demo1', kind: 'fixed', category: 'Stay', title: 'Hotel in Kuramae', city: 'Taito City', region: 'Tokyo', country: 'Japan', day: d(41), start_time: '15:00', status: 'open', address: 'Kuramae, Taito City, Tokyo' },
-      { id: 'd3', trip_id: 'tr_demo1', kind: 'place', category: 'Bar', title: 'Golden Gai', city: 'Shinjuku City', region: 'Tokyo', country: 'Japan', hours: hrs('7:00 PM', '2:00 AM'), maps_url: 'https://maps.google.com/?q=Golden+Gai', status: 'open' },
-      { id: 'd4', trip_id: 'tr_demo1', kind: 'place', category: 'Record store', title: 'Disk Union Shinjuku', city: 'Shinjuku City', region: 'Tokyo', country: 'Japan', hours: hrs('11:00 AM', '9:00 PM'), status: 'open' },
-      { id: 'd5', trip_id: 'tr_demo1', kind: 'place', category: 'Coffee shop', title: 'Kissa in Yanaka', city: 'Taito City', region: 'Tokyo', country: 'Japan', day: d(43), status: 'open' },
-      { id: 'd6', trip_id: 'tr_demo1', kind: 'idea', title: 'A snack bar night', notes: 'Somewhere small, near the hotel', status: 'open' },
-      { id: 'd7', trip_id: 'tr_demo1', kind: 'idea', title: 'Onsen on a rainy day', status: 'open' },
-      { id: 'd8', trip_id: '', kind: 'place', category: 'Museum', title: 'Nezu Museum', city: 'Minato City', region: 'Tokyo', country: 'Japan', status: 'open' },
-      { id: 'd9', trip_id: '', kind: 'place', category: 'Temple', title: 'Gotokuji', city: 'Setagaya City', region: 'Tokyo', country: 'Japan', status: 'open' },
-      { id: 'd10', trip_id: '', kind: 'place', category: 'Bakery', title: 'A bakery in Kyoto', city: 'Kyoto', region: 'Kyoto', country: 'Japan', status: 'open' },
-      { id: 'd11', trip_id: '', kind: 'place', category: 'Concert hall', title: 'Harpa', city: 'Reykjavík', country: 'Iceland', status: 'open' },
-      { id: 'd12', trip_id: '', kind: 'idea', title: 'Night train somewhere', status: 'open' },
+      P('f1', { kind: 'fixed', category: 'Flight', title: 'NH 11 · ORD → HND', day: d(-2), start_time: '11:25', end_day: d(-1), end_time: '15:05', confirmation: 'K7Q2XD', lat: 35.5494, lng: 139.7798 }),
+      P('f2', { kind: 'fixed', category: 'Stay', title: 'Hotel in Kuramae', city: 'Taito City', day: d(-1), start_time: '15:00', end_day: d(5), end_time: '11:00', address: 'Kuramae, Taito City, Tokyo', lat: 35.7037, lng: 139.7930 }),
+      P('f3', { kind: 'fixed', category: 'Tour', title: 'Nikko day tour', day: d(1), start_time: '07:30', end_time: '19:00', lat: 35.7111, lng: 139.7976, address: 'Pickup at Asakusa Station' }),
+      P('c1', { parent_id: 'f3', seq: '0', day: d(1), category: 'Shrine', title: 'Nikkō Tōshō-gū', city: 'Nikko', region: 'Tochigi', lat: 36.7580, lng: 139.5987 }),
+      P('c2', { parent_id: 'f3', seq: '1', day: d(1), category: 'Waterfall', title: 'Kegon Falls', city: 'Nikko', region: 'Tochigi', lat: 36.7383, lng: 139.5025 }),
+      P('c3', { parent_id: 'f3', seq: '2', day: d(1), category: 'Lake', title: 'Lake Chūzenji', city: 'Nikko', region: 'Tochigi', lat: 36.7340, lng: 139.4860 }),
+      P('f4', { kind: 'fixed', category: 'Tickets', title: 'Concert at Suntory Hall', day: d(3), start_time: '19:00', city: 'Minato City', lat: 35.6680, lng: 139.7408 }),
+      P('p1', { category: 'Temple', title: 'Sensō-ji', city: 'Taito City', day: d(0), seq: '0', status: 'done', hours: every('6:00 AM', '5:00 PM'), lat: 35.7148, lng: 139.7967 }),
+      P('p2', { category: 'Coffee shop', title: 'Kissa in Yanaka', city: 'Taito City', day: d(0), seq: '1', hours: every('8:00 AM', '6:00 PM'), lat: 35.7262, lng: 139.7695 }),
+      P('p3', { category: 'Shopping street', title: 'Yanaka Ginza', city: 'Taito City', day: d(0), seq: '2', lat: 35.7275, lng: 139.7660 }),
+      P('p4', { category: 'Bar', title: 'Golden Gai', city: 'Shinjuku City', day: d(2), seq: '0', hours: every('7:00 PM', '2:00 AM'), lat: 35.6938, lng: 139.7036 }),
+      P('p5', { category: 'Record store', title: 'Disk Union Shinjuku', city: 'Shinjuku City', day: d(2), seq: '1', hours: every('11:00 AM', '9:00 PM'), lat: 35.6920, lng: 139.7030 }),
+      P('p6', { category: 'Museum', title: 'Nezu Museum', city: 'Minato City', hours: closedMon, lat: 35.6624, lng: 139.7175 }),
+      P('p7', { category: 'Temple', title: 'Gōtoku-ji', city: 'Setagaya City', lat: 35.6489, lng: 139.6474 }),
+      P('i1', { kind: 'idea', title: 'A snack bar night', notes: 'Somewhere small, near the hotel' }),
+      P('i2', { kind: 'idea', title: 'Onsen on a rainy day' }),
+      { id: 's1', trip_id: '', kind: 'place', category: 'Bakery', title: 'A bakery in Kyoto', city: 'Kyoto', region: 'Kyoto', country: 'Japan', status: 'open' },
+      { id: 's2', trip_id: '', kind: 'place', category: 'Concert hall', title: 'Harpa', city: 'Reykjavík', country: 'Iceland', status: 'open' },
+      { id: 's3', trip_id: '', kind: 'idea', title: 'Night train somewhere', status: 'open' },
+    ],
+    log: [
+      { id: 'l1', trip_id: 'tr_demo1', day: d(-1), seq: '0', title: 'Haneda Airport', origin: 'found', time: '15:20', lat: 35.5494, lng: 139.7798 },
+      { id: 'l2', trip_id: 'tr_demo1', day: d(-1), seq: '1', item_id: 'f2', title: 'Hotel in Kuramae', origin: 'planned', mode: 'train', time: '17:05', lat: 35.7037, lng: 139.7930 },
+      { id: 'l3', trip_id: 'tr_demo1', day: d(-1), seq: '2', title: 'Ramen counter near Kuramae', origin: 'found', mode: 'walk', note: 'Shio ramen, 8 seats', would_return: 'yes', lat: 35.7045, lng: 139.7925 },
+      { id: 'l4', trip_id: 'tr_demo1', day: d(0), seq: '0', item_id: 'p1', title: 'Sensō-ji', origin: 'planned', mode: 'walk', time: '08:10', lat: 35.7148, lng: 139.7967 },
+      { id: 'l5', trip_id: 'tr_demo1', day: d(0), seq: '1', title: 'Kappabashi kitchen street', origin: 'found', mode: 'walk', note: 'Bought a knife', lat: 35.7130, lng: 139.7890 },
     ],
   };
 }
@@ -843,25 +1685,33 @@ function demoApi(action, p) {
   return new Promise(resolve => setTimeout(() => {
     if (action === 'add') {
       const text = p.text || '';
-      const it = db.items.find(i => i.id === p.id) || {};
+      const it = itemById(p.id) || {};
       let title = p.title || it.title;
       if (isMapsUrl(text)) {
         const m = text.match(/\/maps\/place\/([^\/@?]+)/);
-        title = p.title || (m ? decodeURIComponent(m[1].replace(/\+/g, ' ')) : (text.split('\n').find(l => !isUrl(l)) || 'Saved place (sample)'));
+        title = p.title || (m ? decodeURIComponent(m[1].replace(/\+/g, ' ')) : linkTitle(text));
       }
-      resolve({ ...it, title, _pending: false, category: it.category || (isMapsUrl(text) ? 'Place' : ''), maps_url: isMapsUrl(text) ? text.match(/https?:\/\/\S+/)[0] : '' });
-    } else if (action === 'updateItem') resolve(db.items.find(i => i.id === p.id));
+      const c = text.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+      resolve({ ...it, title, _pending: false, category: it.category || (isMapsUrl(text) ? 'Place' : ''), maps_url: isMapsUrl(text) ? text.match(/https?:\/\/\S+/)[0] : '', lat: c ? c[1] : it.lat, lng: c ? c[2] : it.lng });
+    } else if (action === 'addLog') {
+      const l = db.log.find(x => x.id === p.id) || {};
+      const item = p.item_id && itemById(p.item_id);
+      resolve({ ...l, _pending: false, origin: item ? 'planned' : 'found', title: l.title || (p.text && isMapsUrl(p.text) ? 'Somewhere (sample)' : p.text) });
+    } else if (action === 'updateItem') resolve(itemById(p.id));
+    else if (action === 'updateLog') resolve(db.log.find(x => x.id === p.id));
     else if (action === 'addTrip') resolve(p.trip);
-    else if (action === 'updateTrip') resolve(db.trips.find(t => t.id === p.id));
+    else if (action === 'updateTrip') resolve(tripById(p.id));
     else if (action === 'attach') resolve(db.items.filter(i => p.ids.includes(i.id)));
+    else if (action === 'routes') resolve(p.legs.map(() => null));
     else resolve(null);
-  }, 300));
+  }, 250));
 }
 
 /* ---------- boot ---------- */
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
+lastRoute = (r => r.name + (r.id || ''))(route());
 render();
 if (cfg && !cfg.demo) pull();
 else if (cfg && cfg.demo) flush();

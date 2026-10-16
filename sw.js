@@ -1,6 +1,6 @@
 // Travel Hub service worker — lets the app open with no signal.
-// Pages: network first, fall back to the saved copy. Icons/fonts: saved copy first.
-const CACHE = 'travelhub-v1';
+// Pages: network first, fall back to the saved copy. Icons, fonts, map library: saved copy first.
+const CACHE = 'travelhub-v2';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -33,8 +33,8 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // Icons, manifest, Google Fonts: cache first.
-  if (url.origin === location.origin || url.hostname.includes('fonts.g')) {
+  // Icons, manifest, Google Fonts, the map library: cache first.
+  if (url.origin === location.origin || url.hostname.includes('fonts.g') || url.hostname === 'cdnjs.cloudflare.com') {
     e.respondWith(
       caches.match(req).then(hit => hit || fetch(req).then(res => {
         const copy = res.clone();

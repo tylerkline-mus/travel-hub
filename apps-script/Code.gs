@@ -15,11 +15,17 @@ const SHEETS = {
   Trips: ['id', 'name', 'destination', 'start', 'end', 'timezone', 'notes', 'created', 'updated'],
   Items: ['id', 'trip_id', 'kind', 'category', 'title', 'city', 'region', 'country', 'address',
           'lat', 'lng', 'place_id', 'maps_url', 'hours', 'website', 'day', 'start_time', 'end_time',
-          'confirmation', 'status', 'source', 'notes', 'created', 'updated'],
+          'confirmation', 'status', 'source', 'notes', 'created', 'updated',
+          'end_day', 'parent_id', 'seq'],
   Plan:  ['trip_id', 'day', 'item_id', 'order', 'note'],
   Log:   ['id', 'trip_id', 'item_id', 'place_id', 'title', 'lat', 'lng', 'logged_at', 'timezone',
-          'origin', 'note', 'would_return', 'cost', 'currency', 'photo_url', 'created'],
+          'origin', 'note', 'would_return', 'cost', 'currency', 'photo_url', 'created',
+          'parent_id', 'day', 'seq', 'time', 'mode', 'address', 'city', 'maps_url', 'updated'],
+  Routes: ['key', 'polyline', 'duration', 'distance', 'created'],
 };
+
+// How each travel mode is asked of the Google Routes API
+const ROUTE_MODES = { walk: 'WALK', transit: 'TRANSIT', train: 'TRANSIT', car: 'DRIVE', tour: 'DRIVE', bike: 'BICYCLE' };
 
 const PLACE_FIELDS = ['id', 'displayName', 'formattedAddress', 'location', 'regularOpeningHours',
   'websiteUri', 'googleMapsUri', 'primaryTypeDisplayName', 'addressComponents', 'utcOffsetMinutes'];
@@ -146,6 +152,9 @@ const ACTIONS = {
         hours: resolved.hours || '',
         website: resolved.website || '',
         day: p.day || '', start_time: p.start_time || '', end_time: p.end_time || '',
+        end_day: p.end_day || '',
+        parent_id: p.parent_id || '',
+        seq: p.seq != null ? String(p.seq) : '',
         confirmation: p.confirmation || '',
         status: 'open',
         source: text,
@@ -153,16 +162,134 @@ const ACTIONS = {
         created: now, updated: now,
       };
 
+      // A stop inside a tour takes the tour's day
+      if (item.parent_id && !item.day) {
+        const parent = findRow('Items', item.parent_id);
+        if (parent) item.day = parent.obj.day || '';
+      }
+
       // Same place already saved to this trip? Return it instead of a duplicate.
-      if (item.place_id) {
+      // (Tour stops are allowed to repeat places saved elsewhere.)
+      if (item.place_id && !item.parent_id) {
         const dupe = readTable('Items').filter(function (i) {
-          return i.place_id === item.place_id && i.trip_id === tripId;
+          return i.place_id === item.place_id && i.trip_id === tripId && !i.parent_id;
         })[0];
         if (dupe) { dupe._duplicate = true; return dupe; }
       }
       appendObj('Items', item);
       return item;
     });
+  },
+
+  /* ---------------- Travelogue ---------------- */
+
+  /** Log a stop. Links to a planned item if one matches (by item, Google place, or within ~75 m). */
+  addLog: function (p) {
+    return withLock(function () {
+      const id = p.id ? String(p.id) : newId('lg');
+      const existing = findRow('Log', id);
+      if (existing) return existing.obj;
+
+      const tripId = String(p.trip || '');
+      const now = new Date().toISOString();
+      let item = null;
+      if (p.item_id) { const f = findRow('Items', p.item_id); item = f ? f.obj : null; }
+
+      let r = {};
+      if (item) {
+        r = { title: item.title, lat: item.lat, lng: item.lng, place_id: item.place_id,
+              address: item.address, maps_url: item.maps_url, city: item.city };
+      } else if (p.text) {
+        r = resolveText(String(p.text));
+      }
+      // A typed name logged with the phone's location keeps that location
+      if ((r.lat === undefined || r.lat === '') && p.lat !== undefined && p.lat !== '') { r.lat = +p.lat; r.lng = +p.lng; }
+
+      let origin = item ? 'planned' : 'found';
+      if (!item) {
+        const items = readTable('Items').filter(function (i) { return i.trip_id === tripId; });
+        let match = r.place_id ? items.filter(function (i) { return i.place_id === r.place_id; })[0] : null;
+        if (!match && r.lat !== undefined && r.lat !== '') {
+          let best = null, bestD = 75;
+          items.forEach(function (i) {
+            if (i.lat === '' || i.lng === '') return;
+            const d = metersBetween(+r.lat, +r.lng, +i.lat, +i.lng);
+            if (d < bestD) { best = i; bestD = d; }
+          });
+          match = best;
+        }
+        if (match) { item = match; origin = 'planned'; }
+      }
+
+      const log = {
+        id: id, trip_id: tripId, item_id: item ? item.id : '',
+        parent_id: p.parent_id || '', day: p.day || '', seq: p.seq != null ? String(p.seq) : '',
+        time: p.time || '', mode: p.mode || '',
+        title: p.title || r.title || (item && item.title) || p.text || 'Somewhere',
+        place_id: r.place_id || '', lat: r.lat != null ? r.lat : '', lng: r.lng != null ? r.lng : '',
+        address: r.address || '', city: r.city || '', maps_url: r.maps_url || '',
+        origin: origin, note: p.note || '', would_return: p.would_return || '',
+        logged_at: now, timezone: p.timezone || '', created: now, updated: now,
+      };
+      appendObj('Log', log);
+      if (item && item.status !== 'done') updateRow('Items', item.id, { status: 'done', updated: now });
+      return log;
+    });
+  },
+
+  updateLog: function (p) {
+    return withLock(function () {
+      const patch = parsePatch(p.patch);
+      patch.updated = new Date().toISOString();
+      return updateRow('Log', p.id, patch);
+    });
+  },
+
+  deleteLog: function (p) {
+    return withLock(function () {
+      const f = findRow('Log', p.id);
+      if (!f) return { id: p.id };
+      const itemId = f.obj.item_id;
+      deleteRow('Log', p.id);
+      // If nothing else logs that planned item, mark it open again
+      if (itemId && !readTable('Log').some(function (l) { return l.item_id === itemId; })) {
+        try { updateRow('Items', itemId, { status: 'open', updated: new Date().toISOString() }); } catch (e) {}
+      }
+      return { id: p.id };
+    });
+  },
+
+  /** Save a new order: ids in order → seq 0, 1, 2… */
+  reorder: function (p) {
+    return withLock(function () {
+      const sheetName = p.sheet === 'Log' ? 'Log' : 'Items';
+      const ids = Array.isArray(p.ids) ? p.ids : String(p.ids || '').split(',');
+      ids.filter(String).forEach(function (id, i) {
+        try { updateRow(sheetName, id, { seq: String(i) }); } catch (e) {}
+      });
+      return { ok: true };
+    });
+  },
+
+  /** Routed lines between points, cached in the Routes tab so each leg is only paid for once. */
+  routes: function (p) {
+    const legs = Array.isArray(p.legs) ? p.legs : parsePatch(p.legs);
+    const key = PropertiesService.getScriptProperties().getProperty('PLACES_KEY');
+    const cache = {};
+    readTable('Routes').forEach(function (r) { cache[r.key] = r; });
+    const fresh = [];
+    const out = (legs || []).map(function (leg) {
+      const k = routeKey(leg);
+      if (cache[k]) return { polyline: cache[k].polyline, duration: cache[k].duration, distance: cache[k].distance };
+      if (!key) return null;
+      try {
+        const r = computeRoute(leg, key);
+        if (r) { cache[k] = r; fresh.push({ key: k, polyline: r.polyline, duration: r.duration, distance: r.distance, created: new Date().toISOString() }); }
+        return r;
+      } catch (e) { return { error: String(e.message || e) }; }
+    });
+    if (fresh.length) withLock(function () { fresh.forEach(function (r) { appendObj('Routes', r); }); });
+    return out;
   },
 
   /** Preview a link without saving (used by the capture sheet). */
@@ -177,7 +304,14 @@ const ACTIONS = {
   },
 
   deleteItem: function (p) {
-    return withLock(function () { deleteRow('Items', p.id); return { id: p.id }; });
+    return withLock(function () {
+      // Stops inside a deleted tour stay saved, just no longer nested
+      const now = new Date().toISOString();
+      readTable('Items').filter(function (i) { return i.parent_id === p.id; })
+        .forEach(function (i) { updateRow('Items', i.id, { parent_id: '', updated: now }); });
+      deleteRow('Items', p.id);
+      return { id: p.id };
+    });
   },
 
   /** Move many items at once (e.g. Someday → a new trip). */
@@ -387,6 +521,52 @@ function fromPlace(pl, originalUrl) {
     hours: oh ? JSON.stringify({ weekday: oh.weekdayDescriptions || [], periods: oh.periods || [],
                                  utcOffset: pl.utcOffsetMinutes }) : '',
   };
+}
+
+/* ---------------------------------------------------------------
+ * Routing + distance
+ * ------------------------------------------------------------- */
+function routeKey(leg) {
+  const f = function (n) { return Number(n).toFixed(5); };
+  return f(leg.from[0]) + ',' + f(leg.from[1]) + '>' + f(leg.to[0]) + ',' + f(leg.to[1]) + '|' + (leg.mode || 'walk');
+}
+
+function computeRoute(leg, key) {
+  const body = {
+    origin: { location: { latLng: { latitude: +leg.from[0], longitude: +leg.from[1] } } },
+    destination: { location: { latLng: { latitude: +leg.to[0], longitude: +leg.to[1] } } },
+    travelMode: ROUTE_MODES[leg.mode] || 'WALK',
+  };
+  const res = UrlFetchApp.fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(body),
+    headers: {
+      'X-Goog-Api-Key': key,
+      'X-Goog-FieldMask': 'routes.polyline.encodedPolyline,routes.duration,routes.distanceMeters',
+    },
+    muteHttpExceptions: true,
+  });
+  const j = JSON.parse(res.getContentText() || '{}');
+  if (j.error) throw new Error('Routes: ' + j.error.message);
+  const r = (j.routes || [])[0];
+  if (!r || !r.polyline) return null;
+  return { polyline: r.polyline.encodedPolyline, duration: r.duration || '', distance: String(r.distanceMeters || '') };
+}
+
+/** Run from the editor to check the Routes API is enabled on your key. */
+function testRoutes() {
+  const key = PropertiesService.getScriptProperties().getProperty('PLACES_KEY');
+  const r = computeRoute({ from: [64.1503, -21.9325], to: [64.1417, -21.9266], mode: 'walk' }, key);
+  Logger.log(r ? 'Routes OK — ' + r.distance + ' m, ' + r.duration : 'No route returned');
+}
+
+function metersBetween(lat1, lng1, lat2, lng2) {
+  const R = 6371000, toRad = function (d) { return d * Math.PI / 180; };
+  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 /* ---------------------------------------------------------------

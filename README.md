@@ -21,6 +21,6 @@ No data, keys or passphrases live in this repo. The app asks for the web app URL
 ## Roadmap
 
 1. ✅ Trips, capture (Maps links, ideas, fixed bookings), Someday bucket, offline queue
-2. Map view, drag-to-day planning, hours-aware routing
-3. Travelogue mode: "I'm here" logging, end-of-day review, photos
-4. Journal view and suggestion workflows
+2. ✅ Start/end dates on bookings, tours with nested stops, day-by-day plan with ordering and opening-hours hints, map with routes
+3. ✅ Travelogue: ordered "I'm here" logging, planned vs. found, travel mode per leg, end-of-day review
+4. Photos, journal view, suggestion workflows
