@@ -188,6 +188,10 @@ main { padding: 6px 16px 24px; max-width: 720px; margin: 0 auto; }
 .leaflet-popup-content b { font-size: 14px; }
 .pop-btn { display: inline-block; margin-top: 6px; border: 0; background: var(--accent); color: #fff; border-radius: 8px; padding: 5px 10px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .leaflet-container { font-family: var(--sans); }
+.leaflet-tile-pane { filter: saturate(.75) sepia(.12); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.88) saturate(.5); }
+}
 
 /* ---------- bottom nav ---------- */
 nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 600; display: flex; justify-content: space-around; align-items: center;
@@ -876,9 +880,9 @@ function initMap(tripId) {
   }
   sizeMap();
   map = L.map(el, { zoomControl: false, attributionControl: true });
-  const dark = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
-  L.tileLayer(`https://{s}.basemaps.cartocdn.com/${dark ? 'dark_all' : 'rastertiles/voyager'}/{z}/{x}/{y}{r}.png`, {
-    maxZoom: 19, subdomains: 'abcd', attribution: '&copy; OpenStreetMap &copy; CARTO',
+  // OpenStreetMap tiles: free, no key. Dark mode tints them with a CSS filter.
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
   const layer = L.layerGroup().addTo(map);
   const pts = drawMap(t, layer);
