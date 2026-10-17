@@ -2724,7 +2724,18 @@ function openHere(tripId, d) {
       } else where.textContent = 'Sorted by distance from you.';
       showPin();
       if (navigator.onLine && (db.places || (cfg && cfg.demo))) {
-        api('nearby', { lat: pos.lat, lng: pos.lng }).then(list => { if (document.body.contains(sh)) showAround(list); }).catch(() => {});
+        // Start tight (you're probably inside the place), widen until something turns up.
+        (async () => {
+          let list = [];
+          for (const radius of [80, 300, 1500]) {
+            try { list = await api('nearby', { lat: pos.lat, lng: pos.lng, radius }); }
+            catch (e) { if (document.body.contains(sh)) where.textContent = 'Couldn’t look up places around you: ' + (e.message || e); return; }
+            if (!document.body.contains(sh)) return;
+            if ((list || []).length >= 3) break;
+          }
+          if (list && list.length) showAround(list);
+          else where.textContent = 'Sorted by distance from you. Google has nothing listed close by.';
+        })();
       }
     }, () => { where.textContent = 'Location is off, so the list isn’t sorted by distance.'; }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
     $$('[data-pick]', sh).forEach(el => el.addEventListener('click', () => { near = null; pin = null; $$('[data-near], [data-pin]', sh).forEach(x => x.classList.remove('on')); }));

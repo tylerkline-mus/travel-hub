@@ -356,7 +356,7 @@ const ACTIONS = {
     const key = PropertiesService.getScriptProperties().getProperty('PLACES_KEY');
     const lat = num(p.lat), lng = num(p.lng);
     if (!key || lat === '' || lng === '') return [];
-    return placesNearby(lat, lng, Math.min(num(p.radius) || 80, 300), key);
+    return placesNearby(lat, lng, Math.min(num(p.radius) || 80, 1500), key);
   },
 
   /** For the "I'm here" Shortcut: log to today's trip, in one request. Either a place shared from Google Maps
