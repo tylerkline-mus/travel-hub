@@ -13,6 +13,8 @@ Read this before changing anything. Keep it current when the structure changes.
 
 **Script changes need Tyler to redeploy**: copy raw `apps-script/Code.gs` → paste in Apps Script → run `setup` (adds missing columns/tabs non-destructively) → Deploy → Manage deployments → ✏️ → New version. Always tell him when a change needs this. App-only changes go live on push (GitHub Pages, ~1–2 min).
 
+**Shortcuts gotcha:** Shortcuts truncates a URL at a second `https://` embedded in its query, so shortcuts send shared links as `b64=` (Base64, line breaks none); `handle()` unpacks it into `p.text`. `add` accepts `trip=auto` (current-or-next trip) and refuses empty saves.
+
 ## Sheet schema (columns are read by header name; new columns are appended on the right by `setup`)
 
 - **Trips**: id, name, destination, start, end, timezone (IANA), notes, created, updated

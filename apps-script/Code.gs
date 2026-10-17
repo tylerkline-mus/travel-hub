@@ -95,12 +95,39 @@ function handle(p) {
     if (!token || String(p.token) !== token) return json({ ok: false, error: 'Wrong passphrase' });
     const fn = ACTIONS[p.action];
     if (!fn) return json({ ok: false, error: 'Unknown action: ' + p.action });
+    // Shortcuts cut a link off at "https://" when it sits inside another address, so they send it
+    // Base64-encoded as b64 instead. Unpack it into text.
+    if (p.b64 && !p.text) p.text = fromBase64(p.b64);
     const data = fn(p);
-    if (p.format === 'text') return ContentService.createTextOutput(String(data));
+    if (p.format === 'text') {
+      if (data && typeof data === 'object') {
+        const where = data.trip_id ? ((readTable('Trips').filter(function (t) { return t.id === data.trip_id; })[0] || {}).name || 'your trip') : 'Someday';
+        return ContentService.createTextOutput((data._duplicate ? 'Already saved: ' : 'Saved ') + (data.title || 'it') + ' to ' + where);
+      }
+      return ContentService.createTextOutput(String(data));
+    }
     return json({ ok: true, data: data });
   } catch (err) {
     return json({ ok: false, error: String((err && err.message) || err) });
   }
+}
+
+function fromBase64(b) {
+  // '+' turns into a space in web addresses; URL-safe Base64 uses - and _
+  const clean = String(b).trim().replace(/ /g, '+').replace(/-/g, '+').replace(/_/g, '/');
+  try { return Utilities.newBlob(Utilities.base64Decode(clean)).getDataAsString(); } catch (e) { return ''; }
+}
+
+/** The trip happening now (a day either side counts), otherwise the next one coming up. '' if none. */
+function currentOrNextTripId() {
+  const today = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd');
+  const shift = function (d, n) { const x = new Date(d + 'T12:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return Utilities.formatDate(x, 'UTC', 'yyyy-MM-dd'); };
+  const trips = readTable('Trips').filter(function (t) { return t.start; })
+    .sort(function (a, b) { return a.start.localeCompare(b.start); });
+  const now = trips.filter(function (t) { return shift(t.start, -1) <= today && today <= shift(t.end || t.start, 1); })[0];
+  if (now) return now.id;
+  const next = trips.filter(function (t) { return t.start > today; })[0];
+  return next ? next.id : '';
 }
 
 function json(o) {
@@ -134,12 +161,14 @@ const ACTIONS = {
   /** Add an item from pasted text / a Maps link. Works from GET (Shortcut) or POST (app). */
   add: function (p) {
     return withLock(function () {
-      const tripId = (p.trip === 'someday' || !p.trip) ? '' : String(p.trip);
+      const tripId = p.trip === 'auto' ? currentOrNextTripId() : (p.trip === 'someday' || !p.trip) ? '' : String(p.trip);
       const id = p.id ? String(p.id) : newId('it');
       const existing = findRow('Items', id);
       if (existing) return existing.obj; // idempotent for the offline queue
 
       const text = String(p.text || '').trim();
+      // Nothing to save (e.g. a shortcut whose link didn't come through): say so instead of adding "Untitled"
+      if (!text && !p.title && !p.from_code && !p.to_code) throw new Error('Nothing came through to save — no link or text');
       const resolved = text ? resolveText(text) : {};
       const now = new Date().toISOString();
       const item = {

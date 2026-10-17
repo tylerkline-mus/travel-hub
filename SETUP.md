@@ -69,25 +69,20 @@ The app files are already in this repo.
 
 ## 6. The "Send to Trip" shortcut (save straight from Google Maps)
 
-This puts a **Send to Trip** option in the Share menu of Google Maps, Safari, Instagram, anywhere.
+This puts a **Send to Trip** option in the Share menu of Google Maps, Safari, Instagram, anywhere. Places go to the trip that's happening now, otherwise your next upcoming one. Move anything to another trip or Someday in the app.
+
+> Why Base64? Shortcuts cuts a link off at the second `https://` when it sits inside another web address, so the link is packed into a code with no `https://` in it. The script unpacks it.
 
 In the **Shortcuts** app, tap **+** and name it **Send to Trip**. Then:
 
-1. Tap the **ⓘ** (details) button and turn on **Show in Share Sheet**. Set it to accept **URLs** and **Text**.
-2. Add **Text** action and paste your Web app URL followed by `?action=tripMenu&token=YOURPASSPHRASE`. For example:
-   `https://script.google.com/macros/s/AKfy…/exec?action=tripMenu&token=abc123`
-3. Add **Get Contents of URL**, with the Text from step 2 as input.
-4. Add **Get Dictionary Value**: *Get Value for* `data` in **Contents of URL**. This is a list of your upcoming trips plus **Someday**.
-5. Add **Choose from List**, with the input being that **Dictionary Value**. Shortcuts shows the trip names.
-6. Add **Get Dictionary Value**: *Get Value for* **Chosen Item** in the **Dictionary Value** from step 4. This is the trip's ID.
-7. Add **URL Encode** with input **Shortcut Input**.
-8. Add **Text**:
-   `https://script.google.com/macros/s/AKfy…/exec?action=add&token=YOURPASSPHRASE&trip=` then insert the **Dictionary Value** variable, then `&text=`, then insert the **URL Encoded Text** variable.
-9. Add **Get Contents of URL** with that Text.
-10. Add **Get Dictionary Value**: *Get Value for* `data` in **Contents of URL**, then another **Get Dictionary Value**: *Get Value for* `title` in that result.
-11. Add **Show Notification**: `Saved: ` + the title.
+1. Add **Get Text from Input**. Its input should be **Shortcut Input**.
+2. Tap **ⓘ** (or the shortcut name → **Details**) and turn on **Show in Share Sheet**. Leave all input types on.
+3. Add **Base64 Encode**. Its input should be **Text** (from step 1). Tap the **›** arrow on it and set **Line Breaks** to **None**.
+4. Add **Text** and type your Web app URL followed by `?action=add&format=text&trip=auto&token=YOURPASSPHRASE&b64=` — then insert **Base64 Encoded** right after `b64=`.
+5. Add **Get Contents of URL** with the **Text** from step 4.
+6. Add **Show Notification** with **Contents of URL**. It says e.g. *Saved Barn8 to Iceland, Autumn 2026.*
 
-Try it: in Google Maps, open a place → **Share** → **Send to Trip** → pick a trip. It appears in the app within a few seconds of the next refresh, with name, address and hours.
+Try it: in Google Maps, open a place → **Share** → **Send to Trip**. It appears in the app after the next refresh, with name, address and hours. If nothing came through, the notification says so and nothing is added.
 
 ---
 
@@ -102,8 +97,8 @@ In the **Shortcuts** app, tap **+** and name it **I'm here**. Then:
 1. Tap **ⓘ** and turn on **Show in Share Sheet**. Set it to accept **URLs** and **Text**. Under *If there's no input*, choose **Continue**.
 2. Add **If**: *Shortcut Input* **has any value**.
 3. Inside the **If** branch:
-   - **URL Encode** with **Shortcut Input**.
-   - **Text**: your Web app URL followed by `?action=here&format=text&token=YOURPASSPHRASE&text=` then insert **URL Encoded Text**.
+   - **Base64 Encode** with **Shortcut Input** (tap **›**, set **Line Breaks** to **None**).
+   - **Text**: your Web app URL followed by `?action=here&format=text&token=YOURPASSPHRASE&b64=` then insert **Base64 Encoded**. (Not `&text=` with a URL-encoded link — Shortcuts cuts that off at `https://`.)
 4. Inside the **Otherwise** branch:
    - **Get Current Location**.
    - **Get Details of Locations**: **Latitude**.
