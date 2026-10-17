@@ -46,6 +46,14 @@ Sample mode runs fully offline. Test with Playwright at 390×844 @2x: route `cdn
 - After each sync the app looks up new suggestions once (`lookUpSuggestions` → `refreshItem`, remembered in `th_sug_looked`), so Claude only needs to write a Maps search URL. No script change was needed.
 - The "check my asks" procedure lives in Tyler's `travel-hub-asks` skill (holds the Sheet ID — never put it here).
 
+## Recap poster (built Oct 2026)
+
+- Route `#/trip/:id/recap` (button at the bottom of the Log tab). `recapData` → `drawPoster` on a canvas; Save image shares/downloads a PNG (1080×1350 post, 1080×1920 story).
+- Draws from the Log once anything is logged, otherwise from the plan (planned stops, tours; musts in color).
+- Design (deliberately not the app's cream/terracotta): ECM-sleeve restraint, routes as a pen line (real paths from the Routes cache, else a gentle bow), stays as squares, found-along-the-way as open rings, loved places in the accent with hand labels in italic. Looks: Fog / Night / Riso (accent overprinted with multiply, slightly off register). One typeface: Familjen Grotesk, loaded only on this screen. Paper grain is a seeded noise pass.
+- Data: a "score" strip (one stroke per day, length = stops, colored top = loved), coordinates and scale bar, a locator inset in the emptiest corner when zoomed to the densest area (`recapCluster`), and first-person liner notes (`recapNotes`) — no stat tiles.
+- Per-trip choices (size, look, zoom, own line) live in localStorage `th_poster`.
+
 ## Original design notes for Ask Claude
 
 1. Ideas get an **Ask Claude** toggle → `status: 'ask'`. Personal notes stay `open`.
@@ -58,4 +66,4 @@ Sample mode runs fully offline. Test with Playwright at 390×844 @2x: route `cdn
 4. Package the read/write procedure as a skill (propose via the skill proposal card) holding the Sheet ID (given in chat, not this repo), column map, lean-read rule and the rules above.
 5. First real run: Tyler's tattoo idea (walk-in, highly rated, Reykjavík). Candidates found so far near the Exeter: Ritual Tattoo (Skólavörðustígur 6b), Irezumi Ink (Laugavegur 69), Íslenska Húðflúrstofan (Ingólfsstræti 3), Reykjavik Ink (Laugavegur 59) — reviews not yet checked.
 
-Later: trip recap + poster export (4:5 / 9:16 line-art of routes, stats, Maybe-that-became-Loved), photos per log entry (Drive via script), optional scheduled ask-checking.
+Later: photos per log entry (Drive via script), optional scheduled ask-checking.

@@ -273,6 +273,15 @@ nav.tabs .add svg { width: 26px; height: 26px; }
 .stoprow { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .stoprow .body { flex: 1; min-width: 0; }
 
+/* ---------- Recap poster ---------- */
+.recap .poster-frame { margin: 10px auto 16px; max-width: 420px; }
+.recap .poster-frame.story { max-width: 300px; }
+.recap canvas { display: block; width: 100%; height: auto; border-radius: 3px; box-shadow: 0 1px 2px rgba(0,0,0,.12), 0 10px 30px rgba(40,30,20,.16); }
+.recap .field { margin-bottom: 6px; }
+.recap .seg { margin-bottom: 16px; }
+.recap-hint { margin: -4px 2px 18px; text-align: center; line-height: 1.4; }
+.recap #rc-save { margin-top: 6px; margin-bottom: 20px; }
+
 /* ---------- Ask Claude ---------- */
 .badge.ask { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
 .badge.answered { background: color-mix(in srgb, var(--ink) 7%, transparent); color: var(--muted); }
@@ -694,6 +703,7 @@ function render() {
   app.innerHTML = html;
   bindCommon();
   if (r.name === 'trip' && r.sub === 'map') initMap(r.id);
+  if (r.name === 'trip' && r.sub === 'recap') initRecap(r.id);
   if (r.name === 'trip' && r.sub === 'days' && !render._scrolled) {
     const td = $('.day.today'); if (td) { render._scrolled = true; setTimeout(() => td.scrollIntoView({ block: 'start', behavior: 'instant' }), 0); }
   }
@@ -742,6 +752,7 @@ function tripView(id, sub) {
   const tabs = [['days', 'Days'], ['map', 'Map'], ['saved', 'Saved'], ['log', 'Log']];
   const head = `<header class="top"><button class="iconbtn" data-go="#/" aria-label="Back">${I.back}</button><h1>${esc(t.name)}</h1>${syncBadge()}<button class="iconbtn" data-act="editTrip" data-id="${esc(t.id)}" aria-label="Edit trip">${I.edit}</button></header>`;
   const tabbar = `<div class="subtabs">${tabs.map(([k, l]) => `<button class="${sub === k ? 'on' : ''}" data-go="${base}/${k}">${l}</button>`).join('')}</div>`;
+  if (sub === 'recap') return recapView(t);
   if (sub === 'map') {
     return head + `<div style="padding:0 16px">${tabbar}</div><div id="mapwrap">${mapChips(t)}<div id="map"></div>${mapLayerToggle(t)}<div class="map-note" id="map-note" hidden></div></div>`;
   }
@@ -1037,7 +1048,437 @@ function logContent(t) {
     <div style="display:flex;gap:6px;justify-content:center;margin-top:10px">
       ${tops.length > 1 ? `<button class="linkbtn" data-reorder="${key}">${reorder ? 'Done reordering' : 'Reorder'}</button>` : ''}
       ${all.length ? `<button class="linkbtn" data-maplived="${d}">See on map</button>` : ''}
-    </div>`;
+    </div>
+    <button class="btn ghost" data-go="#/trip/${encodeURIComponent(t.id)}/recap" style="margin-top:22px">${db.log.some(l => l.trip_id === t.id) ? 'Make a poster of the trip' : 'Preview the trip poster'}</button>`;
+}
+
+/* ============================================================
+ * Recap poster — drawn on a canvas, exported as a PNG
+ * ============================================================ */
+const POSTER_LOOKS = {
+  fog:   { name: 'Fog',   paper: '#D5D8D2', ink: '#1C2321', accent: '#2A44C9', faint: 'rgba(28,35,33,.24)', grain: [28, 35, 33] },
+  night: { name: 'Night', paper: '#13243A', ink: '#E9E4D6', accent: '#F2C84B', faint: 'rgba(233,228,214,.22)', grain: [233, 228, 214] },
+  riso:  { name: 'Riso',  paper: '#FBFBF8', ink: '#0078BF', accent: '#FF48B0', faint: 'rgba(0,120,191,.26)', grain: [0, 70, 120], overprint: true },
+};
+const POSTER_SIZES = { post: [1080, 1350], story: [1080, 1920] };
+const PF = '"Familjen Grotesk", "Helvetica Neue", Arial, sans-serif';
+const MONTH_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+function posterPrefs(tripId) { return Object.assign({ size: 'post', look: 'fog', zoom: 'close', line: '' }, store.get('th_poster', {})[tripId] || {}); }
+function savePosterPrefs(tripId, p) { const all = store.get('th_poster', {}); all[tripId] = p; store.set('th_poster', all); }
+
+let posterFonts = null;
+function loadPosterFonts() {
+  if (posterFonts) return posterFonts;
+  if (!document.getElementById('poster-font')) {
+    const l = document.createElement('link'); l.id = 'poster-font'; l.rel = 'stylesheet';
+    l.href = 'https://fonts.googleapis.com/css2?family=Familjen+Grotesk:ital,wght@0,400;0,500;0,600;1,400&display=swap';
+    document.head.append(l);
+  }
+  const want = ['400 20px "Familjen Grotesk"', '500 20px "Familjen Grotesk"', '600 20px "Familjen Grotesk"', 'italic 400 20px "Familjen Grotesk"'];
+  posterFonts = Promise.race([
+    new Promise(r => setTimeout(r, 2500)),
+    new Promise(r => setTimeout(() => Promise.all(want.map(f => document.fonts.load(f).catch(() => {}))).then(r), 50)),
+  ]);
+  return posterFonts;
+}
+
+/** Everything the poster draws: per-day tracks, stops, stays, places saved but not visited, and the numbers. */
+function recapData(t) {
+  const logs = db.log.filter(l => l.trip_id === t.id);
+  const lived = logs.some(hasCoords);
+  const days = lived ? logDays(t) : tripDays(t);
+  const pt = (o, extra) => Object.assign({ lat: +o.lat, lng: +o.lng, title: o.title || '' }, extra);
+  const tracks = [], stops = [], homes = new Map(), perDay = [];
+  days.forEach(d => {
+    const home = stayForMorning(t.id, d);
+    if (home && hasCoords(home)) homes.set(home.id, pt(home));
+    let seq = [];
+    if (lived) {
+      seq = flatLogs(t.id, d).filter(hasCoords).map(l => {
+        const it = l.item_id ? itemById(l.item_id) : null;
+        return pt(l, { mode: l.parent_id ? 'tour' : l.mode, tour: !!l.parent_id, mark: l.rating === 'loved', found: l.origin === 'found', wasMaybe: !!(it && it.priority === 'maybe') });
+      });
+    } else {
+      fixedEvents(t.id, d).forEach(e => {
+        if (!e.start || isStay(e.i) || isFlight(e.i)) return;
+        if (hasCoords(e.i)) seq.push(pt(e.i, { mode: '', mark: false }));
+        if (isTour(e.i)) childrenOf(e.i.id).filter(hasCoords).forEach(c => seq.push(pt(c, { mode: 'tour', tour: true })));
+      });
+      plannedStops(t.id, d).filter(hasCoords).forEach(s => seq.push(pt(s, { mode: '', mark: s.priority === 'must' })));
+    }
+    seq.forEach(s => { s.day = d; stops.push(s); });
+    const path = (home && hasCoords(home) && seq.length ? [pt(home, { home: true })] : []).concat(seq);
+    if (path.length > 1) tracks.push({ day: d, pts: path });
+    perDay.push({ day: d, n: seq.length, marks: seq.filter(s => s.mark).length });
+  });
+  // Places saved but not visited (lived) / saved without a day (plan): faint dots
+  const unvisited = itemsFor(t.id).filter(i => hasCoords(i) && i.kind !== 'fixed' && !isSuggestion(i) && !i.parent_id &&
+    (lived ? i.status !== 'done' && !logs.some(l => l.item_id === i.id) : !i.day)).map(i => pt(i));
+
+  // Leg lengths: real path when the Routes cache has it, else straight line
+  let walked = 0, moved = 0;
+  tracks.forEach(tr => tr.pts.forEach((b, k) => {
+    if (!k) return;
+    const a = tr.pts[k - 1];
+    const mode = b.mode || guessMode(a, b);
+    const pl = routeCache[routeKey({ from: [a.lat, a.lng], to: [b.lat, b.lng], mode })];
+    let m = 0;
+    if (pl) { const p = decodePolyline(pl); for (let j = 1; j < p.length; j++) m += meters({ lat: p[j - 1][0], lng: p[j - 1][1] }, { lat: p[j][0], lng: p[j][1] }); }
+    else m = meters(a, b) * 1.2;
+    moved += m; if (mode === 'walk') walked += m;
+  }));
+  const busiest = perDay.reduce((x, y) => (y.n > (x ? x.n : 0) ? y : x), null);
+  return { lived, days, tracks, stops, homes: [...homes.values()], unvisited, perDay, walked, moved, busiest,
+    found: stops.filter(s => s.found).length, marked: stops.filter(s => s.mark),
+    maybeLoved: stops.filter(s => s.mark && s.wasMaybe && lived) };
+}
+
+/** The densest area (the city you spent the most time in) — used for "zoom in" and the locator inset. */
+function recapCluster(stops) {
+  if (stops.length < 4) return null;
+  let best = null, bestN = 0;
+  stops.forEach(a => { const n = stops.filter(b => meters(a, b) < 2500).length; if (n > bestN) { bestN = n; best = a; } });
+  const inside = stops.filter(s => meters(best, s) < 6000);
+  if (inside.length === stops.length || inside.length < 3) return null;
+  return inside;
+}
+function geoBounds(list) {
+  const b = { s: 90, n: -90, w: 180, e: -180 };
+  list.forEach(p => { b.s = Math.min(b.s, p.lat); b.n = Math.max(b.n, p.lat); b.w = Math.min(b.w, p.lng); b.e = Math.max(b.e, p.lng); });
+  return b;
+}
+function projector(b, rect, pad = 0.08) {
+  const lat0 = (b.s + b.n) / 2, k = Math.cos(lat0 * Math.PI / 180);
+  let dx = Math.max((b.e - b.w) * k, 0.004), dy = Math.max(b.n - b.s, 0.004);
+  const sc = Math.min(rect.w * (1 - 2 * pad) / dx, rect.h * (1 - 2 * pad) / dy);
+  const cx = (b.w + b.e) / 2 * k, cy = (b.s + b.n) / 2;
+  const f = p => ({ x: rect.x + rect.w / 2 + (p.lng * k - cx) * sc, y: rect.y + rect.h / 2 - (p.lat - cy) * sc });
+  f.metersPerPx = 111320 / sc;
+  return f;
+}
+function dms(v, pos, neg) {
+  const a = Math.abs(v), d = Math.floor(a), m = Math.round((a - d) * 60);
+  return `${d}°${String(m === 60 ? 59 : m).padStart(2, '0')}′ ${v >= 0 ? pos : neg}`;
+}
+function longRange(a, b) {
+  const s = parseDate(a), e = parseDate(b);
+  if (!s) return '';
+  if (!e || a === b) return `${MONTH_LONG[s.getMonth()]} ${s.getDate()}, ${s.getFullYear()}`;
+  const sameY = s.getFullYear() === e.getFullYear();
+  return `${MONTH_LONG[s.getMonth()]} ${s.getDate()}${sameY ? '' : ', ' + s.getFullYear()} – ${s.getMonth() === e.getMonth() && sameY ? '' : MONTH_LONG[e.getMonth()] + ' '}${e.getDate()}, ${e.getFullYear()}`;
+}
+function listWords(a) { return a.length < 2 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1]; }
+const numWord = n => ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'][n] || String(n);
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** Liner notes: plain first-person sentences instead of stat tiles. */
+function recapNotes(t, data) {
+  const nDays = tripDays(t).length || data.days.length;
+  const out = [];
+  if (data.lived) {
+    const n = data.stops.length;
+    out.push(`${cap(numWord(nDays))} days, ${n} stop${n === 1 ? '' : 's'}${data.found ? `, ${data.found} of them on no list at all` : ''}.`);
+    const km = data.walked / 1000;
+    if (km >= 0.5) out.push(`About ${km >= 10 ? Math.round(km) : km.toFixed(1)} km on foot.`);
+    if (data.busiest && data.busiest.n > 2) { const d = parseDate(data.busiest.day); out.push(`The fullest day was ${DOW_LONG[d.getDay()]} the ${ordinal(d.getDate())}, with ${data.busiest.n} stops.`); }
+    const loved = data.marked.length;
+    if (loved) {
+      let s = `I loved ${loved} place${loved === 1 ? '' : 's'}`;
+      const mb = [...new Set(data.maybeLoved.map(x => x.title))];
+      if (mb.length) s += `, including ${listWords(mb.slice(0, 3))}, which ${mb.length === 1 ? 'was' : 'were'} only a maybe`;
+      out.push(s + '.');
+    }
+    out.push(loved ? 'Places I loved are in color; open rings were found along the way.' : 'Open rings were found along the way.');
+  } else {
+    const saved = itemsFor(t.id).filter(i => i.kind === 'place' && !isSuggestion(i)).length;
+    const onDay = data.stops.length;
+    out.push(`The plan so far: ${numWord(nDays)} days, ${saved} places saved${onDay ? `, ${onDay} of them pinned to a day` : ''}.`);
+    if (data.marked.length) out.push('The musts are in color.');
+    out.push('After the trip, this draws what actually happened.');
+  }
+  return out.join(' ');
+}
+function ordinal(n) { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); }
+
+function wrapText(ctx, text, maxW) {
+  const words = String(text).split(/\s+/).filter(Boolean), lines = [];
+  let line = '';
+  words.forEach(w => { const tryL = line ? line + ' ' + w : w; if (ctx.measureText(tryL).width > maxW && line) { lines.push(line); line = w; } else line = tryL; });
+  if (line) lines.push(line);
+  return lines;
+}
+function setSpacing(ctx, px) { if ('letterSpacing' in ctx) ctx.letterSpacing = px + 'px'; }
+
+function drawPoster(canvas, t, data, prefs) {
+  const [W, H] = POSTER_SIZES[prefs.size] || POSTER_SIZES.post;
+  const L = POSTER_LOOKS[prefs.look] || POSTER_LOOKS.fog;
+  const story = prefs.size === 'story';
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const M = 76, CW = W - 2 * M;
+  ctx.fillStyle = L.paper; ctx.fillRect(0, 0, W, H);
+  ctx.textBaseline = 'alphabetic';
+
+  // ---- measure the bottom block first so the drawing gets the rest ----
+  const titleSize = story ? 104 : 92;
+  ctx.font = `600 ${titleSize}px ${PF}`; setSpacing(ctx, -titleSize * 0.03);
+  const titleLines = wrapText(ctx, t.name || 'Trip', CW).slice(0, 3);
+  setSpacing(ctx, 0);
+  const noteSize = story ? 30 : 27, noteLH = Math.round(noteSize * 1.42);
+  ctx.font = `400 ${noteSize}px ${PF}`;
+  const noteLines = wrapText(ctx, recapNotes(t, data), Math.min(CW, 900));
+  const lineSize = noteSize + 4;
+  ctx.font = `italic 400 ${lineSize}px ${PF}`;
+  const ownLines = prefs.line ? wrapText(ctx, prefs.line, Math.min(CW, 900)).slice(0, 3) : [];
+  const stripH = 78;
+  const bottomH = titleLines.length * titleSize * 1.0 + 26 + stripH + 34 +
+    (ownLines.length ? ownLines.length * Math.round(lineSize * 1.35) + 18 : 0) + noteLines.length * noteLH;
+  const topY = M + 4;
+  const mapRect = { x: M - 10, y: topY + 50, w: CW + 20, h: H - M - bottomH - (topY + 50) - 40 };
+
+  // ---- top line: dates left, coordinates right ----
+  const centre = data.stops.length ? data.stops : data.homes.length ? data.homes : data.unvisited;
+  ctx.fillStyle = L.ink; ctx.font = `500 ${story ? 28 : 26}px ${PF}`;
+  ctx.textAlign = 'left'; ctx.fillText(longRange(t.start || data.days[0], t.end || data.days[data.days.length - 1]), M, topY + 22);
+  if (centre.length) {
+    const c = centre.reduce((a, p) => ({ lat: a.lat + p.lat / centre.length, lng: a.lng + p.lng / centre.length }), { lat: 0, lng: 0 });
+    ctx.font = `400 ${story ? 28 : 26}px ${PF}`; ctx.textAlign = 'right';
+    if ('fontVariantNumeric' in ctx) ctx.fontVariantNumeric = 'tabular-nums';
+    ctx.fillText(`${dms(c.lat, 'N', 'S')}   ${dms(c.lng, 'E', 'W')}`, W - M, topY + 22);
+    ctx.textAlign = 'left';
+  }
+
+  // ---- the drawing ----
+  const everything = [...data.stops, ...data.homes];
+  const cluster = recapCluster(data.stops);
+  const zoomed = prefs.zoom === 'close' && cluster;
+  const framePts = zoomed ? cluster : (everything.length ? everything : data.unvisited);
+  if (!framePts.length) {
+    ctx.fillStyle = L.faint; ctx.font = `italic 400 30px ${PF}`; ctx.textAlign = 'center';
+    ctx.fillText('Nothing with a location yet.', W / 2, mapRect.y + mapRect.h / 2); ctx.textAlign = 'left';
+  } else {
+    const P = projector(geoBounds(framePts), mapRect, zoomed ? 0.1 : 0.07);
+    ctx.save(); ctx.beginPath(); ctx.rect(0, mapRect.y, W, mapRect.h); ctx.clip();  // lines may bleed off the sides, never into the type
+    // the locator inset goes in whichever corner of the drawing is emptiest
+    let inset = null;
+    if (zoomed && everything.length > cluster.length) {
+      const S = story ? 230 : 200, xs = [W - M - S, M], ys = [mapRect.y + mapRect.h - S - 4, mapRect.y + 4];
+      const probe = [...everything, ...data.unvisited].map(P);
+      data.tracks.forEach(tr => tr.pts.forEach((b, k) => { if (!k) return; const A = P(tr.pts[k - 1]), B = P(b);
+        for (let j = 1; j < 12; j++) probe.push({ x: A.x + (B.x - A.x) * j / 12, y: A.y + (B.y - A.y) * j / 12 }); }));
+      const boxes = [[0, 0], [0, 1], [1, 1], [1, 0]].map(([i, j]) => ({ x: xs[i], y: ys[j], w: S, h: S }));
+      const busy = b => probe.filter(q => q.x > b.x - 20 && q.x < b.x + b.w + 20 && q.y > b.y - 20 && q.y < b.y + b.h + 20).length + (b.x === M && b.y > mapRect.y + 10 ? 3 : 0);
+      inset = boxes.reduce((a, b) => busy(b) < busy(a) ? b : a);
+    }
+    const lw = story ? 3.4 : 3;
+
+    // saved but never reached
+    ctx.fillStyle = L.faint;
+    data.unvisited.forEach(p => { const q = P(p); ctx.beginPath(); ctx.arc(q.x, q.y, 3.2, 0, Math.PI * 2); ctx.fill(); });
+
+    // routes: the real path where cached, otherwise a gentle hand-drawn bow
+    ctx.strokeStyle = L.ink; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    data.tracks.forEach((tr, ti) => tr.pts.forEach((b, k) => {
+      if (!k) return;
+      const a = tr.pts[k - 1];
+      const mode = b.mode || guessMode(a, b);
+      const pl = routeCache[routeKey({ from: [a.lat, a.lng], to: [b.lat, b.lng], mode })];
+      ctx.setLineDash(mode === 'tour' || mode === 'car' ? [1, lw * 3.2] : mode === 'train' || mode === 'transit' ? [lw * 4, lw * 2.4] : []);
+      ctx.globalAlpha = .9;
+      ctx.beginPath();
+      if (pl) {
+        decodePolyline(pl).forEach(([la, ln], j) => { const q = P({ lat: la, lng: ln }); j ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); });
+      } else {
+        const A = P(a), B = P(b), dx = B.x - A.x, dy = B.y - A.y, len = Math.hypot(dx, dy);
+        const bow = Math.min(len * 0.12, 60) * ((ti + k) % 2 ? 1 : -1);
+        ctx.moveTo(A.x, A.y);
+        ctx.quadraticCurveTo((A.x + B.x) / 2 - dy / (len || 1) * bow, (A.y + B.y) / 2 + dx / (len || 1) * bow, B.x, B.y);
+      }
+      ctx.stroke();
+    }));
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+
+    // stays: small squares
+    data.homes.forEach(h => { const q = P(h); ctx.fillStyle = L.paper; ctx.strokeStyle = L.ink; ctx.lineWidth = 2.4;
+      ctx.fillRect(q.x - 7, q.y - 7, 14, 14); ctx.strokeRect(q.x - 7, q.y - 7, 14, 14); });
+    // stops: dots, open rings for things found along the way
+    data.stops.forEach(s => {
+      if (s.mark) return;
+      const q = P(s); ctx.beginPath();
+      if (s.found) { ctx.arc(q.x, q.y, 6.5, 0, Math.PI * 2); ctx.fillStyle = L.paper; ctx.fill(); ctx.lineWidth = 2.4; ctx.strokeStyle = L.ink; ctx.stroke(); }
+      else { ctx.arc(q.x, q.y, 5, 0, Math.PI * 2); ctx.fillStyle = L.ink; ctx.fill(); }
+    });
+
+    // scale bar (bottom left of the drawing)
+    const nice = [50, 100, 200, 250, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000];
+    const target = P.metersPerPx * 150;
+    const len = nice.reduce((a, b) => Math.abs(b - target) < Math.abs(a - target) ? b : a);
+    const px = len / P.metersPerPx, sy = mapRect.y + mapRect.h - 6;
+    ctx.strokeStyle = L.ink; ctx.lineWidth = 2; ctx.beginPath();
+    ctx.moveTo(M, sy - 8); ctx.lineTo(M, sy); ctx.lineTo(M + px, sy); ctx.lineTo(M + px, sy - 8); ctx.stroke();
+    ctx.fillStyle = L.ink; ctx.font = `400 21px ${PF}`;
+    ctx.fillText(len >= 1000 ? `${len / 1000} km` : `${len} m`, M + px + 12, sy + 1);
+    ctx.restore();
+
+    // ---- colour layer (overprinted on Riso, slightly off-register) ----
+    ctx.save();
+    if (L.overprint) { ctx.globalCompositeOperation = 'multiply'; ctx.translate(2.2, -1.6); }
+    ctx.fillStyle = L.accent;
+    const marks = data.stops.filter(s => s.mark);
+    marks.forEach(s => { const q = P(s); ctx.beginPath(); ctx.arc(q.x, q.y, 9, 0, Math.PI * 2); ctx.fill(); });
+    // hand labels for the loved places, nudged so they don't collide
+    ctx.font = `italic 400 ${story ? 25 : 23}px ${PF}`;
+    const taken = [{ x: M, y: mapRect.y + mapRect.h - 40, w: 260, h: 40 }];
+    if (inset) taken.push({ x: inset.x - 6, y: inset.y - 6, w: inset.w + 12, h: inset.h + 12 });
+    [...data.stops, ...data.homes].forEach(s => { const q = P(s); taken.push({ x: q.x - 9, y: q.y - 9, w: 18, h: 18 }); });
+    // and the lines (sampled), so a name never sits on a route
+    data.tracks.forEach(tr => tr.pts.forEach((pb, k) => { if (!k) return; const A = P(tr.pts[k - 1]), B = P(pb), n = Math.ceil(Math.hypot(B.x - A.x, B.y - A.y) / 14);
+      for (let j = 1; j < n; j++) taken.push({ x: A.x + (B.x - A.x) * j / n - 3, y: A.y + (B.y - A.y) * j / n - 3, w: 6, h: 6 }); }));
+    const free = r => r.x > 8 && r.x + r.w < W - 8 && r.y > mapRect.y - 10 && r.y + r.h < mapRect.y + mapRect.h &&
+      !taken.some(o => r.x < o.x + o.w && r.x + r.w > o.x && r.y < o.y + o.h && r.y + r.h > o.y);
+    const seen = new Set();
+    marks.slice(0, 40).forEach(s => {
+      if (seen.has(s.title) || seen.size >= 8) return;
+      const q = P(s), w = ctx.measureText(s.title).width, h = 26;
+      const spots = [{ x: q.x + 16, y: q.y - 22 }, { x: q.x + 16, y: q.y + 2 }, { x: q.x - 16 - w, y: q.y - 22 }, { x: q.x - 16 - w, y: q.y + 2 },
+        { x: q.x - w / 2, y: q.y - 44 }, { x: q.x - w / 2, y: q.y + 16 }];
+      const spot = spots.map(p => ({ ...p, w, h })).find(free);
+      if (!spot) return;
+      taken.push(spot); seen.add(s.title);
+      ctx.fillStyle = L.overprint ? L.accent : L.ink;
+      ctx.fillText(s.title, spot.x, spot.y + 19);
+    });
+    // stops already reserve their space
+    ctx.restore();
+
+    // locator inset when zoomed in: the whole trip, with the drawn area boxed
+    if (inset) {
+      const box = inset;
+      ctx.fillStyle = L.paper; ctx.fillRect(box.x, box.y, box.w, box.h);
+      ctx.strokeStyle = L.ink; ctx.lineWidth = 1.5; ctx.strokeRect(box.x, box.y, box.w, box.h);
+      const Q = projector(geoBounds(everything), box, 0.14);
+      ctx.fillStyle = L.ink;
+      everything.forEach(p => { const q = Q(p); ctx.beginPath(); ctx.arc(q.x, q.y, 2.4, 0, Math.PI * 2); ctx.fill(); });
+      const cb = geoBounds(cluster), a = Q({ lat: cb.n, lng: cb.w }), b = Q({ lat: cb.s, lng: cb.e });
+      ctx.save(); if (L.overprint) ctx.globalCompositeOperation = 'multiply';
+      ctx.strokeStyle = L.accent; ctx.lineWidth = 2.5;
+      ctx.strokeRect(Math.min(a.x, b.x) - 6, Math.min(a.y, b.y) - 6, Math.abs(b.x - a.x) + 12, Math.abs(b.y - a.y) + 12);
+      ctx.restore();
+    }
+  }
+
+  // ---- title ----
+  let y = H - M - bottomH + titleSize * 0.82;
+  ctx.fillStyle = L.ink; ctx.font = `600 ${titleSize}px ${PF}`; setSpacing(ctx, -titleSize * 0.03);
+  titleLines.forEach((ln, i) => ctx.fillText(ln, M - 4, y + i * titleSize));
+  setSpacing(ctx, 0);
+  y += (titleLines.length - 1) * titleSize + 26;
+
+  // ---- the score: one stroke per day, its length the number of stops ----
+  const N = data.perDay.length, top = y + 6, base = y + stripH - 26;
+  if (N) {
+    const step = CW / N, maxN = Math.max(1, ...data.perDay.map(d => d.n)), sw = Math.max(2, Math.min(7, step * 0.42));
+    ctx.strokeStyle = L.faint; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(M, base + 0.5); ctx.lineTo(M + CW, base + 0.5); ctx.stroke();
+    const hOf = n => 6 + (base - top - 6) * (n / maxN);
+    ctx.fillStyle = L.ink;
+    data.perDay.forEach((d, i) => {
+      const x = M + step * i + step / 2;
+      if (d.n) { const h = hOf(d.n), hl = d.marks ? (h - 6) * d.marks / d.n + (d.marks === d.n ? 6 : 0) : 0; ctx.fillRect(x - sw / 2, base - h + hl, sw, h - hl); }
+      else { ctx.beginPath(); ctx.arc(x, base - 3, 1.8, 0, Math.PI * 2); ctx.fill(); }
+    });
+    ctx.save(); if (L.overprint) { ctx.globalCompositeOperation = 'multiply'; ctx.translate(2.2, -1.6); }
+    ctx.fillStyle = L.accent;
+    data.perDay.forEach((d, i) => { if (!d.marks) return; const x = M + step * i + step / 2, h = hOf(d.n);
+      const hl = (h - 6) * d.marks / d.n + (d.marks === d.n ? 6 : 0); ctx.fillRect(x - sw / 2, base - h, sw, hl); });
+    ctx.restore();
+    // dates: the first day of each month, and the last day at the right
+    ctx.fillStyle = L.ink; ctx.font = `400 20px ${PF}`;
+    const lastD = parseDate(data.perDay[N - 1].day), endLabel = MON[lastD.getMonth()] + ' ' + lastD.getDate();
+    const endW = ctx.measureText(endLabel).width;
+    let lastM = -1, lastX = -999;
+    data.perDay.forEach((d, i) => {
+      const dt = parseDate(d.day), x = M + step * i;
+      if (dt.getMonth() !== lastM && x - lastX > 80 && x < W - M - endW - 90) { ctx.fillText(MON[dt.getMonth()] + ' ' + dt.getDate(), x, base + 25); lastX = x; }
+      lastM = dt.getMonth();
+    });
+    if (N > 1) { ctx.textAlign = 'right'; ctx.fillText(endLabel, W - M, base + 25); ctx.textAlign = 'left'; }
+  }
+  y += stripH + 34;
+
+  // ---- own line, then liner notes ----
+  ctx.fillStyle = L.ink;
+  if (ownLines.length) {
+    ctx.font = `italic 400 ${lineSize}px ${PF}`;
+    ownLines.forEach((ln, i) => ctx.fillText(ln, M, y + i * Math.round(lineSize * 1.35)));
+    y += ownLines.length * Math.round(lineSize * 1.35) + 18;
+  }
+  ctx.font = `400 ${noteSize}px ${PF}`;
+  noteLines.forEach((ln, i) => ctx.fillText(ln, M, y + i * noteLH));
+
+  // ---- paper grain ----
+  const img = ctx.getImageData(0, 0, W, H), px = img.data, [gr, gg, gb] = L.grain;
+  let seed = 7;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < px.length; i += 4) {
+    const n = rnd();
+    if (n < 0.16) { const a = 0.07 * rnd(); px[i] += (gr - px[i]) * a; px[i + 1] += (gg - px[i + 1]) * a; px[i + 2] += (gb - px[i + 2]) * a; }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function recapView(t) {
+  const p = posterPrefs(t.id);
+  const data = recapData(t);
+  const cluster = recapCluster(data.stops);
+  const seg = (key, opts) => `<div class="seg" data-pref="${key}">${opts.map(([k, l]) => `<button data-v="${k}" class="${p[key] === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  return `<header class="top"><button class="iconbtn" data-go="#/trip/${encodeURIComponent(t.id)}/log" aria-label="Back">${I.back}</button><h1>Poster</h1>${syncBadge()}</header>
+  <main class="recap">
+    <div class="poster-frame ${p.size}"><canvas id="poster" aria-label="Poster for ${esc(t.name)}"></canvas></div>
+    ${data.lived ? '' : `<p class="hint recap-hint">Nothing’s logged yet, so this is drawn from your plan. Once you log stops on the trip, it draws what you actually did.</p>`}
+    <div class="field"><label>Size</label></div>${seg('size', [['post', 'Post 4:5'], ['story', 'Story 9:16']])}
+    <div class="field"><label>Look</label></div>${seg('look', Object.entries(POSTER_LOOKS).map(([k, v]) => [k, v.name]))}
+    ${cluster ? `<div class="field"><label>Map</label></div>${seg('zoom', [['all', 'Whole trip'], ['close', 'Up close']])}` : ''}
+    <div class="field"><label for="rc-line">Your own line (optional)</label><input id="rc-line" maxlength="140" value="${esc(p.line)}" placeholder="Something only you’d write" autocomplete="off"></div>
+    <button class="btn" id="rc-save">Save image</button>
+  </main>`;
+}
+
+function initRecap(tripId) {
+  const t = tripById(tripId); if (!t) return;
+  const canvas = $('#poster'); if (!canvas) return;
+  const p = posterPrefs(t.id);
+  let data = recapData(t);
+  const redraw = () => { drawPoster(canvas, t, data, p); $('.poster-frame').className = 'poster-frame ' + p.size; };
+  // a light placeholder while the typeface loads, then the real thing
+  redraw();
+  loadPosterFonts().then(redraw);
+  // fetch any real paths we don't have yet (cached in the Sheet, so each leg is paid for once)
+  const legs = [];
+  data.tracks.forEach(tr => tr.pts.forEach((b, k) => { if (!k) return; const a = tr.pts[k - 1];
+    const leg = { from: [a.lat, a.lng], to: [b.lat, b.lng], mode: b.mode || guessMode(a, b) };
+    if (!routeCache[routeKey(leg)] && leg.mode !== 'train' && leg.mode !== 'tour' && meters(a, b) < 30000) legs.push(leg); }));
+  if (legs.length) getRoutes(legs.slice(0, 120)).then(() => { if ($('#poster') === canvas) { data = recapData(t); redraw(); } });
+
+  $$('[data-pref]').forEach(g => $$('button', g).forEach(b => b.onclick = () => {
+    p[g.dataset.pref] = b.dataset.v; savePosterPrefs(t.id, p);
+    $$('button', g).forEach(x => x.classList.toggle('on', x === b)); redraw();
+  }));
+  let tm;
+  $('#rc-line').oninput = e => { p.line = e.target.value; clearTimeout(tm); tm = setTimeout(() => { savePosterPrefs(t.id, p); redraw(); }, 250); };
+  $('#rc-save').onclick = () => {
+    const name = `${(t.name || 'trip').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${p.size === 'story' ? '9x16' : '4x5'}.png`;
+    canvas.toBlob(async blob => {
+      if (!blob) return toast('Couldn’t make the image');
+      const file = new File([blob], name, { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file] }); return; } catch (e) { if (e.name === 'AbortError') return; }
+      }
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+      document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      toast('Saved ' + name);
+    }, 'image/png');
+  };
 }
 
 /* ---------- Someday ---------- */
@@ -2091,6 +2532,15 @@ function demoData() {
       { id: 'l3', rating: 'loved', trip_id: 'tr_demo1', day: d(-1), seq: '2', title: 'Ramen counter near Kuramae', origin: 'found', mode: 'walk', note: 'Shio ramen, 8 seats', would_return: 'yes', lat: 35.7045, lng: 139.7925 },
       { id: 'l4', rating: 'loved', trip_id: 'tr_demo1', day: d(0), seq: '0', item_id: 'p1', title: 'Sensō-ji', origin: 'planned', mode: 'walk', time: '08:10', lat: 35.7148, lng: 139.7967 },
       { id: 'l5', rating: 'liked', trip_id: 'tr_demo1', day: d(0), seq: '1', title: 'Kappabashi kitchen street', origin: 'found', mode: 'walk', note: 'Bought a knife', lat: 35.7130, lng: 139.7890 },
+      { id: 'l6', rating: 'loved', trip_id: 'tr_demo1', day: d(0), seq: '2', item_id: 'p3', title: 'Yanaka Ginza', origin: 'planned', mode: 'transit', lat: 35.7275, lng: 139.7660 },
+      { id: 'l7', rating: 'liked', trip_id: 'tr_demo1', day: d(0), seq: '3', title: 'Nezu Shrine', origin: 'found', mode: 'walk', lat: 35.7202, lng: 139.7607 },
+      { id: 'l8', trip_id: 'tr_demo1', day: d(1), seq: '0', item_id: 'f3', title: 'Nikko day tour', origin: 'planned', mode: 'walk', lat: 35.7111, lng: 139.7976 },
+      { id: 'l8a', trip_id: 'tr_demo1', day: d(1), seq: '0', parent_id: 'l8', item_id: 'c1', title: 'Nikkō Tōshō-gū', origin: 'planned', mode: 'tour', lat: 36.7580, lng: 139.5987 },
+      { id: 'l8b', rating: 'loved', trip_id: 'tr_demo1', day: d(1), seq: '1', parent_id: 'l8', item_id: 'c2', title: 'Kegon Falls', origin: 'planned', mode: 'tour', lat: 36.7383, lng: 139.5025 },
+      { id: 'l9', rating: 'loved', trip_id: 'tr_demo1', day: d(2), seq: '0', item_id: 'p4', title: 'Golden Gai', origin: 'planned', mode: 'transit', lat: 35.6938, lng: 139.7036 },
+      { id: 'l10', rating: 'liked', trip_id: 'tr_demo1', day: d(2), seq: '1', item_id: 'p5', title: 'Disk Union Shinjuku', origin: 'planned', mode: 'walk', lat: 35.6920, lng: 139.7030 },
+      { id: 'l11', rating: 'meh', trip_id: 'tr_demo1', day: d(2), seq: '2', title: 'Omoide Yokocho', origin: 'found', mode: 'walk', lat: 35.6930, lng: 139.6995 },
+      { id: 'l12', rating: 'loved', trip_id: 'tr_demo1', day: d(2), seq: '3', title: 'A tiny jazz kissa', origin: 'found', mode: 'walk', lat: 35.6905, lng: 139.7058 },
     ],
   };
 }
