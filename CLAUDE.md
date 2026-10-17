@@ -66,6 +66,21 @@ Sample mode runs fully offline. Test with Playwright at 390×844 @2x: route `cdn
 - **Frames** (`prefs.frame`: `{kind: all | stay(id) | place(lat,lng,r km) | dates(from,to), name, sliceId}`; `frameTest`, `recapData(t, frame)`). Places come from `recapAreas` (stops within 30 km grouped, named by most common city, else region). A slice keeps the whole trip's score strip with days outside it at 20%, uses the slice's dates in the top line, and its name becomes the title with the trip's name small above. The locator inset shows the whole trip with the slice boxed when the trip is ≥3× wider. Saved slices (`prefs.slices`) are per device (localStorage), not in the Sheet.
 - Agreed next: artifacts per stop (photo, sound, "Brought home" souvenir) stored in Drive via the script; Brought home becomes a credit then. Ideas for Japan: a card per day, a line a night, trains as their own modes.
 
+## Look back (range posters, built Oct 2026)
+
+- Route `#/range` (button "Make a poster of a year or a season" on the Trips list). `rangeView` / `initRange`; choices in localStorage `th_range` (per device, not in the Sheet).
+- **When**: last 12 months (rolling), calendar years, seasons (Winter = Oct–Mar, Summer = Apr–Sep; only offered when a trip falls in them), custom dates, and saved named ranges (`p.saved`). `presetSpan`, `rangeBounds`, `rangeChoices`.
+- **Data** (`rangeData`): every trip overlapping the dates (`rangeTrips`), each cut with the trip poster's own `{kind:'dates'}` frame via `recapData`. Numbers come from logged trips only; unlogged future trips are "to come" (faint in strips, italic in lists). Trips can be unticked (`p.exclude`). `rangeAreas` groups stops within 30 km into towns/cities (named by region when a city comes back as wards). Stops now carry `country` (from the item).
+- **Home** (`p.home`): set from the phone's location, rounded to ~1 km, named by Nominatim. Used for "Furthest from home" and drawn as a diamond on the map (toggle `homeOnMap`).
+- **Styles** (`drawRangePoster` + one painter each, same chrome/looks/grain as the trip poster; `paperGrain` is shared):
+  - Map (`drawRangeMap`): all trips, flights as dashed arcs (else trips chained in order, from home and back), trip names as italic labels (same place twice → "Tokyo, twice"), airport codes. `rangeCut` cuts the world at the widest empty longitude gap so Japan + the US sit together; `drawWorldShifted` draws Natural Earth copies at ±360 so nothing smears. OSM ground only when everything is one region/city.
+  - Numbers (`drawRangeNumbers`, `rangeNumbers`): big numerals two to a row (loved in the accent), then a track list (`drawTracklist`) if there's room.
+  - Calendar (`drawRangeCalendar`): a row per month, a stroke per day (the score strip as a calendar), a bar under each trip, names placed where free. No day strip under the title.
+  - Sheet (`drawRangeSheet` / `drawMiniTrip`): a contact sheet of each trip's own drawing, framed as its poster is.
+  - Carousel: Map (no credits) → each trip's own poster (its saved prefs, this look/size, cut to the dates) → Calendar, Sheet (off by default) → Numbers with credits. Slides can be unticked (`p.skip`). Images are made ahead (`queueBlobs`) so iOS still sees the tap when the share sheet opens with several files (`shareFiles`).
+- Credits (`RANGE_CREDITS`, `rangeCredits`): Longest trip, Furthest from home, Loved the most, Most time in, Went back to (across trips: "on two trips"), Favorite discovery (pickable), Most often, First and last; off by default: Fullest day, Latest night.
+- Sample mode has a logged past trip (Reykjavík, with flights) and a planned future one (Chicago) for this.
+
 ## Original design notes for Ask Claude
 
 1. Ideas get an **Ask Claude** toggle → `status: 'ask'`. Personal notes stay `open`.

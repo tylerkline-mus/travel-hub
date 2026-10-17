@@ -293,6 +293,17 @@ nav.tabs .add svg { width: 26px; height: 26px; }
 .recap .seg { margin-bottom: 16px; }
 .recap-hint { margin: -4px 2px 18px; text-align: center; line-height: 1.4; }
 .recap #rc-save { margin-top: 6px; margin-bottom: 20px; }
+.recap #rg-save { margin-top: 10px; margin-bottom: 20px; }
+.recap select#rg-when { width: 100%; }
+.carousel { display: flex; gap: 14px; overflow-x: auto; scroll-snap-type: x mandatory; margin: 10px -16px 6px; padding: 6px 16px 12px; -webkit-overflow-scrolling: touch; }
+.carousel figure { flex: 0 0 66%; max-width: 320px; margin: 0; scroll-snap-align: center; }
+.carousel figure.story { flex-basis: 50%; max-width: 230px; }
+.carousel figure.off canvas { opacity: .32; }
+.carousel figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+.carousel figcaption label { display: flex; align-items: center; gap: 7px; }
+.carousel figcaption input { width: 18px; height: 18px; accent-color: var(--accent); flex: none; }
+.range-home { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 2px 12px; font-size: 15px; }
+.range-home > span:first-child { flex: 1; min-width: 0; }
 
 /* ---------- Ask Claude ---------- */
 .badge.ask { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
@@ -701,6 +712,7 @@ function route() {
   const h = location.hash.replace(/^#\/?/, '').split('/');
   if (h[0] === 'trip' && h[1]) return { name: 'trip', id: decodeURIComponent(h[1]), sub: h[2] || 'days' };
   if (h[0] === 'someday') return { name: 'someday' };
+  if (h[0] === 'range') return { name: 'range' };
   return { name: 'trips' };
 }
 let lastRoute = '';
@@ -736,12 +748,14 @@ function render() {
   let html = '';
   if (r.name === 'trip') html = tripView(r.id, r.sub);
   else if (r.name === 'someday') html = somedayView();
+  else if (r.name === 'range') html = rangeView();
   else html = tripsView();
-  html += navView(r.name);
+  html += navView(r.name === 'range' ? 'trips' : r.name);
   app.innerHTML = html;
   bindCommon();
   if (r.name === 'trip' && r.sub === 'map') initMap(r.id);
   if (r.name === 'trip' && r.sub === 'recap') initRecap(r.id);
+  if (r.name === 'range') initRange();
   if (r.name === 'trip' && r.sub === 'days' && !render._scrolled) {
     const td = $('.day.today'); if (td) { render._scrolled = true; setTimeout(() => td.scrollIntoView({ block: 'start', behavior: 'instant' }), 0); }
   }
@@ -777,6 +791,7 @@ function tripsView() {
   <main>
     ${upcoming.length ? upcoming.map(card).join('') : `<div class="empty"><div class="big">No trips yet</div>Start one, or save places to Someday and pull them in later.</div>`}
     <button class="btn ghost" data-act="newTrip" style="margin-top:6px">+ New trip</button>
+    ${db.trips.some(t => tripDays(t).length) ? `<button class="btn ghost" data-go="#/range" style="margin-top:8px">Make a poster of a year or a season</button>` : ''}
     ${past.length ? `<div class="section-title">Past <span class="count">${past.length}</span></div>${past.map(card).join('')}` : ''}
   </main>`;
 }
@@ -1136,7 +1151,7 @@ function recapData(t, frame) {
   const lived = logs.some(hasCoords);
   const days = lived ? logDays(t) : tripDays(t);
   const ft = frameTest(t, frame);
-  const pt = (o, extra) => Object.assign({ lat: +o.lat, lng: +o.lng, title: o.title || '', city: o.city || '', region: o.region || '' }, extra);
+  const pt = (o, extra) => Object.assign({ lat: +o.lat, lng: +o.lng, title: o.title || '', city: o.city || '', region: o.region || '', country: o.country || '' }, extra);
   const tracks = [], stops = [], homes = new Map(), perDay = [], allPts = [];
   days.forEach(d => {
     const home = stayForMorning(t.id, d);
@@ -1147,7 +1162,7 @@ function recapData(t, frame) {
         const it = l.item_id ? itemById(l.item_id) : null;
         return pt(l, { mode: l.parent_id ? 'tour' : l.mode, tour: !!l.parent_id, mark: l.rating === 'loved', found: l.origin === 'found', wasMaybe: !!(it && it.priority === 'maybe'),
           wasMust: !!(it && it.priority === 'must'), meh: l.rating === 'meh', note: l.note || '', time: l.time || '', top: !l.parent_id, id: l.id,
-          city: l.city || (it && it.city) || '', region: (it && it.region) || '',
+          city: l.city || (it && it.city) || '', region: (it && it.region) || '', country: (it && it.country) || '',
           category: l.category || (it && it.category) || '', key: l.item_id || l.place_id || `${l.title}|${(+l.lat).toFixed(3)},${(+l.lng).toFixed(3)}` });
       });
     } else {
@@ -1801,7 +1816,10 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
   });
   ctx.globalAlpha = 1;
 
-  // ---- paper grain ----
+  paperGrain(ctx, W, H, L);
+}
+/** A seeded noise pass so the paper isn't flat. */
+function paperGrain(ctx, W, H, L) {
   const img = ctx.getImageData(0, 0, W, H), px = img.data, [gr, gg, gb] = L.grain;
   let seed = 7;
   const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -1944,6 +1962,837 @@ function initRecap(tripId) {
       toast('Saved ' + name);
     }, 'image/png');
   };
+}
+
+/* ============================================================
+ * Look back — posters for a stretch of time across trips (a year, a season, any dates)
+ *   Styles: Map · Numbers · Calendar · Sheet · Carousel (a set of images for one post)
+ *   Same paper, looks and typeface as the trip poster. Choices live in localStorage `th_range`.
+ * ============================================================ */
+const RANGE_STYLES = [['map', 'Map'], ['numbers', 'Numbers'], ['calendar', 'Calendar'], ['sheet', 'Sheet'], ['carousel', 'Carousel']];
+const RANGE_CREDITS = [
+  ['longest', 'Longest trip', true], ['furthest', 'Furthest from home', true], ['mostloved', 'Loved the most', true],
+  ['time', 'Most time in', true], ['back', 'Went back to', true], ['fav', 'Favorite discovery', true],
+  ['often', 'Most often', true], ['ends', 'First and last', true], ['fullest', 'Fullest day', false], ['late', 'Latest night', false],
+];
+function rangePrefs() {
+  return Object.assign({ when: 'last12', from: '', to: '', name: '', style: 'map', size: 'post', look: 'fog', ground: 'water', line: '',
+    credits: {}, saved: [], exclude: {}, skip: {}, home: null, homeOnMap: true }, store.get('th_range', {}));
+}
+function saveRangePrefs(p) { store.set('th_range', p); }
+
+/** The preset stretches: rolling year, calendar years, and Oct–Mar / Apr–Sep seasons. */
+function presetSpan(v) {
+  const [k, y] = String(v || '').split(':'), yr = +y, today = todayStr();
+  if (k === 'last12') return { from: addDays(today, -364), to: today, title: '' };
+  if (k === 'year') return { from: `${yr}-01-01`, to: `${yr}-12-31`, title: String(yr) };
+  if (k === 'winter') return { from: `${yr}-10-01`, to: `${yr + 1}-03-31`, title: `Winter ${yr}–${String(yr + 1).slice(2)}` };
+  if (k === 'summer') return { from: `${yr}-04-01`, to: `${yr}-09-30`, title: `Summer ${yr}` };
+  return null;
+}
+function rangeChoices() {
+  const y = +todayStr().slice(0, 4);
+  const spans = db.trips.map(tripDays).filter(d => d.length).map(d => [d[0], d[d.length - 1]]);
+  const has = (a, b) => spans.some(([s, e]) => s <= b && e >= a);
+  const years = new Set([y]);
+  spans.forEach(([s, e]) => { years.add(+s.slice(0, 4)); years.add(+e.slice(0, 4)); });
+  const ys = [...years].sort((a, b) => b - a);
+  const seasons = [];
+  [...new Set([...ys, ...ys.map(v => v - 1)])].forEach(yr => ['winter', 'summer'].forEach(k => {
+    const s = presetSpan(`${k}:${yr}`);
+    if (has(s.from, s.to)) seasons.push({ v: `${k}:${yr}`, label: `${s.title} (${k === 'winter' ? 'Oct–Mar' : 'Apr–Sep'})`, from: s.from });
+  }));
+  return { years: ys.map(yr => ({ v: 'year:' + yr, label: String(yr) })), seasons: seasons.sort((a, b) => b.from.localeCompare(a.from)) };
+}
+function autoRangeTitle(a, b) {
+  const s = parseDate(a), e = parseDate(b);
+  if (a.slice(5) === '01-01' && b.slice(5) === '12-31' && s.getFullYear() === e.getFullYear()) return String(s.getFullYear());
+  if (s.getFullYear() === e.getFullYear()) return s.getMonth() === e.getMonth() ? `${MONTH_LONG[s.getMonth()]} ${s.getFullYear()}` : `${MONTH_LONG[s.getMonth()]} to ${MONTH_LONG[e.getMonth()]} ${e.getFullYear()}`;
+  return `${MONTH_LONG[s.getMonth()]} ${s.getFullYear()} to ${MONTH_LONG[e.getMonth()]} ${e.getFullYear()}`;
+}
+function rangeBounds(p) {
+  const ps = presetSpan(p.when);
+  let from = ps ? ps.from : p.from, to = ps ? ps.to : p.to;
+  if (!from || !to) { const d = presetSpan('last12'); from = d.from; to = d.to; }
+  if (from > to) [from, to] = [to, from];
+  return { from, to, title: (p.name || '').trim() || (ps && ps.title) || autoRangeTitle(from, to) };
+}
+function shortRange(a, b) {
+  const s = parseDate(a), e = parseDate(b);
+  if (!s) return '';
+  if (!e || a === b) return `${MON[s.getMonth()]} ${s.getDate()}`;
+  return s.getMonth() === e.getMonth() ? `${MON[s.getMonth()]} ${s.getDate()}–${e.getDate()}` : `${MON[s.getMonth()]} ${s.getDate()} – ${MON[e.getMonth()]} ${e.getDate()}`;
+}
+function fmtKm(m) { const km = m / 1000; return (km >= 1000 ? Math.round(km / 100) * 100 : km >= 100 ? Math.round(km / 10) * 10 : Math.round(km)).toLocaleString('en-US') + ' km'; }
+const avgPt = list => list.reduce((a, p) => ({ lat: a.lat + p.lat / list.length, lng: a.lng + p.lng / list.length }), { lat: 0, lng: 0 });
+
+/** Trips with any day inside the stretch, in order. */
+function rangeTrips(from, to) {
+  return db.trips.map(t => ({ t, d: tripDays(t) })).filter(x => x.d.length && x.d[0] <= to && x.d[x.d.length - 1] >= from)
+    .sort((a, b) => a.d[0].localeCompare(b.d[0])).map(x => x.t);
+}
+
+/** Everything the range posters draw. Each trip is cut to the stretch with the trip poster's own date frame.
+    Numbers come from trips that were logged; trips that haven't happened yet are "to come". */
+function rangeData(B, p) {
+  const { from, to } = B, today = todayStr(), exclude = p.exclude || {};
+  const inRange = rangeTrips(from, to);
+  const trips = inRange.filter(t => !exclude[t.id]).map((t, i) => {
+    const data = recapData(t, { kind: 'dates', from, to });
+    const days = (data.lived ? logDays(t) : tripDays(t)).filter(d => d >= from && d <= to);
+    data.stops.forEach(s => { s.trip = t.id; });
+    const pts = [...data.stops, ...data.homes];
+    const stays = topItemsFor(t.id).filter(x => isStay(x) && hasCoords(x)).map(x => ({ lat: +x.lat, lng: +x.lng }));
+    const anchor = pts.length ? pts : stays.length ? stays : data.unvisited;
+    const flights = itemsFor(t.id).filter(f => isFlight(f) && !f.parent_id && f.day && f.day >= from && f.day <= to && num(f.from_lat) !== null && num(f.to_lat) !== null)
+      .map(f => ({ a: { lat: +f.from_lat, lng: +f.from_lng }, b: { lat: +f.to_lat, lng: +f.to_lng }, from: f.from_code || '', to: f.to_code || '', day: f.day }));
+    const dest = String(t.destination || '').split(',').map(s => s.trim()).filter(Boolean);
+    const first = days[0] || t.start, last = days[days.length - 1] || t.end;
+    return { t, data, days, lived: data.lived, stops: data.stops, homes: data.homes, pts, c: anchor.length ? avgPt(anchor) : null, flights, n: i + 1,
+      first, last, upcoming: !data.lived && (t.start || first || '') > today, country: dest.length > 1 ? dest[dest.length - 1] : '' };
+  });
+  const lived = trips.some(x => x.lived);
+  const base = lived ? trips.filter(x => x.lived) : trips;
+  const dayList = [];
+  for (let d = from; d <= to && dayList.length < 800; d = addDays(d, 1)) dayList.push(d);
+  const byDay = {};
+  trips.forEach(x => {
+    x.data.perDay.forEach(pd => { if (pd.day < from || pd.day > to) return;
+      const o = byDay[pd.day] ||= { n: 0, marks: 0, plan: true, trip: x };
+      o.n += pd.n; o.marks += pd.marks; if (x.lived) o.plan = false; });
+    x.days.forEach(d => { byDay[d] ||= { n: 0, marks: 0, plan: !x.lived, trip: x }; });
+  });
+  const S = base.flatMap(x => x.stops);
+  const seenF = new Set(), flights = trips.flatMap(x => x.flights).filter(f => { const k = `${f.day}|${f.from}|${f.to}|${f.a.lat}`; if (seenF.has(k)) return false; seenF.add(k); return true; });
+  const flown = flights.filter(f => !lived || base.some(x => x.flights.includes(f))).reduce((m, f) => m + meters(f.a, f.b), 0);
+  const countries = new Set();
+  base.forEach(x => { const own = [...x.stops, ...x.homes].map(s => s.country).filter(Boolean); own.forEach(c => countries.add(c)); if (!own.length && x.country) countries.add(x.country); });
+  const toCome = trips.filter(x => x.upcoming).length;
+  const n = trips.length;
+  const countLine = n ? `${cap(numWord(n))} trip${n === 1 ? '' : 's'}${!lived ? ' planned' : toCome ? `, ${numWord(toCome)} to come` : ''}` : '';
+  return { from, to, title: B.title, trips, inRange, lived, base, dayList, byDay, S,
+    daysAway: new Set(base.flatMap(x => x.days)).size, stops: S.length, loved: S.filter(s => s.mark).length, found: S.filter(s => s.found).length,
+    flights, flown, walked: base.reduce((m, x) => m + (x.lived ? x.data.walked : 0), 0), areas: rangeAreas(base), countries,
+    toCome, countLine, home: p.home && num(p.home.lat) !== null ? { lat: +p.home.lat, lng: +p.home.lng, name: p.home.name || 'Home' } : null };
+}
+
+/** Stops grouped into towns and cities (within ~30 km of each other), named by their most common region or city, with the days spent in each. */
+function rangeAreas(base) {
+  const pts = base.flatMap(x => [...x.stops, ...x.homes.map(h => ({ ...h, day: '' }))]);
+  const groups = [];
+  pts.forEach(p => {
+    const hits = groups.filter(g => g.some(q => meters(p, q) < 30000));
+    if (!hits.length) groups.push([p]);
+    else { hits[0].push(p); hits.slice(1).forEach(g => { hits[0].push(...g); groups.splice(groups.indexOf(g), 1); }); }
+  });
+  return groups.map(g => {
+    const tally = k => { const c = {}; g.forEach(p => { if (p[k]) c[p[k]] = (c[p[k]] || 0) + 1; }); return Object.entries(c).sort((a, b) => b[1] - a[1]); };
+    const cities = tally('city'), regions = tally('region');
+    // a big city often comes back as its wards ("Taito City", "Shinjuku City"): then the region reads better
+    const useRegion = regions.length && (!cities.length || (cities.length > 1 && regions[0][1] >= g.length * 0.5));
+    const name = useRegion ? regions[0][0] : cities.length ? cities[0][0] : 'Around ' + (g[0].title || 'here');
+    return { name, n: g.length, days: new Set(g.map(p => p.day).filter(Boolean)), c: avgPt(g) };
+  }).sort((a, b) => b.n - a.n);
+}
+
+/** The big numbers, only the ones that are more than zero. */
+function rangeNumbers(R) {
+  const out = [], add = (v, one, many, mark) => { if (v > 0) out.push({ v, label: v === 1 ? one : many, mark }); };
+  add(R.base.length, 'trip', 'trips');
+  add(R.daysAway, 'day away', 'days away');
+  if (R.lived) { add(R.stops, 'stop', 'stops'); add(R.loved, 'place loved', 'places loved', true); add(R.found, 'found along the way', 'found along the way'); }
+  else { add(R.stops, 'place on the plan', 'places on the plan'); add(R.S.filter(s => s.mark).length, 'must', 'musts', true); }
+  add(R.areas.length, 'town or city', 'towns and cities');
+  add(R.countries.size, 'country', 'countries');
+  add(Math.round(R.flown / 1000), 'km flown', 'km flown');
+  add(Math.round(R.walked / 1000), 'km on foot', 'km on foot');
+  return out;
+}
+
+/** Credits for a stretch: names, not numbers, and only what the data can honestly say. */
+function rangeCredits(R, p) {
+  const out = {}, B = R.base, S = R.S;
+  if (B.length) {
+    const lg = B.filter(x => x.days.length > 1).sort((a, b) => b.days.length - a.days.length)[0];
+    if (lg && B.length > 1) out.longest = { value: `${lg.t.name}, ${numWord(lg.days.length)} days` };
+    if (R.home) {
+      const far = B.filter(x => x.c).map(x => ({ x, m: meters(R.home, x.c) })).sort((a, b) => b.m - a.m)[0];
+      if (far && far.m > 50000) out.furthest = { value: `${far.x.t.name}, about ${fmtKm(far.m)}` };
+    }
+    const ar = R.areas.filter(a => a.days.size > 1).sort((a, b) => b.days.size - a.days.size)[0];
+    if (ar && R.areas.length > 1) out.time = { value: `${ar.name}, ${numWord(ar.days.size)} days` };
+    if (B.length > 1) out.ends = { value: `${B[0].t.name} → ${B[B.length - 1].t.name}` };
+    const cats = {};
+    if (R.lived) {
+      const ml = B.map(x => ({ x, n: x.stops.filter(s => s.mark).length })).sort((a, b) => b.n - a.n)[0];
+      if (B.length > 1 && ml && ml.n > 1) out.mostloved = { value: `${ml.x.t.name}, ${numWord(ml.n)} places` };
+      const v = {};
+      S.forEach(s => { const o = v[s.key] ||= { key: s.key, title: s.title, days: new Set(), trips: new Set() }; o.days.add(s.day); o.trips.add(s.trip); });
+      const back = Object.values(v).filter(o => o.days.size > 1).sort((a, b) => b.trips.size - a.trips.size || b.days.size - a.days.size)[0];
+      if (back) out.back = { value: back.trips.size > 1 ? `${back.title}, on ${numWord(back.trips.size)} trips` : `${back.title}, ${back.days.size === 2 ? 'twice' : numWord(back.days.size) + ' times'}` };
+      const finds = [...new Map(S.filter(s => s.found).map(s => [s.key, s])).values()];
+      const favs = finds.filter(s => s.mark).sort((a, b) => (!!b.note - !!a.note) || ((back && a.key === back.key) - (back && b.key === back.key)));
+      const fav = (p.fav && finds.find(s => s.key === p.fav)) || favs[0];
+      if (fav) out.fav = { value: fav.title, choices: finds, chosen: fav.key };
+      S.forEach(s => { if (s.category && !/^(stay|flight|tour|place)$/i.test(s.category)) cats[s.category.toLowerCase()] = (cats[s.category.toLowerCase()] || 0) + 1; });
+      const full = Object.entries(R.byDay).filter(([, o]) => !o.plan).sort((a, b) => b[1].n - a[1].n)[0];
+      if (full && full[1].n > 2) out.fullest = { value: `${dayName(full[0])}, ${numWord(full[1].n)} stops` };
+      const lateKey = s => (minsOf(s.time) < 240 ? minsOf(s.time) + 1440 : minsOf(s.time));
+      const late = S.filter(s => s.time && s.top !== false).sort((a, b) => lateKey(b) - lateKey(a))[0];
+      if (late && lateKey(late) >= 21 * 60) out.late = { value: `${late.title}, ${fmtClock(late.time)}` };
+    } else {
+      B.forEach(x => itemsFor(x.t.id).filter(i => i.kind === 'place' && !isSuggestion(i) && i.category).forEach(i => { const c = i.category.toLowerCase(); cats[c] = (cats[c] || 0) + 1; }));
+    }
+    const top = Object.entries(cats).sort((a, b) => b[1] - a[1])[0];
+    if (top && top[1] > 1) out.often = { value: `${pluralCat(top[0])}, ${top[1]}${R.lived ? '' : ' saved'}` };
+  }
+  return RANGE_CREDITS.filter(([k]) => out[k]).map(([k, label, def]) => ({ key: k, label, ...out[k],
+    on: p.credits && k in p.credits ? !!p.credits[k] : def }));
+}
+
+/* ---- drawing ---- */
+
+/** Pick where to cut the world so trips on both sides of the Pacific sit together (null = no cut needed). */
+function rangeCut(lngs) {
+  const u = [...new Set(lngs.map(l => ((+l + 540) % 360) - 180))].sort((a, b) => a - b);
+  if (u.length < 2) return null;
+  const dateLine = 360 - (u[u.length - 1] - u[0]);
+  let best = 0, cut = null;
+  for (let i = 1; i < u.length; i++) { const g = u[i] - u[i - 1]; if (g > best) { best = g; cut = (u[i] + u[i - 1]) / 2; } }
+  return best > dateLine + 20 ? cut : null;
+}
+/** World outlines drawn on a projector whose longitudes may run past 180: each shape is drawn
+    at whichever copies (−360, 0, +360…) land in view, so nothing smears across the poster. */
+function drawWorldShifted(ctx, B, rect, world, L, lwBase = 1) {
+  const a = B.inv(rect.x, rect.y), c = B.inv(rect.x + rect.w, rect.y + rect.h);
+  const vw = a.lng - 4, ve = c.lng + 4, vn = a.lat + 4, vs = c.lat - 4;
+  const shifts = b => [-360, 0, 360, 720].filter(k => b.e + k >= vw && b.w + k <= ve && b.n >= vs && b.s <= vn);
+  const unwrap = r => { let prev = null; return r.map(p => { let lng = p.lng; if (prev !== null) { while (lng - prev > 180) lng -= 360; while (lng - prev < -180) lng += 360; } prev = lng; return { lat: p.lat, lng }; }); };
+  ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.fillStyle = L.land;
+  world.lands.forEach(l => {
+    const b = l.allB ||= geoBounds(l.rings.flat());
+    shifts(b).forEach(k => { ctx.beginPath();
+      l.rings.forEach(r => { let last = null; r.forEach((p, i) => { const q = B({ lat: p.lat, lng: p.lng + k });
+        if (!i) { ctx.moveTo(q.x, q.y); last = q; } else if (Math.abs(q.x - last.x) + Math.abs(q.y - last.y) > 1) { ctx.lineTo(q.x, q.y); last = q; } }); ctx.closePath(); });
+      ctx.fill('evenodd'); });
+  });
+  ctx.strokeStyle = L.ground;
+  world.lines.forEach(l => {
+    const pts = l.cont ||= unwrap(l.pts), b = l.cb ||= geoBounds(pts);
+    shifts(b).forEach(k => {
+      ctx.lineWidth = (l.kind === 'border' ? 1.1 : 1.5) * lwBase; ctx.setLineDash(l.kind === 'border' ? [5 * lwBase, 5 * lwBase] : []);
+      ctx.beginPath(); let last = null;
+      pts.forEach(p => { const q = B({ lat: p.lat, lng: p.lng + k });
+        if (!last) { ctx.moveTo(q.x, q.y); last = q; } else if (Math.abs(q.x - last.x) + Math.abs(q.y - last.y) > 1.2) { ctx.lineTo(q.x, q.y); last = q; } });
+      ctx.stroke(); });
+  });
+  ctx.setLineDash([]); ctx.restore();
+}
+/** A trip's day-by-day lines: the real path where cached, otherwise a gentle bow. */
+function drawTracks(ctx, tracks, P, L, lw, real) {
+  ctx.strokeStyle = L.ink; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  tracks.forEach((tr, ti) => tr.pts.forEach((b, k) => {
+    if (!k) return;
+    const a = tr.pts[k - 1], mode = b.mode || guessMode(a, b);
+    const pl = real ? routeCache[routeKey({ from: [a.lat, a.lng], to: [b.lat, b.lng], mode })] : null;
+    ctx.setLineDash(mode === 'tour' || mode === 'car' ? [1, lw * 3.2] : mode === 'train' || mode === 'transit' ? [lw * 4, lw * 2.4] : []);
+    ctx.globalAlpha = .9; ctx.beginPath();
+    if (pl) decodePolyline(pl).forEach(([la, ln], j) => { const q = P({ lat: la, lng: ln }); j ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); });
+    else {
+      const A = P(a), Bq = P(b), dx = Bq.x - A.x, dy = Bq.y - A.y, len = Math.hypot(dx, dy);
+      const bow = Math.min(len * 0.12, 60) * ((ti + k) % 2 ? 1 : -1);
+      ctx.moveTo(A.x, A.y); ctx.quadraticCurveTo((A.x + Bq.x) / 2 - dy / (len || 1) * bow, (A.y + Bq.y) / 2 + dx / (len || 1) * bow, Bq.x, Bq.y);
+    }
+    ctx.stroke();
+  }));
+  ctx.setLineDash([]); ctx.globalAlpha = 1;
+}
+function inColor(ctx, L, fn) {
+  ctx.save(); if (L.overprint) { ctx.globalCompositeOperation = 'multiply'; ctx.translate(2.2, -1.6); }
+  fn(); ctx.restore();
+}
+function fadeEdges(gc, rect) {
+  const g2 = gc.getContext('2d'), fade = Math.min(90, rect.h * 0.15), gr = g2.createLinearGradient(0, rect.y, 0, rect.y + rect.h);
+  gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(fade / rect.h, 'rgba(0,0,0,1)');
+  gr.addColorStop(1 - fade / rect.h, 'rgba(0,0,0,1)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+  g2.globalCompositeOperation = 'destination-in'; g2.fillStyle = gr; g2.fillRect(0, rect.y, gc.width, rect.h);
+}
+/** Find a free spot for a label next to a point; returns the box or null. */
+function placeLabel(q, w, h, taken, free) {
+  const spots = [{ x: q.x + 16, y: q.y - h + 6 }, { x: q.x + 16, y: q.y - 4 }, { x: q.x - 16 - w, y: q.y - h + 6 }, { x: q.x - 16 - w, y: q.y - 4 },
+    { x: q.x - w / 2, y: q.y - 18 - h }, { x: q.x - w / 2, y: q.y + 16 }];
+  const spot = spots.map(s => ({ ...s, w, h })).find(r => free(r) && !taken.some(o => r.x < o.x + o.w && r.x + r.w > o.x && r.y < o.y + o.h && r.y + r.h > o.y));
+  if (spot) taken.push(spot);
+  return spot;
+}
+
+/** Points the map frames: every stop and stay, the flights, and home when it's on. */
+function rangeMapPoints(R, p) {
+  const pts = [...R.trips.flatMap(x => x.pts.length ? x.pts : x.c ? [x.c] : []), ...R.flights.flatMap(f => [f.a, f.b])];
+  if (R.home && p.homeOnMap !== false) pts.push(R.home);
+  return pts;
+}
+
+function drawRangeMap(ctx, R, p, ground, rect, L, story, W) {
+  const pts = rangeMapPoints(R, p);
+  if (!pts.length) return false;
+  const cut = rangeCut(pts.map(q => q.lng));
+  const wl = l => cut === null ? l : (l < cut ? l + 360 : l);
+  const base = projector(geoBounds(pts.map(q => ({ lat: q.lat, lng: wl(((+q.lng + 540) % 360) - 180) }))), rect, 0.08);
+  const P = q => base({ lat: q.lat, lng: wl(((+q.lng + 540) % 360) - 180) });
+  P.metersPerPx = base.metersPerPx; P.inv = base.inv;
+  const scale = groundScale(pts), mpp = base.metersPerPx;
+  const far = mpp > 1500, mid = !far && mpp > 120;     // world / country, region, city
+  ctx.save(); ctx.beginPath(); ctx.rect(0, rect.y, W, rect.h); ctx.clip();
+  // ground
+  if (p.ground !== 'none' && ground) {
+    const gc = document.createElement('canvas'); gc.width = ctx.canvas.width; gc.height = ctx.canvas.height;
+    const g2 = gc.getContext('2d');
+    if (scale === 'country' && ground.world) drawWorldShifted(g2, base, rect, ground.world, L, far ? 0.75 : 1);
+    else if (scale !== 'country') drawGround(g2, P, rect, ground, L, scale);
+    fadeEdges(gc, rect); ctx.drawImage(gc, 0, 0);
+  }
+  const lw = far ? 1.7 : mid ? 2.3 : (story ? 3.2 : 2.8);
+  // flights: long dashes along a bow
+  ctx.strokeStyle = L.ink; ctx.lineWidth = Math.max(1.6, lw * 0.85); ctx.lineCap = 'round'; ctx.setLineDash([7, 7]); ctx.globalAlpha = .7;
+  const ends = new Map();
+  R.flights.forEach(f => {
+    const a = { lat: f.a.lat, lng: wl(((f.a.lng + 540) % 360) - 180) }, b = { lat: f.b.lat, lng: wl(((f.b.lng + 540) % 360) - 180) };
+    if (b.lng - a.lng > 180) b.lng -= 360; else if (a.lng - b.lng > 180) b.lng += 360;
+    ctx.beginPath(); flightArc([a.lat, a.lng], [b.lat, b.lng]).forEach(([la, ln], j) => { const q = base({ lat: la, lng: ln }); j ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); });
+    ctx.stroke();
+    [[f.a, f.from], [f.b, f.to]].forEach(([e, code]) => { if (code) ends.set(code, e); });
+  });
+  ctx.setLineDash([]); ctx.globalAlpha = 1;
+  // no flights at all: the trips joined in order by a dotted line (from home and back, when home is on)
+  if (!R.flights.length) {
+    const chain = R.trips.filter(x => x.c).map(x => x.c);
+    if (R.home && p.homeOnMap !== false && chain.length) { chain.unshift(R.home); chain.push(R.home); }
+    ctx.strokeStyle = L.ink; ctx.lineWidth = Math.max(1.6, lw * 0.85); ctx.setLineDash([1, 9]); ctx.globalAlpha = .7;
+    chain.forEach((b, k) => { if (!k) return; const A = P(chain[k - 1]), Bq = P(b), dx = Bq.x - A.x, dy = Bq.y - A.y, len = Math.hypot(dx, dy);
+      if (len < 30) return; const bow = Math.min(len * 0.18, 120);
+      ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.quadraticCurveTo((A.x + Bq.x) / 2 - dy / len * bow, (A.y + Bq.y) / 2 + dx / len * bow, Bq.x, Bq.y); ctx.stroke(); });
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+  // each trip's days, then its stays and stops
+  R.trips.forEach(x => drawTracks(ctx, x.data.tracks, P, L, lw, !mid && !far));
+  const sq = far ? 4 : mid ? 5.5 : 7, dot = far ? 2.6 : mid ? 3.4 : 5;
+  R.trips.forEach(x => {
+    x.homes.forEach(h => { const q = P(h); ctx.fillStyle = L.paper; ctx.strokeStyle = L.ink; ctx.lineWidth = far ? 1.6 : 2.2;
+      ctx.fillRect(q.x - sq, q.y - sq, sq * 2, sq * 2); ctx.strokeRect(q.x - sq, q.y - sq, sq * 2, sq * 2); });
+    x.stops.forEach(s => { if (s.mark) return; const q = P(s); ctx.beginPath();
+      if (s.found && !far) { ctx.arc(q.x, q.y, dot + 1.5, 0, Math.PI * 2); ctx.fillStyle = L.paper; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = L.ink; ctx.stroke(); }
+      else { ctx.arc(q.x, q.y, dot, 0, Math.PI * 2); ctx.fillStyle = L.ink; ctx.fill(); } });
+    if (!x.pts.length && x.c) { const q = P(x.c); ctx.beginPath(); ctx.arc(q.x, q.y, dot + 2, 0, Math.PI * 2); ctx.lineWidth = 2; ctx.strokeStyle = L.ink; ctx.stroke(); }
+  });
+  // airports: a small tick
+  ends.forEach(e => { const q = P(e); ctx.beginPath(); ctx.arc(q.x, q.y, 3, 0, Math.PI * 2); ctx.fillStyle = L.ink; ctx.fill(); });
+  // home: a small diamond
+  if (R.home && p.homeOnMap !== false) { const q = P(R.home); ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = L.ink; ctx.fillRect(-6, -6, 12, 12); ctx.restore(); }
+  // scale bar, when the distances on paper still mean something
+  if (!far) {
+    const nice = [50, 100, 200, 250, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000];
+    const len = nice.reduce((a, b) => Math.abs(b - mpp * 150) < Math.abs(a - mpp * 150) ? b : a), px = len / mpp, sy = rect.y + rect.h - 6, M = rect.x + 10;
+    ctx.strokeStyle = L.ink; ctx.lineWidth = 2; ctx.beginPath();
+    ctx.moveTo(M, sy - 8); ctx.lineTo(M, sy); ctx.lineTo(M + px, sy); ctx.lineTo(M + px, sy - 8); ctx.stroke();
+    ctx.fillStyle = L.ink; ctx.font = `400 25px ${PF}`; ctx.fillText(len >= 1000 ? `${len / 1000} km` : `${len} m`, M + px + 12, sy + 1);
+  }
+  ctx.restore();
+  // colour layer: loved places
+  inColor(ctx, L, () => { ctx.fillStyle = L.accent;
+    R.trips.forEach(x => x.stops.filter(s => s.mark).forEach(s => { const q = P(s); ctx.beginPath(); ctx.arc(q.x, q.y, far ? 4.5 : mid ? 6 : 8.5, 0, Math.PI * 2); ctx.fill(); })); });
+  // labels: trip names first (italic, like the hand labels), then loved places when the map is close enough, then airport codes
+  const taken = [{ x: rect.x, y: rect.y + rect.h - 40, w: 260, h: 40 }];
+  R.trips.forEach(x => [...x.stops, ...x.homes].forEach(s => { const q = P(s); taken.push({ x: q.x - 6, y: q.y - 6, w: 12, h: 12 }); }));
+  const free = r => r.x > 8 && r.x + r.w < W - 8 && r.y > rect.y - 6 && r.y + r.h < rect.y + rect.h - 4;
+  const big = `italic 400 ${story ? 36 : 33}px ${PF}`, small = `italic 400 ${story ? 27 : 25}px ${PF}`;
+  const sameSpot = new Map();
+  R.trips.filter(x => x.c).forEach(x => { const q = P(x.c), k = `${Math.round(q.x / 60)},${Math.round(q.y / 60)}`; (sameSpot.get(k) || sameSpot.set(k, []).get(k)).push(x); });
+  sameSpot.forEach(list => {
+    // trips in the same place share one label: "Tokyo, twice" or "Tokyo · Kyoto"
+    const names = [...new Set(list.map(x => x.t.name))];
+    const text = names.length === 1 && list.length > 1 ? `${names[0]}, ${list.length === 2 ? 'twice' : numWord(list.length) + ' times'}` : names.join(' · ');
+    ctx.font = big; const w = ctx.measureText(text).width, q = P(avgPt(list.map(x => x.c)));
+    const spot = placeLabel(q, w, story ? 40 : 37, taken, free);
+    if (!spot) return;
+    ctx.save(); ctx.fillStyle = L.ink; ctx.textAlign = spot.x + w / 2 < q.x - 10 ? 'right' : 'left';
+    ctx.fillText(text, ctx.textAlign === 'right' ? spot.x + w : spot.x, spot.y + spot.h - 10); ctx.restore();
+  });
+  if (!far) {
+    let n = 0;
+    R.trips.flatMap(x => x.stops.filter(s => s.mark)).forEach(s => {
+      if (n >= (mid ? 4 : 8) || !s.title) return;
+      ctx.font = small; const w = ctx.measureText(s.title).width, q = P(s), spot = placeLabel(q, w, 30, taken, free);
+      if (!spot) return; n++;
+      inColor(ctx, L, () => { ctx.fillStyle = L.overprint ? L.accent : L.ink; ctx.font = small; ctx.textAlign = spot.x + w / 2 < q.x - 10 ? 'right' : 'left';
+        ctx.fillText(s.title, ctx.textAlign === 'right' ? spot.x + w : spot.x, spot.y + 21); });
+    });
+  }
+  ctx.save(); ctx.font = `400 ${story ? 23 : 21}px ${PF}`; setSpacing(ctx, 1.4); ctx.fillStyle = L.ink; ctx.globalAlpha = 0.55;
+  const homeQ = R.home && p.homeOnMap !== false ? P(R.home) : null;
+  if (homeQ) { const w = ctx.measureText('HOME').width, spot = placeLabel(homeQ, w, 26, taken, free); if (spot) ctx.fillText('HOME', spot.x, spot.y + 20); }
+  ends.forEach((e, code) => { if (homeQ && meters(e, R.home) < 60000) return; const q = P(e), w = ctx.measureText(code).width, spot = placeLabel(q, w, 26, taken, free); if (spot) ctx.fillText(code, spot.x, spot.y + 20); });
+  ctx.restore(); setSpacing(ctx, 0);
+  if (p.ground !== 'none' && ground && scale !== 'country') drawPlaceNames(ctx, P, ground, scale, rect, taken, L, story, Math.min(90, rect.h * 0.15));
+  return true;
+}
+
+/** Big numerals, two to a row, then the trips as a track list if there's room. */
+function drawRangeNumbers(ctx, R, rect, L, story) {
+  const nums = rangeNumbers(R).slice(0, story ? 8 : 6);
+  const colW = rect.w / 2, numSize = story ? 148 : 124, labSize = story ? 30 : 27;
+  const cellH = Math.round(numSize * 0.78 + labSize * 1.5 + 44);
+  const rowsFit = Math.max(1, Math.floor(rect.h / cellH));
+  const shown = nums.slice(0, rowsFit * 2), rows = Math.ceil(shown.length / 2);
+  const listRoom = rect.h - rows * cellH - 16;
+  const tl = Math.min(R.trips.length, Math.floor((listRoom - 20) / Math.round((story ? 30 : 27) * 1.6)));
+  // centre the block when the track list isn't coming
+  const y0 = rect.y + (tl >= 2 ? 0 : Math.max(0, (rect.h - rows * cellH) / 2 - 10));
+  shown.forEach((n, i) => {
+    const x = rect.x + (i % 2) * colW, y = y0 + Math.floor(i / 2) * cellH;
+    ctx.strokeStyle = L.faint; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, y + 0.5); ctx.lineTo(x + colW - 34, y + 0.5); ctx.stroke();
+    const draw = () => { ctx.font = `600 ${numSize}px ${PF}`; setSpacing(ctx, -numSize * 0.035); if ('fontVariantNumeric' in ctx) ctx.fontVariantNumeric = 'tabular-nums';
+      ctx.fillText(n.v.toLocaleString('en-US'), x - 5, y + 18 + numSize * 0.78); setSpacing(ctx, 0); };
+    if (n.mark) inColor(ctx, L, () => { ctx.fillStyle = L.accent; draw(); });
+    else { ctx.fillStyle = L.ink; draw(); }
+    ctx.fillStyle = L.ink; ctx.globalAlpha = 0.62; ctx.font = `400 ${labSize}px ${PF}`;
+    ctx.fillText(n.label, x, y + 18 + numSize * 0.78 + labSize * 1.45); ctx.globalAlpha = 1;
+  });
+  if (tl >= 2) drawTracklist(ctx, R, { x: rect.x, y: y0 + rows * cellH + 16, w: rect.w, h: listRoom }, L, story, false);
+}
+/** The trips, set like a record's track list: number, name, dates. Trips still to come are in italic. */
+function drawTracklist(ctx, R, rect, L, story, big) {
+  const size = big ? (story ? 42 : 38) : (story ? 30 : 27), lh = Math.round(size * (big ? 1.7 : 1.6));
+  const fit = Math.max(1, Math.floor(rect.h / lh)), list = R.trips;
+  const shown = list.length > fit ? list.slice(0, fit - 1) : list;
+  const numW = size * 1.9;
+  ctx.strokeStyle = L.faint; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(rect.x, rect.y + 0.5); ctx.lineTo(rect.x + rect.w, rect.y + 0.5); ctx.stroke();
+  shown.forEach((x, i) => {
+    const y = rect.y + (i + 1) * lh - lh * 0.32;
+    if ('fontVariantNumeric' in ctx) ctx.fontVariantNumeric = 'tabular-nums';
+    ctx.fillStyle = L.ink; ctx.globalAlpha = 0.62; ctx.font = `400 ${size}px ${PF}`; ctx.textAlign = 'left';
+    ctx.fillText(String(x.n).padStart(2, '0'), rect.x, y);
+    const dates = shortRange(x.first, x.last); ctx.textAlign = 'right'; ctx.fillText(dates, rect.x + rect.w, y);
+    const dw = ctx.measureText(dates).width; ctx.textAlign = 'left'; ctx.globalAlpha = 1;
+    ctx.font = x.lived || !R.lived ? `500 ${size}px ${PF}` : `italic 400 ${size}px ${PF}`;
+    let name = x.t.name || 'Trip'; const room = rect.w - numW - dw - 30;
+    while (name.length > 3 && ctx.measureText(name).width > room) name = name.slice(0, -2).trim() + '…';
+    ctx.fillText(name, rect.x + numW, y);
+  });
+  if (shown.length < list.length) { ctx.globalAlpha = 0.62; ctx.font = `italic 400 ${size}px ${PF}`; ctx.fillText(`and ${numWord(list.length - shown.length)} more`, rect.x + numW, rect.y + (shown.length + 1) * lh - lh * 0.32); ctx.globalAlpha = 1; }
+  ctx.textAlign = 'left';
+}
+
+/** One row per month, one stroke per day (the trip poster's score, laid out like a calendar). */
+function drawRangeCalendar(ctx, R, rect, L, story) {
+  const months = [];
+  let d = parseDate(R.from); d = new Date(d.getFullYear(), d.getMonth(), 1);
+  const end = parseDate(R.to);
+  while (d <= end && months.length < 24) { months.push({ y: d.getFullYear(), m: d.getMonth() }); d = new Date(d.getFullYear(), d.getMonth() + 1, 1); }
+  const rows = months.length, rowH = rect.h / rows, labW = story ? 108 : 98, colW = (rect.w - labW) / 31;
+  const multiYear = months[0].y !== months[rows - 1].y;
+  const maxN = Math.max(1, ...Object.values(R.byDay).map(o => o.n));
+  const sw = Math.max(2, Math.min(9, colW * 0.42)), strokeMax = Math.min(rowH * 0.5, 70);
+  const xOf = day => rect.x + labW + (day - 0.5) * colW;
+  const labels = [], marks = [];
+  months.forEach((mo, r) => {
+    const top = rect.y + r * rowH, base = Math.round(top + rowH * 0.7) + 0.5;
+    const nDays = new Date(mo.y, mo.m + 1, 0).getDate();
+    ctx.fillStyle = L.ink; ctx.font = `500 ${story ? 27 : 25}px ${PF}`; ctx.textAlign = 'left';
+    ctx.fillText(MON[mo.m], rect.x, base);
+    if (r === 0 || (mo.m === 0 && multiYear)) { ctx.globalAlpha = 0.62; ctx.font = `400 ${story ? 21 : 19}px ${PF}`; ctx.fillText(String(mo.y), rect.x, base + (story ? 25 : 23)); ctx.globalAlpha = 1; }
+    const inR = []; for (let day = 1; day <= nDays; day++) { const ds = ymd(new Date(mo.y, mo.m, day)); if (ds >= R.from && ds <= R.to) inR.push([day, ds]); }
+    if (!inR.length) return;
+    ctx.strokeStyle = L.faint; ctx.lineWidth = 1.2; ctx.beginPath();
+    ctx.moveTo(xOf(inR[0][0]) - colW * 0.45, base); ctx.lineTo(xOf(inR[inR.length - 1][0]) + colW * 0.45, base); ctx.stroke();
+    let run = null; const runs = [];
+    const close = () => { if (run) runs.push(run); run = null; };
+    inR.forEach(([day, ds]) => {
+      const o = R.byDay[ds];
+      if (!o) { close(); return; }
+      if (!run || run.x !== o.trip) { close(); run = { x: o.trip, a: day, b: day, plan: o.plan }; } else run.b = day;
+      const xc = xOf(day);
+      ctx.globalAlpha = o.plan ? 0.38 : 1; ctx.fillStyle = L.ink;
+      if (o.n) {
+        const h = 5 + (strokeMax - 5) * o.n / maxN, hl = o.marks ? (h - 5) * o.marks / o.n + (o.marks === o.n ? 5 : 0) : 0;
+        ctx.fillRect(xc - sw / 2, base - h + hl, sw, h - hl);
+        if (o.marks) marks.push({ x: xc - sw / 2, y: base - h, w: sw, h: hl, a: o.plan ? 0.38 : 1 });
+      } else { ctx.beginPath(); ctx.arc(xc, base - 4, 2.3, 0, Math.PI * 2); ctx.fill(); }
+      ctx.globalAlpha = 1;
+    });
+    close();
+    runs.forEach(rn => { ctx.globalAlpha = rn.plan ? 0.38 : 1; ctx.fillStyle = L.ink; ctx.fillRect(xOf(rn.a) - colW * 0.45, base + 5, (rn.b - rn.a + 1) * colW - colW * 0.1, 3); ctx.globalAlpha = 1; });
+    runs.forEach((rn, k) => labels.push({ rn, base, top, prev: runs[k - 1], next: runs[k + 1], rowEnd: rect.x + rect.w }));
+  });
+  inColor(ctx, L, () => { ctx.fillStyle = L.accent; marks.forEach(m => { ctx.globalAlpha = m.a; ctx.fillRect(m.x, m.y, m.w, m.h); }); ctx.globalAlpha = 1; });
+  // each trip named once, beside its first run: to the right if the row is free there, else to the left, else under the bar
+  const named = new Set(), font = `italic 400 ${story ? 27 : 25}px ${PF}`;
+  ctx.font = font;
+  labels.forEach(({ rn, base, top, prev, next, rowEnd }) => {
+    if (named.has(rn.x.t.id)) return;
+    const text = rn.x.t.name || 'Trip', w = ctx.measureText(text).width;
+    const rx = xOf(rn.b) + colW * 0.6 + 4, lx = xOf(rn.a) - colW * 0.6 - 4 - w;
+    let x = null, y = base - 6;
+    if (rx + w <= (next ? xOf(next.a) - colW : rowEnd)) x = rx;
+    else if (lx >= (prev ? xOf(prev.b) + colW : rect.x + labW)) x = lx;
+    else if (top + rowH - (base + 8) >= 24) { x = Math.min(xOf(rn.a) - colW * 0.45, rowEnd - w); y = base + 30; }
+    if (x === null) return;
+    named.add(rn.x.t.id);
+    ctx.fillStyle = L.ink; ctx.globalAlpha = rn.plan ? 0.6 : 0.92; ctx.fillText(text, x, y); ctx.globalAlpha = 1;
+  });
+}
+
+/** A contact sheet: each trip's own drawing in a frame, captioned with its number, name and dates. */
+function drawRangeSheet(ctx, R, rect, L, story) {
+  const list = R.trips, n = list.length;
+  const cols = n <= 1 ? 1 : n <= 4 ? 2 : 3, gap = 26, capH = story ? 76 : 70;
+  const maxRows = Math.max(1, Math.floor((rect.h + gap) / ((cols === 3 ? 190 : 240) + gap)));
+  const rows = Math.min(maxRows, Math.ceil(n / cols)), cells = rows * cols;
+  const shown = n > cells ? list.slice(0, cells - 1) : list;
+  const cw = (rect.w - gap * (cols - 1)) / cols, ch = (rect.h - gap * (rows - 1)) / rows;
+  shown.forEach((x, i) => {
+    const cx = rect.x + (i % cols) * (cw + gap), cy = rect.y + Math.floor(i / cols) * (ch + gap);
+    const area = { x: cx, y: cy, w: cw, h: ch - capH };
+    ctx.strokeStyle = L.faint; ctx.lineWidth = 1.5; ctx.strokeRect(area.x + 0.5, area.y + 0.5, area.w - 1, area.h - 1);
+    drawMiniTrip(ctx, x, { x: area.x + 6, y: area.y + 6, w: area.w - 12, h: area.h - 12 }, L, cols === 3 ? 1.8 : 2.3);
+    const fs = cols === 3 ? 25 : 28, y1 = area.y + area.h + fs + 12;
+    ctx.fillStyle = L.ink; ctx.globalAlpha = 0.62; ctx.font = `400 ${fs - 3}px ${PF}`; if ('fontVariantNumeric' in ctx) ctx.fontVariantNumeric = 'tabular-nums';
+    const num = String(x.n).padStart(2, '0'); ctx.fillText(num, cx, y1);
+    const nw = ctx.measureText(num).width + 12; ctx.globalAlpha = 1;
+    ctx.font = x.lived || !R.lived ? `600 ${fs}px ${PF}` : `italic 400 ${fs}px ${PF}`;
+    let name = x.t.name || 'Trip'; while (name.length > 3 && ctx.measureText(name).width > cw - nw) name = name.slice(0, -2).trim() + '…';
+    ctx.fillText(name, cx + nw, y1);
+    ctx.globalAlpha = 0.62; ctx.font = `400 ${fs - 4}px ${PF}`; ctx.fillText(shortRange(x.first, x.last) + (x.upcoming ? ' · to come' : ''), cx + nw, y1 + fs + 2); ctx.globalAlpha = 1;
+  });
+  if (shown.length < n) {
+    const i = shown.length, cx = rect.x + (i % cols) * (cw + gap), cy = rect.y + Math.floor(i / cols) * (ch + gap);
+    ctx.fillStyle = L.ink; ctx.globalAlpha = 0.62; ctx.font = `italic 400 ${story ? 32 : 30}px ${PF}`; ctx.textAlign = 'center';
+    ctx.fillText(`and ${numWord(n - shown.length)} more`, cx + cw / 2, cy + (ch - capH) / 2); ctx.textAlign = 'left'; ctx.globalAlpha = 1;
+  }
+}
+/** A trip's drawing at thumbnail size, framed the way its own poster is (Up close or Whole trip). */
+function drawMiniTrip(ctx, x, rect, L, lw) {
+  const f = posterFrame(x.data, posterPrefs(x.t.id));
+  if (!f.framePts.length) {
+    ctx.fillStyle = L.faint; ctx.font = `italic 400 24px ${PF}`; ctx.textAlign = 'center';
+    ctx.fillText('Nothing placed yet', rect.x + rect.w / 2, rect.y + rect.h / 2 + 8); ctx.textAlign = 'left'; return;
+  }
+  const P = projector(geoBounds(f.framePts), rect, 0.12);
+  ctx.save(); ctx.beginPath(); ctx.rect(rect.x, rect.y, rect.w, rect.h); ctx.clip();
+  ctx.globalAlpha = x.lived || !x.upcoming ? 1 : 0.85;
+  ctx.fillStyle = L.faint; x.data.unvisited.forEach(p => { const q = P(p); ctx.beginPath(); ctx.arc(q.x, q.y, 2, 0, Math.PI * 2); ctx.fill(); });
+  drawTracks(ctx, x.data.tracks, P, L, lw, true);
+  x.homes.forEach(h => { const q = P(h); ctx.fillStyle = L.paper; ctx.strokeStyle = L.ink; ctx.lineWidth = 1.8; ctx.fillRect(q.x - 5, q.y - 5, 10, 10); ctx.strokeRect(q.x - 5, q.y - 5, 10, 10); });
+  x.stops.forEach(s => { if (s.mark) return; const q = P(s); ctx.beginPath();
+    if (s.found) { ctx.arc(q.x, q.y, 4.6, 0, Math.PI * 2); ctx.fillStyle = L.paper; ctx.fill(); ctx.lineWidth = 1.8; ctx.strokeStyle = L.ink; ctx.stroke(); }
+    else { ctx.arc(q.x, q.y, 3.5, 0, Math.PI * 2); ctx.fillStyle = L.ink; ctx.fill(); } });
+  ctx.restore();
+  inColor(ctx, L, () => { ctx.fillStyle = L.accent; x.stops.filter(s => s.mark).forEach(s => { const q = P(s);
+    if (q.x < rect.x || q.x > rect.x + rect.w || q.y < rect.y || q.y > rect.y + rect.h) return;
+    ctx.beginPath(); ctx.arc(q.x, q.y, 6.5, 0, Math.PI * 2); ctx.fill(); }); });
+}
+
+/** The day strip under the title for a whole stretch: one stroke per day, plans faint. */
+function drawRangeStrip(ctx, R, L, M, CW, top, base, W) {
+  const N = R.dayList.length; if (!N) return;
+  const step = CW / N, sw = Math.max(1, Math.min(7, step * 0.5)), maxN = Math.max(1, ...Object.values(R.byDay).map(o => o.n));
+  ctx.strokeStyle = L.faint; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(M, base + 0.5); ctx.lineTo(M + CW, base + 0.5); ctx.stroke();
+  const hOf = n => 6 + (base - top - 6) * (n / maxN);
+  ctx.fillStyle = L.ink;
+  R.dayList.forEach((d, i) => { const o = R.byDay[d]; if (!o) return; const x = M + step * i + step / 2;
+    ctx.globalAlpha = o.plan ? 0.35 : 1;
+    if (o.n) { const h = hOf(o.n), hl = o.marks ? (h - 6) * o.marks / o.n + (o.marks === o.n ? 6 : 0) : 0; ctx.fillRect(x - sw / 2, base - h + hl, sw, h - hl); }
+    else { ctx.beginPath(); ctx.arc(x, base - 3, Math.min(1.8, sw), 0, Math.PI * 2); ctx.fill(); } });
+  ctx.globalAlpha = 1;
+  inColor(ctx, L, () => { ctx.fillStyle = L.accent;
+    R.dayList.forEach((d, i) => { const o = R.byDay[d]; if (!o || !o.marks) return; const x = M + step * i + step / 2, h = hOf(o.n);
+      ctx.globalAlpha = o.plan ? 0.35 : 1; ctx.fillRect(x - sw / 2, base - h, sw, (h - 6) * o.marks / o.n + (o.marks === o.n ? 6 : 0)); }); });
+  // month names along the bottom (the year too, where a new one starts)
+  ctx.fillStyle = L.ink; ctx.font = `400 ${N > 62 ? 22 : 24}px ${PF}`;
+  let lastM = -1, lastX = -999;
+  const multiYear = R.from.slice(0, 4) !== R.to.slice(0, 4);
+  R.dayList.forEach((d, i) => { const dt = parseDate(d), x = M + step * i;
+    if (dt.getMonth() !== lastM) {
+      const label = N > 62 ? MON[dt.getMonth()] + (multiYear && dt.getMonth() === 0 ? ' ' + dt.getFullYear() : '') : MON[dt.getMonth()] + ' ' + dt.getDate();
+      const w = ctx.measureText(label).width;
+      if (x - lastX > (N > 62 ? 14 : 80) && x + w < W - M + 4) { ctx.fillText(label, x, base + 29); lastX = x + w; }
+    }
+    lastM = dt.getMonth(); });
+}
+
+/** The whole range poster: top line, the style's drawing, title, day strip, own line, credits, grain. */
+function drawRangePoster(canvas, R, p, ground, credits, style, opts = {}) {
+  style = style || p.style;
+  const [W, H] = POSTER_SIZES[p.size] || POSTER_SIZES.post;
+  const L = POSTER_LOOKS[p.look] || POSTER_LOOKS.fog, story = p.size === 'story';
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const M = 76, CW = W - 2 * M;
+  ctx.fillStyle = L.paper; ctx.fillRect(0, 0, W, H); ctx.textBaseline = 'alphabetic';
+  const titleSize = story ? 104 : 92;
+  ctx.font = `600 ${titleSize}px ${PF}`; setSpacing(ctx, -titleSize * 0.03);
+  const titleLines = wrapText(ctx, R.title, CW).slice(0, 3); setSpacing(ctx, 0);
+  const noteSize = story ? 30 : 27, noteLH = Math.round(noteSize * 1.42);
+  ctx.font = `400 ${noteSize}px ${PF}`;
+  const shown = opts.noCredits ? [] : (credits || []).filter(c => c.on).slice(0, story ? 8 : 6);
+  const labelW = Math.min(360, Math.max(0, ...shown.map(c => ctx.measureText(c.label).width)) + 34);
+  ctx.font = `500 ${noteSize}px ${PF}`;
+  const rows = shown.map(c => ({ label: c.label, lines: wrapText(ctx, c.value, CW - labelW).slice(0, 2) }));
+  const creditsH = rows.reduce((h, r) => h + r.lines.length * noteLH + 6, 0);
+  const lineSize = noteSize + 4;
+  ctx.font = `italic 400 ${lineSize}px ${PF}`;
+  const ownLines = p.line && !opts.noCredits ? wrapText(ctx, p.line, Math.min(CW, 900)).slice(0, 3) : [];
+  const strip = style !== 'calendar', stripH = 84;
+  const bottomH = titleLines.length * titleSize + 26 + (strip ? stripH + 58 : 30) +
+    (ownLines.length ? ownLines.length * Math.round(lineSize * 1.35) + (rows.length ? 22 : 0) : 0) + creditsH;
+  const topY = M + 4;
+  const body = { x: M, y: topY + 64, w: CW, h: H - M - bottomH - (topY + 64) - 44 };
+
+  // top line: the dates left, how many trips right
+  ctx.fillStyle = L.ink; ctx.font = `500 ${story ? 34 : 31}px ${PF}`; ctx.textAlign = 'left';
+  const dates = longRange(R.from, R.to); ctx.fillText(dates, M, topY + 26);
+  const dw = ctx.measureText(dates).width;
+  ctx.font = `400 ${story ? 34 : 31}px ${PF}`; ctx.textAlign = 'right';
+  let cl = R.countLine; if (ctx.measureText(cl).width + dw + 40 > CW) cl = cl.split(',')[0];
+  if (ctx.measureText(cl).width + dw + 40 <= CW) ctx.fillText(cl, W - M, topY + 26);
+  ctx.textAlign = 'left';
+
+  if (!R.trips.length) {
+    ctx.fillStyle = L.faint; ctx.font = `italic 400 30px ${PF}`; ctx.textAlign = 'center';
+    ctx.fillText('No trips in these dates.', W / 2, body.y + body.h / 2); ctx.textAlign = 'left';
+  } else if (style === 'map') {
+    if (!drawRangeMap(ctx, R, p, ground, { x: M - 10, y: body.y, w: CW + 20, h: body.h }, L, story, W)) {
+      ctx.fillStyle = L.faint; ctx.font = `italic 400 30px ${PF}`; ctx.textAlign = 'center';
+      ctx.fillText('Nothing with a location yet.', W / 2, body.y + body.h / 2); ctx.textAlign = 'left';
+    }
+  } else if (style === 'numbers') drawRangeNumbers(ctx, R, body, L, story);
+  else if (style === 'calendar') drawRangeCalendar(ctx, R, body, L, story);
+  else if (style === 'sheet') drawRangeSheet(ctx, R, body, L, story);
+  else if (style === 'tracks') drawTracklist(ctx, R, body, L, story, true);
+
+  // title
+  let y = H - M - bottomH + titleSize * 0.82;
+  ctx.fillStyle = L.ink; ctx.font = `600 ${titleSize}px ${PF}`; setSpacing(ctx, -titleSize * 0.03);
+  titleLines.forEach((ln, i) => ctx.fillText(ln, M - 4, y + i * titleSize));
+  setSpacing(ctx, 0);
+  y += (titleLines.length - 1) * titleSize + 26;
+  if (strip) { drawRangeStrip(ctx, R, L, M, CW, y + 6, y + stripH - 26, W); y += stripH + 58; } else y += 30;
+  ctx.fillStyle = L.ink;
+  if (ownLines.length) {
+    ctx.font = `italic 400 ${lineSize}px ${PF}`;
+    ownLines.forEach((ln, i) => ctx.fillText(ln, M, y + i * Math.round(lineSize * 1.35)));
+    y += ownLines.length * Math.round(lineSize * 1.35) + 22;
+  }
+  rows.forEach(r => {
+    ctx.globalAlpha = 0.62; ctx.font = `400 ${noteSize}px ${PF}`; ctx.fillText(r.label, M, y);
+    ctx.globalAlpha = 1; ctx.font = `500 ${noteSize}px ${PF}`;
+    r.lines.forEach((ln, i) => ctx.fillText(ln, M + labelW, y + i * noteLH));
+    y += r.lines.length * noteLH + 6;
+  });
+  ctx.globalAlpha = 1;
+  paperGrain(ctx, W, H, L);
+}
+
+/* ---- ground fetching shared by the range screen ---- */
+function fetchGroundInto(ground, framePts, pref, onDone, skipCountryNames) {
+  if (pref === 'none' || !framePts.length) return;
+  const want = ground._want ||= new Set();
+  if (!ground.world && !want.has('world')) { want.add('world'); loadWorld().then(w => { if (w) { ground.world = w; onDone(); } else want.delete('world'); }); }
+  const scale = groundScale(framePts);
+  if (scale === 'country' && skipCountryNames) return;
+  const roads = pref === 'roads', box = roundBox(geoBounds(framePts), 0.35), key = JSON.stringify([box, scale, roads]);
+  if (ground.osmKey !== key && !want.has(key)) {
+    want.add(key);
+    loadOSM(box, scale, roads).then(o => { want.delete(key); if (o) { Object.assign(ground, { osm: o, osmScale: scale, osmKey: key }); onDone(); } });
+  }
+}
+const slugName = s => String(s || 'poster').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'poster';
+async function shareFiles(files) {
+  if (!files.length) return toast('Couldn’t make the images');
+  if (navigator.canShare && navigator.canShare({ files })) {
+    try { await navigator.share({ files }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  files.forEach((f, i) => setTimeout(() => {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name;
+    document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }, i * 400));
+  toast(files.length === 1 ? 'Saved ' + files[0].name : `Saved ${files.length} images`);
+}
+const carouselOn = (p, key) => p.skip && key in p.skip ? !p.skip[key] : !/^(calendar|sheet)$/.test(key);
+
+function rangeView() {
+  const p = rangePrefs(), B = rangeBounds(p), R = rangeData(B, p), ch = rangeChoices();
+  const cur = p.when || 'last12';
+  const opt = (v, l) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`;
+  const whenSelect = `<select id="rg-when">${opt('last12', 'The last 12 months')}
+    <optgroup label="A year">${ch.years.map(y => opt(y.v, y.label)).join('')}</optgroup>
+    ${ch.seasons.length ? `<optgroup label="A season">${ch.seasons.map(s => opt(s.v, s.label)).join('')}</optgroup>` : ''}
+    <optgroup label="Dates">${opt('dates', 'Pick dates…')}</optgroup>
+    ${(p.saved || []).length ? `<optgroup label="Saved">${p.saved.map(s => opt('saved:' + s.id, s.name)).join('')}</optgroup>` : ''}</select>`;
+  const seg = (key, opts) => `<div class="seg" data-rpref="${key}">${opts.map(([k, l]) => `<button data-v="${k}" class="${p[key] === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+  const carousel = p.style === 'carousel';
+  const savedId = cur.startsWith('saved:') ? cur.slice(6) : '';
+  const tripRows = R.inRange.map(t => { const d = tripDays(t);
+    return `<label class="check"><input type="checkbox" data-rtrip="${esc(t.id)}" ${p.exclude && p.exclude[t.id] ? '' : 'checked'}><span>${esc(t.name)}<small>${esc(fmtRange(d[0], d[d.length - 1]))}</small></span></label>`; }).join('');
+  const usesMap = p.style === 'map' || carousel;
+  return `<header class="top"><button class="iconbtn" data-go="#/" aria-label="Back">${I.back}</button><h1>Look back</h1>${syncBadge()}</header>
+  <main class="recap range">
+    ${carousel ? `<div class="carousel" id="rg-slides"></div><p class="hint recap-hint">Swipe through. Untick any you don’t want in the post.</p>`
+      : `<div class="poster-frame ${p.size}"><canvas id="rg-poster" aria-label="Poster for ${esc(B.title)}"></canvas></div>`}
+    ${R.trips.length && !R.lived ? `<p class="hint recap-hint">Nothing’s logged in these dates yet, so this is drawn from your plans.</p>` : ''}
+    <div class="field"><label for="rg-when">When</label>${whenSelect}</div>
+    <div class="two" id="rg-dates" ${cur === 'dates' ? '' : 'hidden'}>
+      <div class="field"><label for="rg-from">From</label><input type="date" id="rg-from" value="${esc(B.from)}"></div>
+      <div class="field"><label for="rg-to">To</label><input type="date" id="rg-to" value="${esc(B.to)}"></div>
+    </div>
+    <div class="field"><label for="rg-title">Title</label><div class="inline"><input id="rg-title" maxlength="60" value="${esc(p.name || '')}" placeholder="${esc(rangeBounds({ ...p, name: '' }).title)}" autocomplete="off"><button class="btn ghost small" id="rg-keep">${savedId ? 'Update' : 'Save'}</button></div></div>
+    ${(p.saved || []).length ? `<div class="slices">${p.saved.map(s => `<span class="slice ${s.id === savedId ? 'on' : ''}"><button data-rsaved="${esc(s.id)}">${esc(s.name)}</button><button data-runsave="${esc(s.id)}" aria-label="Remove ${esc(s.name)}">✕</button></span>`).join('')}</div>` : ''}
+    <div class="field"><label>Style</label></div>${seg('style', RANGE_STYLES)}
+    <div class="field"><label>Size</label></div>${seg('size', [['post', 'Post 4:5'], ['story', 'Story 9:16']])}
+    <div class="field"><label>Look</label></div>${seg('look', Object.entries(POSTER_LOOKS).map(([k, v]) => [k, v.name]))}
+    ${usesMap ? `<div class="field"><label>Ground</label></div>${seg('ground', [['none', 'None'], ['water', 'Water and names'], ['roads', 'Plus roads']])}` : ''}
+    ${R.inRange.length ? `<div class="field"><label>Trips</label></div><div class="credit-list">${tripRows}</div>` : ''}
+    <div class="field"><label>Home</label></div>
+    <div class="range-home">${R.home ? `<span>${esc(R.home.name)}</span><button class="linkbtn" id="rg-home">Change to here</button><button class="linkbtn" id="rg-nohome">Clear</button>`
+      : `<span class="hint" style="margin:0">Set it to show “Furthest from home” and where you set out from.</span><button class="btn ghost small" id="rg-home">I’m home now</button>`}</div>
+    ${R.home && usesMap ? `<label class="check"><input type="checkbox" id="rg-homemap" ${p.homeOnMap !== false ? 'checked' : ''}><span>Show home on the map</span></label>` : ''}
+    <div class="field" style="margin-top:14px"><label for="rg-line">Your own line (optional)</label><input id="rg-line" maxlength="140" value="${esc(p.line)}" placeholder="Something only you’d write" autocomplete="off"></div>
+    <div class="field"><label>Credits</label></div>
+    <p class="hint" style="margin:-2px 2px 6px">A post fits six, a story eight, in this order.${carousel ? ' In a carousel they go on the Numbers slide.' : ''}</p>
+    <div id="rg-credits" class="credit-list"></div>
+    <button class="btn" id="rg-save">${carousel ? 'Save images' : 'Save image'}</button>
+  </main>`;
+}
+
+function initRange() {
+  const p = rangePrefs();
+  const B = rangeBounds(p);
+  let R = rangeData(B, p);
+  const save = () => saveRangePrefs(p);
+  const rebuild = () => { save(); render(); };
+  const alive = () => document.body.contains(holder);
+  const holder = $('#rg-poster') || $('#rg-slides');
+  if (!holder) return;
+  const ground = {};
+  let credits = [];
+  // ---- when ----
+  $('#rg-when').onchange = e => {
+    const v = e.target.value;
+    if (v.startsWith('saved:')) { const s = (p.saved || []).find(x => x.id === v.slice(6)); if (s) Object.assign(p, { when: v, from: s.from, to: s.to, name: s.name }); }
+    else if (v === 'dates') Object.assign(p, { when: 'dates', from: B.from, to: B.to, name: '' });
+    else Object.assign(p, { when: v, name: '' });
+    rebuild();
+  };
+  ['#rg-from', '#rg-to'].forEach(sel => { const el = $(sel); if (el) el.onchange = () => { Object.assign(p, { from: $('#rg-from').value, to: $('#rg-to').value }); rebuild(); }; });
+  let tt;
+  $('#rg-title').oninput = e => { p.name = e.target.value; R.title = rangeBounds(p).title; clearTimeout(tt); tt = setTimeout(() => { save(); redraw(); }, 250); };
+  $('#rg-keep').onclick = () => {
+    const name = ($('#rg-title').value || '').trim();
+    if (!name) { $('#rg-title').focus(); return toast('Give it a name first'); }
+    const saved = (p.saved || []).slice(), id = p.when.startsWith('saved:') ? p.when.slice(6) : '', i = saved.findIndex(x => x.id === id);
+    const s = { id: i >= 0 ? id : uid('rg'), name, from: B.from, to: B.to };
+    if (i >= 0) saved[i] = s; else saved.push(s);
+    Object.assign(p, { saved, when: 'saved:' + s.id, from: s.from, to: s.to, name });
+    toast(i >= 0 ? 'Updated ' + name : 'Saved ' + name); rebuild();
+  };
+  $$('[data-rsaved]').forEach(b => b.onclick = () => { const s = p.saved.find(x => x.id === b.dataset.rsaved); if (s) { Object.assign(p, { when: 'saved:' + s.id, from: s.from, to: s.to, name: s.name }); rebuild(); } });
+  $$('[data-runsave]').forEach(b => b.onclick = () => { const id = b.dataset.runsave; p.saved = p.saved.filter(x => x.id !== id); if (p.when === 'saved:' + id) p.when = 'dates'; rebuild(); });
+  // ---- trips, home ----
+  $$('[data-rtrip]').forEach(cb => cb.onchange = () => { p.exclude = { ...(p.exclude || {}), [cb.dataset.rtrip]: !cb.checked }; rebuild(); });
+  const hb = $('#rg-home');
+  if (hb) hb.onclick = () => {
+    if (!navigator.geolocation) return toast('Location isn’t available here');
+    hb.disabled = true; toast('Finding you…');
+    navigator.geolocation.getCurrentPosition(async pos => {
+      // rounded to about a kilometre: enough for distances, not an address
+      const at = { lat: Math.round(pos.coords.latitude * 100) / 100, lng: Math.round(pos.coords.longitude * 100) / 100 };
+      let name = 'Home';
+      if (!(cfg && cfg.demo)) {
+        const j = await cachedJSON(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=10&accept-language=en&lat=${at.lat}&lon=${at.lng}`, 8000);
+        const a = j && j.address; if (a) name = a.city || a.town || a.village || a.municipality || a.county || 'Home';
+      } else name = 'Nashville (sample)';
+      p.home = { ...at, name }; rebuild();
+    }, () => { hb.disabled = false; toast('Couldn’t get your location'); }, { enableHighAccuracy: false, timeout: 12000, maximumAge: 600000 });
+  };
+  const nh = $('#rg-nohome'); if (nh) nh.onclick = () => { p.home = null; rebuild(); };
+  const hm = $('#rg-homemap'); if (hm) hm.onchange = () => { p.homeOnMap = hm.checked; save(); R = rangeData(B, p); redraw(); fetchGround(); };
+  // ---- the drawing ----
+  const slides = () => {
+    const out = [{ key: 'map', label: 'Map', draw: c => drawRangePoster(c, R, p, ground, credits, 'map', { noCredits: true }) }];
+    R.trips.slice(0, 16).forEach(x => out.push({ key: 'trip:' + x.t.id, label: x.t.name, trip: x }));
+    out.push({ key: 'calendar', label: 'Calendar', draw: c => drawRangePoster(c, R, p, ground, credits, 'calendar', { noCredits: true }) });
+    out.push({ key: 'sheet', label: 'Sheet', draw: c => drawRangePoster(c, R, p, ground, credits, 'sheet', { noCredits: true }) });
+    out.push({ key: 'numbers', label: 'Numbers', draw: c => drawRangePoster(c, R, p, ground, credits, 'numbers') });
+    return out;
+  };
+  // a trip slide is that trip's own poster (its own frame, ground and credits), in this look and size, cut to the stretch if the trip runs past it
+  const tripSlide = new Map();
+  const drawTrip = (c, x) => {
+    const tp = { ...posterPrefs(x.t.id), size: p.size, look: p.look };
+    const td = tripDays(x.t), cutIt = td.length && (td[0] < R.from || td[td.length - 1] > R.to);
+    if (cutIt) tp.frame = { kind: 'dates', from: R.from > td[0] ? R.from : td[0], to: R.to < td[td.length - 1] ? R.to : td[td.length - 1], name: '' };
+    let st = tripSlide.get(x.t.id);
+    if (!st) {
+      st = { g: {}, data: recapData(x.t, tp.frame) }; tripSlide.set(x.t.id, st);
+      const again = () => { if (alive() && st.canvas) drawTrip(st.canvas, x); };
+      fetchGroundInto(st.g, posterFrame(st.data, tp).framePts, tp.ground, again);
+      if (st.data.lived) recapHood(st.data.stops).then(h => { if (h) { st.g.hood = h; again(); } });
+    }
+    st.canvas = c;
+    drawPoster(c, x.t, st.data, tp, st.g, recapCredits(x.t, st.data, tp, st.g));
+    queueBlobs();
+  };
+  // images are made ahead of the tap, so the share sheet opens straight away
+  let blobs = new Map(), bt;
+  const queueBlobs = () => { clearTimeout(bt); bt = setTimeout(() => {
+    const list = p.style === 'carousel' ? $$('#rg-slides canvas') : [$('#rg-poster')];
+    blobs = new Map();
+    list.forEach(c => c && c.toBlob(b => { if (b) blobs.set(c, b); }, 'image/png'));
+  }, 400); };
+  const redraw = () => {
+    if (!alive()) return;
+    credits = rangeCredits(R, p);
+    if (p.style !== 'carousel') { drawRangePoster($('#rg-poster'), R, p, ground, credits); $('.poster-frame').className = 'poster-frame ' + p.size; queueBlobs(); return; }
+    const box = $('#rg-slides'), list = slides();
+    if (box.dataset.sig !== list.map(s => s.key).join('|') + p.size) {
+      box.dataset.sig = list.map(s => s.key).join('|') + p.size;
+      box.innerHTML = list.map((s, i) => `<figure class="${p.size} ${carouselOn(p, s.key) ? '' : 'off'}" data-slide="${esc(s.key)}"><canvas></canvas>
+        <figcaption><label><input type="checkbox" ${carouselOn(p, s.key) ? 'checked' : ''}> ${String(i + 1).padStart(2, '0')} ${esc(s.label)}</label></figcaption></figure>`).join('');
+      $$('figure', box).forEach(f => { const cb = $('input', f); cb.onchange = () => { p.skip = { ...(p.skip || {}), [f.dataset.slide]: !cb.checked }; f.classList.toggle('off', !cb.checked); save(); updateSave(); }; });
+    }
+    list.forEach(s => { const c = $(`figure[data-slide="${CSS.escape(s.key)}"] canvas`, box); if (s.trip) drawTrip(c, s.trip); else s.draw(c); });
+    updateSave(); queueBlobs();
+  };
+  const updateSave = () => { if (p.style !== 'carousel') return; const n = $$('#rg-slides figure:not(.off)').length; $('#rg-save').textContent = `Save ${n} image${n === 1 ? '' : 's'}`; $('#rg-save').disabled = !n; };
+  const renderCredits = () => {
+    const box = $('#rg-credits'); if (!box) return;
+    box.innerHTML = credits.length ? credits.map(c => `<label class="check credit"><input type="checkbox" data-rcredit="${c.key}" ${c.on ? 'checked' : ''}>
+      <span>${esc(c.label)}${c.choices && c.choices.length > 1 ? `<select data-rfav>${c.choices.map(s => `<option value="${esc(s.key)}" ${s.key === c.chosen ? 'selected' : ''}>${esc(s.title)}</option>`).join('')}</select>` : `<small>${esc(c.value)}</small>`}</span></label>`).join('')
+      : `<p class="hint" style="margin:0 2px 14px">Credits appear once there’s enough logged to say something true.</p>`;
+    $$('[data-rcredit]', box).forEach(cb => cb.onchange = () => { p.credits = { ...(p.credits || {}), [cb.dataset.rcredit]: cb.checked }; save(); redraw(); });
+    $$('[data-rfav]', box).forEach(sel => { sel.onclick = e => e.stopPropagation(); sel.onchange = () => { p.fav = sel.value; save(); redraw(); renderCredits(); }; });
+  };
+  // ground: world outlines when the map spans countries; OpenStreetMap water and names when it's one region or city
+  const fetchGround = () => { if (p.style === 'map' || p.style === 'carousel') fetchGroundInto(ground, rangeMapPoints(R, p), p.ground, redraw, true); };
+  $$('[data-rpref]').forEach(g => $$('button', g).forEach(b => b.onclick = () => {
+    const k = g.dataset.rpref; p[k] = b.dataset.v; save();
+    if (k === 'style' || k === 'size' && p.style === 'carousel') return render();
+    $$('button', g).forEach(x => x.classList.toggle('on', x === b)); tripSlide.clear(); redraw(); fetchGround();
+  }));
+  let tl;
+  $('#rg-line').oninput = e => { p.line = e.target.value; clearTimeout(tl); tl = setTimeout(() => { save(); redraw(); }, 250); };
+  $('#rg-save').onclick = async () => {
+    const list = p.style === 'carousel' ? $$('#rg-slides figure:not(.off) canvas') : [$('#rg-poster')];
+    const base = `${slugName(R.title)}-${p.size === 'story' ? '9x16' : '4x5'}`;
+    const files = await Promise.all(list.map((c, i) => (blobs.has(c) ? Promise.resolve(blobs.get(c)) : new Promise(r => c.toBlob(r, 'image/png')))
+      .then(b => b && new File([b], list.length > 1 ? `${base}-${String(i + 1).padStart(2, '0')}.png` : `${base}.png`, { type: 'image/png' }))));
+    shareFiles(files.filter(Boolean));
+  };
+  redraw(); renderCredits();
+  loadPosterFonts().then(redraw);
+  fetchGround();
 }
 
 /* ---------- Someday ---------- */
@@ -3036,6 +3885,8 @@ function demoData() {
     trips: [
       { id: 'tr_demo1', name: 'Tokyo', destination: 'Tokyo, Japan', start: d(-1), end: d(5), timezone: 'Asia/Tokyo', notes: '' },
       { id: 'tr_demo2', name: 'Lisbon weekend', destination: 'Lisbon, Portugal', start: '', end: '', timezone: 'Europe/Lisbon', notes: '' },
+      { id: 'tr_demo3', name: 'Reykjavík', destination: 'Reykjavík, Iceland', start: d(-150), end: d(-146), timezone: 'Atlantic/Reykjavik', notes: '' },
+      { id: 'tr_demo4', name: 'Chicago', destination: 'Chicago, USA', start: d(45), end: d(47), timezone: 'America/Chicago', notes: '' },
     ],
     items: [
       P('f0', { kind: 'fixed', category: 'Flight', title: 'UA 3412', from_code: 'BNA', to_code: 'ORD', from_name: 'Nashville International Airport', to_name: "O'Hare International Airport", from_lat: 36.1263, from_lng: -86.6774, to_lat: 41.9786, to_lng: -87.9048, day: d(-2), start_time: '06:10', end_time: '07:25', confirmation: 'K7Q2XD', city: '', region: '', country: '' }),
@@ -3060,6 +3911,21 @@ function demoData() {
       P('g1', { parent_id: 'i1', source: 'claude', priority: 'maybe', category: 'Bar', title: 'Snack Mimi (sample)', city: 'Taito City', notes: '8 seats, karaoke, 5 min walk from the hotel', hours: every('8:00 PM', '1:00 AM'), lat: 35.7021, lng: 139.7921 }),
       P('g2', { parent_id: 'i1', source: 'claude', priority: 'maybe', category: 'Bar', title: 'Kuramae Nightcap (sample)', city: 'Taito City', notes: 'Quiet whisky counter, owner is friendly to first-timers', hours: every('7:00 PM', '12:00 AM'), lat: 35.7050, lng: 139.7940 }),
       P('i2', { kind: 'idea', title: 'Onsen on a rainy day', status: 'ask' }),
+      // a past trip (logged) and one still to come, so "Look back" has a stretch to draw
+      ...[
+        { id: 'rf1', kind: 'fixed', category: 'Flight', title: 'FI 642', from_code: 'BNA', to_code: 'KEF', from_name: 'Nashville International Airport', to_name: 'Keflavík International Airport', from_lat: 36.1263, from_lng: -86.6774, to_lat: 63.985, to_lng: -22.6056, day: d(-150) },
+        { id: 'rf2', kind: 'fixed', category: 'Stay', title: 'Guesthouse on Skólavörðustígur', city: 'Reykjavík', day: d(-150), end_day: d(-146), lat: 64.1440, lng: -21.9270 },
+        { id: 'rp1', kind: 'place', category: 'Church', title: 'Hallgrímskirkja', city: 'Reykjavík', day: d(-149), status: 'done', lat: 64.1417, lng: -21.9266 },
+        { id: 'rp2', kind: 'place', category: 'Concert hall', title: 'Harpa', city: 'Reykjavík', day: d(-149), status: 'done', priority: 'must', lat: 64.1503, lng: -21.9327 },
+        { id: 'rp3', kind: 'place', category: 'Waterfall', title: 'Gullfoss', city: 'Bláskógabyggð', region: 'South', day: d(-148), status: 'done', lat: 64.3271, lng: -20.1199 },
+        { id: 'rf3', kind: 'fixed', category: 'Flight', title: 'FI 643', from_code: 'KEF', to_code: 'BNA', from_name: 'Keflavík International Airport', to_name: 'Nashville International Airport', from_lat: 63.985, from_lng: -22.6056, to_lat: 36.1263, to_lng: -86.6774, day: d(-146) },
+      ].map(o => Object.assign({ trip_id: 'tr_demo3', status: 'open', country: 'Iceland', region: 'Capital Region' }, o)),
+      ...[
+        { id: 'cf1', kind: 'fixed', category: 'Stay', title: 'Hotel in the Loop', city: 'Chicago', day: d(45), end_day: d(47), lat: 41.8830, lng: -87.6270 },
+        { id: 'cp1', kind: 'place', category: 'Concert hall', title: 'Symphony Center', city: 'Chicago', day: d(45), priority: 'must', lat: 41.8792, lng: -87.6250 },
+        { id: 'cp2', kind: 'place', category: 'Record store', title: 'Dusty Groove', city: 'Chicago', day: d(46), lat: 41.9034, lng: -87.6770 },
+        { id: 'cp3', kind: 'place', category: 'Museum', title: 'Art Institute', city: 'Chicago', day: d(46), lat: 41.8796, lng: -87.6237 },
+      ].map(o => Object.assign({ trip_id: 'tr_demo4', status: 'open', country: 'USA', region: 'Illinois' }, o)),
       { id: 's1', trip_id: '', kind: 'place', category: 'Bakery', title: 'A bakery in Kyoto', city: 'Kyoto', region: 'Kyoto', country: 'Japan', status: 'open' },
       { id: 's2', trip_id: '', kind: 'place', category: 'Concert hall', title: 'Harpa', city: 'Reykjavík', country: 'Iceland', status: 'open' },
       { id: 's3', trip_id: '', kind: 'idea', title: 'Night train somewhere', status: 'open' },
@@ -3081,6 +3947,18 @@ function demoData() {
       { id: 'l12', rating: 'loved', trip_id: 'tr_demo1', day: d(2), seq: '3', title: 'A tiny jazz kissa', origin: 'found', mode: 'walk', category: 'Bar', time: '00:50', note: 'Bill Evans all night', lat: 35.6905, lng: 139.7058 },
       { id: 'l13', rating: 'loved', trip_id: 'tr_demo1', day: d(3), seq: '0', title: 'Ramen counter near Kuramae', origin: 'found', mode: 'walk', category: 'Ramen restaurant', lat: 35.7045, lng: 139.7925 },
       { id: 'l14', rating: 'meh', trip_id: 'tr_demo1', day: d(3), seq: '1', item_id: 'p9', title: 'Torikizoku Kuramae', origin: 'planned', mode: 'walk', lat: 35.7030, lng: 139.7915 },
+      ...[
+        [d(-150), 'Guesthouse on Skólavörðustígur', 64.1440, -21.9270, { item_id: 'rf2', origin: 'planned', time: '09:30' }],
+        [d(-150), 'Bæjarins Beztu Pylsur', 64.1482, -21.9406, { rating: 'loved', origin: 'found', mode: 'walk', note: 'One with everything', category: 'Hot dog stand', time: '13:10' }],
+        [d(-150), 'Sundhöllin', 64.1430, -21.9220, { rating: 'liked', origin: 'found', mode: 'walk', category: 'Swimming pool', time: '17:00' }],
+        [d(-149), 'Hallgrímskirkja', 64.1417, -21.9266, { item_id: 'rp1', rating: 'liked', origin: 'planned', mode: 'walk', time: '10:00' }],
+        [d(-149), 'Harpa', 64.1503, -21.9327, { item_id: 'rp2', rating: 'loved', origin: 'planned', mode: 'walk', time: '20:00', note: 'Iceland Symphony, Sibelius 5' }],
+        [d(-149), 'Kaldi Bar', 64.1460, -21.9300, { rating: 'liked', origin: 'found', mode: 'walk', category: 'Bar', time: '22:40' }],
+        [d(-148), 'Þingvellir', 64.2559, -21.1299, { rating: 'loved', origin: 'found', mode: 'car', category: 'National park', time: '10:30' }],
+        [d(-148), 'Gullfoss', 64.3271, -20.1199, { item_id: 'rp3', rating: 'loved', origin: 'planned', mode: 'car', time: '14:00' }],
+        [d(-147), 'Grótta Lighthouse', 64.1647, -22.0222, { rating: 'loved', origin: 'found', mode: 'walk', category: 'Lighthouse', time: '16:20' }],
+        [d(-147), 'Bæjarins Beztu Pylsur', 64.1482, -21.9406, { origin: 'found', mode: 'walk', category: 'Hot dog stand', time: '19:00' }],
+      ].map(([day, title, lat, lng, o], k) => Object.assign({ id: 'rl' + k, trip_id: 'tr_demo3', day, seq: String(k), title, lat, lng, city: 'Reykjavík' }, o)),
     ],
   };
 }
