@@ -92,7 +92,7 @@ function doPost(e) {
 function handle(p) {
   try {
     const token = PropertiesService.getScriptProperties().getProperty('TOKEN');
-    if (!token || String(p.token) !== token) return json({ ok: false, error: 'Wrong passphrase' });
+    if (!token || String(p.token) !== token) return json({ ok: false, error: 'Wrong passphrase', got: receivedSummary(p) });
     const fn = ACTIONS[p.action];
     if (!fn) return json({ ok: false, error: 'Unknown action: ' + p.action });
     // Shortcuts cut a link off at "https://" when it sits inside another address, so they send it
@@ -110,6 +110,11 @@ function handle(p) {
   } catch (err) {
     return json({ ok: false, error: String((err && err.message) || err) });
   }
+}
+
+/** For troubleshooting shortcuts: which fields arrived and how long each was (never the values). */
+function receivedSummary(p) {
+  return Object.keys(p || {}).map(function (k) { return k + '(' + String(p[k]).length + ')'; }).join(' ') || 'nothing';
 }
 
 function fromBase64(b) {
@@ -168,7 +173,7 @@ const ACTIONS = {
 
       const text = String(p.text || '').trim();
       // Nothing to save (e.g. a shortcut whose link didn't come through): say so instead of adding "Untitled"
-      if (!text && !p.title && !p.from_code && !p.to_code) throw new Error('Nothing came through to save — no link or text');
+      if (!text && !p.title && !p.from_code && !p.to_code) throw new Error('Nothing came through to save — no link or text. Got: ' + receivedSummary(p));
       const resolved = text ? resolveText(text) : {};
       const now = new Date().toISOString();
       const item = {
