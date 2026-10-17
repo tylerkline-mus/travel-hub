@@ -69,18 +69,27 @@ The app files are already in this repo.
 
 ## 6. The "Send to Trip" shortcut (save straight from Google Maps)
 
-This puts a **Send to Trip** option in the Share menu of Google Maps, Safari, Instagram, anywhere. Places go to the trip that's happening now, otherwise your next upcoming one. Move anything to another trip or Someday in the app.
+This puts a **Send to Trip** option in the Share menu of Google Maps, Safari, anywhere. Places go to the trip that's happening now, otherwise your next upcoming one. Move anything to another trip or Someday in the app.
 
-> Why Base64? Shortcuts cuts a link off at the second `https://` when it sits inside another web address, so the link is packed into a code with no `https://` in it. The script unpacks it.
+> Send the details as a **JSON request body**, not inside the web address. Shortcuts mangles addresses built from inserted text (it cuts them off at the inserted part), but a JSON body arrives intact.
 
 In the **Shortcuts** app, tap **+** and name it **Send to Trip**. Then:
 
 1. Add **Get Text from Input**. Its input should be **Shortcut Input**.
 2. Tap **ⓘ** (or the shortcut name → **Details**) and turn on **Show in Share Sheet**. Leave all input types on.
-3. Add **Base64 Encode**. Its input should be **Text** (from step 1). Tap the **›** arrow on it and set **Line Breaks** to **None**.
-4. Add **Text** and type your Web app URL followed by `?action=add&b64=`, insert **Base64 Encoded**, then type `&format=text&trip=auto&token=YOURPASSPHRASE&end=1`. (Shortcuts drops whatever comes last in the address, so `&end=1` is a throwaway at the end.)
-5. Add **Get Contents of URL** with the **Text** from step 4.
-6. Add **Show Notification** with **Contents of URL**. It says e.g. *Saved Barn8 to Iceland, Autumn 2026.*
+3. Add **Get Contents of URL**. URL: your Web app URL only (ending in `/exec`, nothing after it). Tap **›**:
+   - **Method:** POST
+   - **Request Body:** JSON, with five **Text** fields (key on the left, value on the right):
+
+   | Key | Value |
+   |---|---|
+   | `action` | `add` |
+   | `token` | your passphrase |
+   | `trip` | `auto` |
+   | `format` | `text` |
+   | `text` | **Text** (from step 1) |
+
+4. Add **Show Notification** with **Contents of URL**. It says e.g. *Saved Bjarmanes to Iceland, Autumn 2026.*
 
 Try it: in Google Maps, open a place → **Share** → **Send to Trip**. It appears in the app after the next refresh, with name, address and hours. If nothing came through, the notification says so and nothing is added.
 
@@ -92,20 +101,18 @@ Two ways in, one shortcut:
 - **Share a place from Google Maps → I'm here.** Logs that place to today's trip, stamped with the moment you shared it.
 - **Tap it from your Home Screen, Action Button or Back Tap.** Logs where you're standing: the saved place you're at, otherwise the nearest place Google knows, otherwise "Somewhere".
 
-In the **Shortcuts** app, tap **+** and name it **I'm here**. Then:
+In the **Shortcuts** app, tap **+** and name it **I'm here**. Then (details go in a JSON request body, as in §6 — never inside the address):
 
-1. Tap **ⓘ** and turn on **Show in Share Sheet**. Set it to accept **URLs** and **Text**. Under *If there's no input*, choose **Continue**.
+1. Tap **ⓘ** and turn on **Show in Share Sheet** (leave all types on). Under *If there's no input*, choose **Continue**.
 2. Add **If**: *Shortcut Input* **has any value**.
 3. Inside the **If** branch:
-   - **Base64 Encode** with **Shortcut Input** (tap **›**, set **Line Breaks** to **None**).
-   - **Text**: your Web app URL followed by `?action=here&b64=`, insert **Base64 Encoded**, then `&format=text&token=YOURPASSPHRASE&end=1`. (Not `&text=` with a URL-encoded link — Shortcuts cuts that off at `https://`.)
+   - **Get Text from Input** (Shortcut Input).
+   - **Get Contents of URL**: your Web app URL only (ending in `/exec`). Tap **›** → **Method** POST, **Request Body** JSON, Text fields: `action` = `here`, `token` = your passphrase, `format` = `text`, `text` = **Text**.
 4. Inside the **Otherwise** branch:
    - **Get Current Location**.
-   - **Get Details of Locations**: **Latitude**.
-   - **Get Details of Locations**: **Longitude**.
-   - **Text**: your Web app URL followed by `?action=here&format=text&token=YOURPASSPHRASE&lat=` + **Latitude** + `&lng=` + **Longitude** + `&end=1`.
-5. After **End If**, add **Get Contents of URL** with **If Result**.
-6. Add **Show Notification** with **Contents of URL**. It says what was logged, e.g. *Logged Kaffibarinn (Iceland, Autumn 2026).*
+   - **Get Details of Locations**: **Latitude**, then another for **Longitude**.
+   - **Get Contents of URL**: same URL, POST, JSON, Text fields: `action` = `here`, `token` = your passphrase, `format` = `text`, `lat` = **Latitude**, `lng` = **Longitude**.
+5. After **End If**, add **Show Notification** with **If Result**. It says what was logged, e.g. *Logged Kaffibarinn (Iceland, Autumn 2026).*
 
 To put it within reach: **ⓘ → Add to Home Screen**; or **Settings → Action Button → Shortcut**; or **Settings → Accessibility → Touch → Back Tap → Double Tap**. In Google Maps, it appears in the share sheet's list of apps and actions; long-press it there to move it near the front.
 

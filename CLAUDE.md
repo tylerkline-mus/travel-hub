@@ -13,7 +13,7 @@ Read this before changing anything. Keep it current when the structure changes.
 
 **Script changes need Tyler to redeploy**: copy raw `apps-script/Code.gs` → paste in Apps Script → run `setup` (adds missing columns/tabs non-destructively) → Deploy → Manage deployments → ✏️ → New version. Always tell him when a change needs this. App-only changes go live on push (GitHub Pages, ~1–2 min).
 
-**Shortcuts gotcha:** Shortcuts truncates a URL at a second `https://` embedded in its query, so shortcuts send shared links as `b64=` (Base64, line breaks none); `handle()` unpacks it into `p.text`. Shortcuts also drops the last query parameter, so every shortcut URL ends with a throwaway `&end=1`. `add` accepts `trip=auto` (current-or-next trip) and refuses empty saves.
+**Shortcuts gotcha:** Shortcuts mangles a Get Contents of URL address built from inserted variables (everything from the inserted value on is dropped), so shortcuts POST a **JSON request body** to the bare /exec URL instead — `doPost` parses it. (`b64=` unpacking in `handle()` still works but isn't needed.) `add` accepts `trip=auto` (current-or-next trip) and refuses empty saves; errors list the fields received (`receivedSummary`).
 
 ## Sheet schema (columns are read by header name; new columns are appended on the right by `setup`)
 
