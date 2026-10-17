@@ -346,6 +346,29 @@ nav.tabs .add svg { width: 26px; height: 26px; }
 .toast.has-action { pointer-events: auto; display: flex; align-items: center; gap: 14px; }
 .toast button { border: 0; background: none; color: var(--accent); font-weight: 700; font-size: 14px; padding: 2px 0; cursor: pointer; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .toast button { color: #b9532c; } }
+.photo-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin: 4px 0 10px; }
+.photo-grid:empty { display: none; }
+.photo-grid .ph { aspect-ratio: 1; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; padding: 0; background: var(--card); cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 600; }
+.photo-grid .ph img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-grid .ph.add { border-style: dashed; color: var(--accent); }
+.photo-grid .ph.snd { color: var(--ink); font-size: 14px; }
+.keep-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 2px 0 14px; }
+.keep-actions .btn.rec, .btn.rec { border-color: #c4472e; color: #c4472e; }
+.sound-row, .souv-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.sound-row audio { flex: 1; min-width: 0; height: 36px; }
+.souv-row .t { flex: 1; min-width: 0; font-weight: 500; }
+.souv-ph { width: 36px; height: 36px; padding: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: none; }
+.souv-ph img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.badge.brought { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.x { border: 0; background: none; color: var(--muted); font-size: 15px; padding: 6px; cursor: pointer; }
+.souv-form { border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin-bottom: 14px; background: var(--card); }
+.souv-form .field { margin-bottom: 8px; }
+.souv-form .inline { display: flex; align-items: center; gap: 8px; }
+.entry-thumb { width: 44px; height: 44px; border-radius: 8px; object-fit: cover; flex-shrink: 0; align-self: center; background: var(--line); }
+.art-missing { opacity: .25; }
+.viewer { position: fixed; inset: 0; z-index: 3000; background: rgba(8,8,8,.94); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: env(safe-area-inset-top) 12px env(safe-area-inset-bottom); }
+.viewer img { max-width: 100%; max-height: calc(100% - 90px); object-fit: contain; border-radius: 6px; }
+.viewer-bar { display: flex; gap: 10px; margin-top: 16px; }
 .demo-tag { font-size: 11px; font-weight: 600; background: #d8a136; color: #2a1c05; padding: 3px 7px; border-radius: 6px; }
 </style>
 </head>
@@ -366,10 +389,11 @@ const store = {
   del(k) { try { localStorage.removeItem(k); } catch (e) {} },
 };
 
-const EMPTY_DB = () => ({ trips: [], items: [], plan: [], log: [], places: false });
+const EMPTY_DB = () => ({ trips: [], items: [], plan: [], log: [], artifacts: [], places: false });
 let cfg = store.get('th_cfg', null);          // { url, token, sheetUrl, demo }
 let db = Object.assign(EMPTY_DB(), store.get('th_cache', {}));
 let outbox = store.get('th_outbox', []);
+let parked = store.get('th_parked', []);       // artifact saves waiting for the script to be updated
 let routeCache = store.get('th_routes', {});
 let syncState = 'ok';                          // ok | pending | offline
 let ui = { q: '', openNow: false, nearMe: false, pos: null, filter: 'all', reorder: null, mapDay: 'all', mapLayer: 'plan', logDay: {}, mapView: null, noRoutes: false };
@@ -592,7 +616,7 @@ async function api(action, payload = {}) {
   return j.data;
 }
 
-function saveLocal() { store.set('th_cache', db); store.set('th_outbox', outbox); }
+function saveLocal() { store.set('th_cache', db); store.set('th_outbox', outbox); store.set('th_parked', parked); }
 
 function reconcile(action, data) {
   if (!data) return;
@@ -602,6 +626,7 @@ function reconcile(action, data) {
     swap('items', data);
   } else if (action === 'attach' && Array.isArray(data)) data.forEach(o => swap('items', o));
   else if (action === 'addTrip' || action === 'updateTrip') swap('trips', data);
+  else if (action === 'upload' || action === 'updateArtifact') swap('artifacts', data);
   else if (action === 'addLog' || action === 'updateLog') {
     swap('log', data);
     if (data.item_id) { const it = itemById(data.item_id); if (it) it.status = 'done'; }
@@ -624,12 +649,23 @@ async function flush() {
   while (outbox.length) {
     const op = outbox[0]; inFlight = op;
     try {
-      const data = await api(op.action, op.payload);
+      let payload = op.payload;
+      if (op.action === 'upload' && payload.hasFile) {
+        const blob = await blobs.get(payload.id);
+        if (!blob) { outbox.shift(); saveLocal(); continue; }   // the file is gone from the phone; nothing to send
+        payload = { ...payload, b64: await blobToB64(blob) };
+      }
+      const data = await api(op.action, payload);
       if (op.action === 'add' && data && data._duplicate) db.items = db.items.filter(i => i.id !== op.payload.id);
       reconcile(op.action, data);
       outbox.shift(); saveLocal();
     } catch (e) {
-      if (e.server) { toast('Couldn’t save: ' + e.message); outbox.shift(); saveLocal(); }
+      if (e.server && /Unknown action/.test(e.message) && ARTIFACT_OPS.includes(op.action)) {
+        // the script hasn't been updated yet: keep these until it is
+        parked.push(op); outbox.shift(); saveLocal();
+        toast('Photos and sounds are kept on your phone until the script is updated');
+      }
+      else if (e.server) { toast('Couldn’t save: ' + e.message); outbox.shift(); saveLocal(); }
       else { syncState = 'offline'; lastSyncError = e.detail || e.message; scheduleRetry(); break; }
     }
   }
@@ -659,7 +695,13 @@ async function pull() {
   if (outbox.length) return;
   try {
     const data = await api('bootstrap');
-    db = Object.assign(EMPTY_DB(), data); syncState = 'ok'; saveLocal(); render();
+    const scriptKnowsArtifacts = Array.isArray(data.artifacts);
+    db = Object.assign(EMPTY_DB(), data);
+    if (parked.length && scriptKnowsArtifacts) { outbox.push(...parked); parked = []; }
+    // anything not yet in the Sheet stays visible
+    outbox.concat(parked).filter(o => o.action === 'upload').forEach(o => { if (!db.artifacts.some(a => a.id === o.payload.id)) db.artifacts.push(artifactRow(o.payload)); });
+    syncState = 'ok'; saveLocal(); render();
+    if (outbox.length) flush();
     lookUpSuggestions();
   } catch (e) {
     syncState = 'offline'; render();
@@ -1080,7 +1122,11 @@ function logContent(t) {
   tops.forEach((l, k) => {
     if (k > 0) list += `<div class="leg"><button data-mode="${esc(l.id)}">${esc(MODE_LABEL[l.mode] || 'How did you get here?')}</button></div>`;
     const kids = logKids(l.id);
-    const meta = [l.time ? fmtTime(l.time) : '', l.city, l.note].filter(Boolean).join(' · ');
+    const kept = artifactsOf(l.id), ph = kept.find(a => a.kind === 'photo');
+    const nSnd = kept.filter(a => a.kind === 'sound').length, nSouv = kept.filter(a => a.kind === 'souvenir').length;
+    // the thumbnail says "photos"; sounds and souvenirs get a word, early so it isn't cut off
+    const keptLine = [nSnd ? (nSnd === 1 ? '♪ sound' : `♪ ${nSnd} sounds`) : '', nSouv ? 'brought home' : ''].filter(Boolean).join(' · ');
+    const meta = [l.time ? fmtTime(l.time) : '', keptLine, l.city, l.note].filter(Boolean).join(' · ');
     const rb = rateBadge(l);
     list += `<div class="entry ${l._pending ? 'pending' : ''}" data-log="${esc(l.id)}">
       <span class="num" style="--c:${l.origin === 'found' ? 'var(--found)' : 'var(--place)'}">${k + 1}</span>
@@ -1088,6 +1134,7 @@ function logContent(t) {
         <div class="meta">${l.origin ? `<span class="badge ${esc(l.origin)}">${l.origin === 'found' ? 'Found' : 'Planned'}</span>` : ''}${rb}${esc(meta)}</div>
         ${kids.length ? `<ul class="kids">${kids.map((c, j) => `<li data-log="${esc(c.id)}"><span class="num" style="--c:var(--tour)">${j + 1}</span>${esc(c.title)}</li>`).join('')}</ul>` : ''}
       </div>
+      ${ph && !reorder ? `<img class="entry-thumb" data-art="${esc(ph.id)}" alt="">` : ''}
       ${reorder ? `<div class="moves"><button data-move="up" data-list="${key}" data-id="${esc(l.id)}" ${k === 0 ? 'disabled' : ''}>↑</button><button data-move="down" data-list="${key}" data-id="${esc(l.id)}" ${k === tops.length - 1 ? 'disabled' : ''}>↓</button></div>` : ''}
     </div>`;
   });
@@ -1272,7 +1319,7 @@ const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 const CREDITS = [
   ['fav', 'Favorite discovery', true], ['back', 'Went back to', true], ['often', 'Most often', true],
   ['ends', 'First and last', true], ['linger', 'Lingered longest', true], ['offscript', 'Off script', true],
-  ['walk', 'Longest walk', true], ['hood', 'Home away from home', true],
+  ['walk', 'Longest walk', true], ['hood', 'Home away from home', true], ['brought', 'Brought home', true],
   ['early', 'Earliest morning', false], ['late', 'Latest night', false], ['letdown', 'Didn’t live up to it', false],
 ];
 function pluralCat(c) {
@@ -1342,6 +1389,11 @@ function recapCredits(t, data, prefs, extras) {
     // Didn't live up to it: a must you rated meh
     const letdown = S.find(s => s.wasMust && s.meh);
     if (letdown) out.letdown = { value: letdown.title };
+    // Brought home: souvenirs kept with these stops
+    const ids = new Set(S.map(s => s.id));
+    const souv = [...new Set((db.artifacts || []).filter(a => a.kind === 'souvenir' && a.title && ids.has(a.log_id)).map(a => a.title.trim()))];
+    if (souv.length) out.brought = { value: souv.length <= 3 ? souv.join(souv.length === 3 ? ', ' : ' and ').replace(/, ([^,]*)$/, ' and $1')
+      : `${souv.slice(0, 2).join(', ')} and ${numWord(souv.length - 2)} more` };
   } else {
     const cats = {};
     itemsFor(t.id).filter(i => i.kind === 'place' && !isSuggestion(i) && i.category).forEach(i => { const c = i.category.toLowerCase(); cats[c] = (cats[c] || 0) + 1; });
@@ -3639,6 +3691,172 @@ function openAddToDay(tripId, d) {
 }
 
 /* ---------- Travelogue: I'm here ---------- */
+/* ---------- Kept with a stop: photos, sounds, souvenirs ----------
+ * Files wait on the phone (IndexedDB) until they're sent, and stay there as a cache.
+ * In the Sheet they're rows in Artifacts; the files themselves live privately in Drive (Travel Hub / <trip>). */
+const ARTIFACT_OPS = ['upload', 'updateArtifact', 'deleteArtifact'];
+const MAX_PHOTOS = 4, MAX_SOUND_S = 60;
+const blobs = (() => {
+  let dbp = null;
+  const open = () => dbp || (dbp = new Promise((res, rej) => {
+    const r = indexedDB.open('travelhub-files', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('files');
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  }));
+  const run = (mode, fn) => open().then(d => new Promise((res, rej) => {
+    const tx = d.transaction('files', mode), q = fn(tx.objectStore('files'));
+    tx.oncomplete = () => res(q && q.result); tx.onerror = () => rej(tx.error);
+  })).catch(() => null);
+  return { get: k => run('readonly', s => s.get(k)), put: (k, v) => run('readwrite', s => s.put(v, k)), del: k => run('readwrite', s => s.delete(k)) };
+})();
+const blobToB64 = b => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.onerror = rej; r.readAsDataURL(b); });
+const b64ToBlob = (b64, mime) => { const bin = atob(b64), a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return new Blob([a], { type: mime || '' }); };
+const artifactRow = p => ({ id: p.id, log_id: p.log_id, trip_id: p.trip || '', kind: p.kind, title: p.title || '', note: p.note || '',
+  file_id: p.hasFile ? 'pending' : '', mime: p.mime || '', duration: p.duration || '', seq: p.seq != null ? String(p.seq) : '', _pending: true });
+const artifactsOf = (logId, kind) => db.artifacts.filter(a => a.log_id === logId && (!kind || a.kind === kind))
+  .sort((a, b) => (+a.seq || 0) - (+b.seq || 0));
+
+/** An object URL for a kept file: from the phone if it's there, else fetched privately through the script. */
+const artURLs = new Map();
+function artURL(a) {
+  if (artURLs.has(a.id)) return artURLs.get(a.id);
+  const pr = (async () => {
+    let b = await blobs.get(a.id);
+    if (!b && a.file_id && a.file_id !== 'pending' && navigator.onLine) {
+      try { const r = await api('file', { id: a.id }); if (r && r.b64) { b = b64ToBlob(r.b64, r.mime || a.mime); blobs.put(a.id, b); } } catch (e) {}
+    }
+    if (!b) { artURLs.delete(a.id); return null; }
+    return URL.createObjectURL(b);
+  })();
+  artURLs.set(a.id, pr);
+  return pr;
+}
+/* Any <img data-art> or <audio data-art> that appears gets its file. */
+function hydrateArt(root) {
+  $$('[data-art]:not([data-art-done])', root).forEach(el => {
+    el.setAttribute('data-art-done', '1');
+    const a = db.artifacts.find(x => x.id === el.dataset.art) || (el._art);
+    if (!a) return;
+    artURL(a).then(u => { if (u) el.src = u; else el.classList.add('art-missing'); });
+  });
+}
+new MutationObserver(() => hydrateArt(document)).observe(document.documentElement, { childList: true, subtree: true });
+
+/** Phone photo → JPEG no wider than 1600 px (a few hundred KB). */
+async function shrinkImage(file, max = 1600) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+    const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return await new Promise(res => c.toBlob(b => res(b || file), 'image/jpeg', 0.82));
+  } catch (e) { return file; } finally { URL.revokeObjectURL(url); }
+}
+
+/** Keep something with a logged stop (the stop may still be on its way to the Sheet — it goes first). */
+async function keepArtifact(log, kind, { blob, mime, title = '', note = '', duration = '' } = {}) {
+  const id = uid('ar');
+  const seq = artifactsOf(log.id, kind).length;
+  if (blob) await blobs.put(id, blob);
+  const payload = { id, log_id: log.id, trip: log.trip_id || log.trip || '', kind, title, note, mime: blob ? (mime || blob.type) : '', duration, seq, hasFile: !!blob };
+  queue('upload', payload, () => { db.artifacts.push(artifactRow(payload)); });
+  return id;
+}
+function dropArtifact(a) {
+  queue('deleteArtifact', { id: a.id }, () => { db.artifacts = db.artifacts.filter(x => x.id !== a.id); });
+  // a save still waiting to go out never needs to go
+  outbox = outbox.filter(o => !(o !== inFlight && o.action === 'upload' && o.payload.id === a.id));
+  parked = parked.filter(o => !(o.action === 'upload' && o.payload.id === a.id));
+  blobs.del(a.id); artURLs.delete(a.id); saveLocal();
+}
+
+/** Pick photos (camera or library on iPhone). Resolves to shrunk blobs. */
+function pickPhotos(limit) {
+  return new Promise(res => {
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.multiple = limit > 1;
+    inp.onchange = async () => { const fs = [...(inp.files || [])].slice(0, limit); res(await Promise.all(fs.map(f => shrinkImage(f)))); };
+    inp.click();
+  });
+}
+
+/** A record button: tap to start, tap to stop (stops by itself at a minute). onDone(blob, seconds). */
+function soundButton(btn, onDone) {
+  let rec = null, chunks = [], t0 = 0, tick = null, stream = null;
+  const label = btn.innerHTML;
+  const stop = () => { if (rec && rec.state !== 'inactive') rec.stop(); };
+  btn.onclick = async () => {
+    if (rec) return stop();
+    if (!navigator.mediaDevices || !window.MediaRecorder) { toast('This phone can’t record here'); return; }
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch (e) { toast('Microphone is off — allow it in Settings to record'); return; }
+    const type = ['audio/mp4', 'audio/webm', 'audio/ogg'].find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || '';
+    rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined); chunks = [];
+    rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    rec.onstop = () => {
+      clearInterval(tick); stream.getTracks().forEach(t => t.stop());
+      const secs = Math.max(1, Math.round((Date.now() - t0) / 1000));
+      const blob = new Blob(chunks, { type: rec.mimeType || type || 'audio/mp4' });
+      rec = null; btn.classList.remove('rec'); btn.innerHTML = label;
+      if (blob.size) onDone(blob, secs);
+    };
+    rec.start(); t0 = Date.now(); btn.classList.add('rec');
+    const show = () => { const s = Math.round((Date.now() - t0) / 1000); btn.innerHTML = `● Stop · 0:${String(s).padStart(2, '0')}`; if (s >= MAX_SOUND_S) stop(); };
+    show(); tick = setInterval(show, 500);
+  };
+  return { stop };
+}
+const fmtSecs = s => s ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}` : '';
+
+/** Full-screen look at a photo, with Remove. */
+function viewPhoto(a, onRemove) {
+  const v = document.createElement('div'); v.className = 'viewer';
+  v.innerHTML = `<img data-art="${esc(a.id)}" alt=""><div class="viewer-bar"><button class="btn ghost small" data-x>Close</button>${onRemove ? `<button class="btn danger small" data-rm>Remove</button>` : ''}</div>`;
+  document.body.append(v);
+  v.onclick = e => { if (e.target === v || e.target.closest('[data-x]')) v.remove(); };
+  const rm = $('[data-rm]', v); if (rm) rm.onclick = () => { v.remove(); onRemove(); };
+}
+
+/** The "Kept" block inside a log entry: photos, sounds, brought home. Saves as you go. */
+function keptBlock(l) {
+  const photos = artifactsOf(l.id, 'photo'), sounds = artifactsOf(l.id, 'sound'), souvs = artifactsOf(l.id, 'souvenir');
+  return `
+    <div class="photo-grid">${photos.map(a => `<button class="ph" data-ph="${esc(a.id)}"><img data-art="${esc(a.id)}" alt=""></button>`).join('')}
+      ${photos.length < MAX_PHOTOS ? `<button class="ph add" data-addph>${photos.length ? '+' : '+ Photo'}</button>` : ''}</div>
+    ${sounds.map(a => `<div class="sound-row"><audio controls preload="none" data-art="${esc(a.id)}"></audio><span class="meta">${esc(fmtSecs(+a.duration))}</span><button class="x" data-rmart="${esc(a.id)}" aria-label="Remove sound">✕</button></div>`).join('')}
+    ${souvs.map(a => `<div class="souv-row"><span class="badge brought">Brought home</span><span class="t">${esc(a.title)}</span>${a.file_id ? `<button class="souv-ph" data-ph="${esc(a.id)}"><img data-art="${esc(a.id)}" alt=""></button>` : ''}<button class="x" data-rmart="${esc(a.id)}" aria-label="Remove">✕</button></div>`).join('')}
+    <div class="keep-actions">
+      <button class="btn ghost small" data-rec>● Record sound</button>
+      <button class="btn ghost small" data-addsouv>+ Brought home</button>
+    </div>
+    <div class="souv-form" hidden>
+      <div class="field"><input data-souvname placeholder="What you brought home — a record, a sweater…"></div>
+      <div class="inline"><button class="btn ghost small" data-souvph>Add a photo</button><span class="meta" data-souvphn></span><button class="btn small" data-souvsave style="margin-left:auto">Keep it</button></div>
+    </div>`;
+}
+function bindKept(box, l, rerender) {
+  const find = id => db.artifacts.find(a => a.id === id);
+  $$('[data-ph]', box).forEach(b => b.onclick = () => { const a = find(b.dataset.ph); if (a) viewPhoto(a, () => { dropArtifact(a); rerender(); }); });
+  const add = $('[data-addph]', box);
+  if (add) add.onclick = async () => {
+    const left = MAX_PHOTOS - artifactsOf(l.id, 'photo').length;
+    const shots = await pickPhotos(left);
+    for (const b of shots) await keepArtifact(l, 'photo', { blob: b, mime: 'image/jpeg' });
+    if (shots.length) { toast(shots.length === 1 ? 'Photo kept' : shots.length + ' photos kept'); rerender(); }
+  };
+  $$('[data-rmart]', box).forEach(b => b.onclick = () => { const a = find(b.dataset.rmart); if (!a) return; dropArtifact(a); rerender(); });
+  soundButton($('[data-rec]', box), async (blob, secs) => { await keepArtifact(l, 'sound', { blob, duration: secs }); toast('Sound kept'); rerender(); });
+  const form = $('.souv-form', box); let souvBlob = null;
+  $('[data-addsouv]', box).onclick = () => { form.hidden = !form.hidden; if (!form.hidden) $('[data-souvname]', form).focus(); };
+  $('[data-souvph]', form).onclick = async () => { const [b] = await pickPhotos(1); if (b) { souvBlob = b; $('[data-souvphn]', form).textContent = 'Photo added'; } };
+  $('[data-souvsave]', form).onclick = async () => {
+    const name = $('[data-souvname]', form).value.trim();
+    if (!name) { $('[data-souvname]', form).focus(); return; }
+    await keepArtifact(l, 'souvenir', { title: name, blob: souvBlob, mime: souvBlob ? 'image/jpeg' : '' });
+    toast('Kept: ' + name); rerender();
+  };
+}
+
 /** Name a spot by its street, else its neighbourhood, else the town (OpenStreetMap). Null when offline. */
 async function hereName(p) {
   if (cfg && cfg.demo) return { title: 'Nakamise-dōri', city: 'Tokyo' };
@@ -3682,9 +3900,24 @@ function openHere(tripId, d) {
     </div>
     ${tours.length ? `<div class="field"><label>Part of</label><select id="h-parent"><option value="">— (on my own)</option>${tours.map(l => `<option value="${esc(l.id)}">${esc(l.title)}</option>`).join('')}</select></div>` : ''}
     <div class="field"><label>Note</label><input id="h-note" placeholder="What it was like, what you ordered…"></div>
+    <div class="photo-grid" id="h-kept"></div>
+    <div class="keep-actions"><button class="btn ghost small" id="h-ph">+ Photo</button><button class="btn ghost small" id="h-rec">● Record sound</button></div>
     <button class="btn" id="h-save">Log it</button>
   `, sh => {
     const ta = $('#h-text', sh);
+    // photos / a sound taken now, kept with the stop once it's logged
+    const keep = [];
+    const drawKeep = () => {
+      const box = $('#h-kept', sh);
+      box.innerHTML = keep.map((k, i) => k.kind === 'photo' ? `<button class="ph" data-k="${i}"><img src="${k.url}" alt=""></button>` : `<button class="ph snd" data-k="${i}">♪ ${fmtSecs(k.duration)}</button>`).join('');
+      $$('[data-k]', box).forEach(b => b.onclick = () => { keep.splice(+b.dataset.k, 1); drawKeep(); toast('Removed'); });
+      $('#h-ph', sh).hidden = keep.filter(k => k.kind === 'photo').length >= MAX_PHOTOS;
+    };
+    $('#h-ph', sh).onclick = async () => {
+      const shots = await pickPhotos(MAX_PHOTOS - keep.filter(k => k.kind === 'photo').length);
+      shots.forEach(b => keep.push({ kind: 'photo', blob: b, url: URL.createObjectURL(b) })); drawKeep();
+    };
+    soundButton($('#h-rec', sh), (blob, secs) => { keep.push({ kind: 'sound', blob, duration: secs }); drawKeep(); });
     const bindPicks = () => $$('[data-pick]', sh).forEach(el => el.onclick = () => {
       const on = !el.classList.contains('on');
       $$('[data-pick]', sh).forEach(x => x.classList.remove('on'));
@@ -3783,6 +4016,7 @@ function openHere(tripId, d) {
       // a typed name (no link) at your current spot keeps your location
       else if (!it && !isMapsUrl(text) && pos) { payload.title = text; payload.lat = pos.lat; payload.lng = pos.lng; }
       queue('addLog', payload, () => { db.log.push(local); if (it) it.status = 'done'; });
+      keep.forEach(k => keepArtifact(local, k.kind, { blob: k.blob, mime: k.kind === 'photo' ? 'image/jpeg' : k.blob.type, duration: k.duration || '' }));
       // logging a planned tour also logs its stops (delete any you skipped)
       if (it && isTour(it)) {
         childrenOf(it.id).forEach((c, k) => {
@@ -3813,8 +4047,13 @@ function openLogEntry(id) {
     <div class="field"><label>Note</label><textarea id="lg-note">${esc(l.note)}</textarea></div>
     <div class="field" style="margin-bottom:6px"><label>How was it?</label></div>
     <div class="seg" id="lg-rate">${RATINGS.map(([k, n]) => `<button data-r="${k}" class="${ratingOf(l) === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+    <h4>Kept</h4>
+    <div id="lg-kept"></div>
     <div class="btnrow"><button class="btn danger" id="lg-del">Delete</button><button class="btn" id="lg-save">Save</button></div>
   `, sh => {
+    const kb = $('#lg-kept', sh);
+    const drawKept = () => { kb.innerHTML = keptBlock(l); bindKept(kb, l, drawKept); };
+    drawKept();
     let rating = ratingOf(l);
     $$('#lg-rate button', sh).forEach(b => b.onclick = () => {
       rating = rating === b.dataset.r ? '' : b.dataset.r;
@@ -3836,6 +4075,8 @@ function openLogEntry(id) {
       undoable('Removed ' + l.title, () => {
         const gone = new Set([l.id, ...kids.map(k => k.id)]);
         db.log = db.log.filter(x => !gone.has(x.id));
+        db.artifacts.filter(a => gone.has(a.log_id)).forEach(a => blobs.del(a.id));
+        db.artifacts = db.artifacts.filter(a => !gone.has(a.log_id));
         [l, ...kids].forEach(x => { if (x.item_id && !db.log.some(y => y.item_id === x.item_id)) { const it = itemById(x.item_id); if (it) it.status = 'open'; } });
       }, () => { kids.forEach(k => queue('deleteLog', { id: k.id })); queue('deleteLog', { id: l.id }); });
     };
@@ -4127,6 +4368,11 @@ function demoData() {
         [d(-147), 'Bæjarins Beztu Pylsur', 64.1482, -21.9406, { origin: 'found', mode: 'walk', category: 'Hot dog stand', time: '19:00' }],
       ].map(([day, title, lat, lng, o], k) => Object.assign({ id: 'rl' + k, trip_id: 'tr_demo3', day, seq: String(k), title, lat, lng, city: 'Reykjavík' }, o)),
     ],
+    artifacts: [
+      { id: 'ar_demo1', log_id: 'rl1', trip_id: 'tr_demo3', kind: 'photo', file_id: 'demo', mime: 'image/jpeg', seq: '0' },
+      { id: 'ar_demo2', log_id: 'rl4', trip_id: 'tr_demo3', kind: 'souvenir', title: 'a Sibelius 5 programme', seq: '0' },
+      { id: 'ar_demo3', log_id: 'rl6', trip_id: 'tr_demo3', kind: 'souvenir', title: 'lava salt', seq: '0' },
+    ],
   };
 }
 
@@ -4152,6 +4398,15 @@ function demoApi(action, p) {
     else if (action === 'updateTrip') resolve(tripById(p.id));
     else if (action === 'attach') resolve(db.items.filter(i => p.ids.includes(i.id)));
     else if (action === 'routes') resolve(p.legs.map(() => null));
+    else if (action === 'upload') resolve({ ...artifactRow(p), file_id: p.hasFile ? 'demo' : '', _pending: false });
+    else if (action === 'updateArtifact') resolve(Object.assign(db.artifacts.find(a => a.id === p.id) || {}, p.patch || {}));
+    else if (action === 'deleteArtifact') resolve({ id: p.id });
+    else if (action === 'file') {   // a made-up photo: dusk over the water
+      const c = document.createElement('canvas'); c.width = 640; c.height = 480; const g = c.getContext('2d');
+      const gr = g.createLinearGradient(0, 0, 0, 480); gr.addColorStop(0, '#2b3a55'); gr.addColorStop(.55, '#d9895b'); gr.addColorStop(.56, '#1f2b3a'); gr.addColorStop(1, '#101820');
+      g.fillStyle = gr; g.fillRect(0, 0, 640, 480);
+      resolve({ mime: 'image/jpeg', b64: c.toDataURL('image/jpeg', .8).split(',')[1] });
+    }
     else if (action === 'nearby') resolve([['A tiny jazz kissa', 'Jazz club', 18], ['Corner bakery (sample)', 'Bakery', 41], ['Sentō bathhouse (sample)', 'Public bath', 77]]
       .map(([title, category, dist], k) => ({ place_id: 'demo_near_' + k, title, category, dist, lat: +p.lat + dist / 111320, lng: +p.lng, address: '', city: 'Tokyo', maps_url: '' })));
     else resolve(null);

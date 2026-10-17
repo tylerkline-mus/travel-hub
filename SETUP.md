@@ -126,6 +126,7 @@ It logs to whichever trip is happening today (a day either side counts, for trav
 - **The Sheet** is the record. You can edit cells directly: fix a typo, paste rows, add notes. The app picks it up on the next open.
 - **The `id` column** is how the app knows which row is which. Don't change existing IDs. If you add a row by hand, give it any unique short ID (e.g. `it_hand01`) so the app can edit it later.
 - **Deleting a trip** sends its places back to Someday rather than deleting them.
+- **Photos, sounds and souvenirs** you keep with a stop are rows in the **Artifacts** tab; the files themselves go to a **Travel Hub** folder in your Google Drive (one folder per trip), private to you. The app loads them back through the script and keeps a copy on the phone. The first time the script saves a file, Google asks for Drive permission — run **testDrive** once from the editor to get that out of the way. Deleting a stop sends its files to the Drive trash.
 
 ## Next steps (step 2)
 

@@ -23,6 +23,8 @@ const SHEETS = {
           'origin', 'note', 'would_return', 'cost', 'currency', 'photo_url', 'created',
           'parent_id', 'day', 'seq', 'time', 'mode', 'address', 'city', 'maps_url', 'updated', 'rating', 'category'],
   Routes: ['key', 'polyline', 'duration', 'distance', 'created'],
+  // Photos, sounds and souvenirs kept with a logged stop. The files live in Drive (Travel Hub / <trip>), private to you.
+  Artifacts: ['id', 'log_id', 'trip_id', 'kind', 'title', 'note', 'file_id', 'mime', 'duration', 'seq', 'created', 'updated'],
 };
 
 // What a Google lookup is allowed to fill in on an existing item
@@ -158,6 +160,7 @@ const ACTIONS = {
       items: readTable('Items'),
       plan: readTable('Plan'),
       log: readTable('Log'),
+      artifacts: hasTab('Artifacts') ? readTable('Artifacts') : [],
       places: !!PropertiesService.getScriptProperties().getProperty('PLACES_KEY'),
     };
   },
@@ -310,12 +313,66 @@ const ACTIONS = {
       if (!f) return { id: p.id };
       const itemId = f.obj.item_id;
       deleteRow('Log', p.id);
+      // Its photos, sounds and souvenirs go too (files to the Drive trash, so they can still be recovered)
+      if (hasTab('Artifacts')) readTable('Artifacts').filter(function (a) { return a.log_id === String(p.id); })
+        .forEach(function (a) { trashFile(a.file_id); deleteRow('Artifacts', a.id); });
       // If nothing else logs that planned item, mark it open again
       if (itemId && !readTable('Log').some(function (l) { return l.item_id === itemId; })) {
         try { updateRow('Items', itemId, { status: 'open', updated: new Date().toISOString() }); } catch (e) {}
       }
       return { id: p.id };
     });
+  },
+
+  /** Keep a photo, sound or souvenir with a logged stop. The file (b64) goes to Drive; the row to Artifacts. */
+  upload: function (p) {
+    if (!hasTab('Artifacts')) setup();
+    const id = String(p.id || newId('ar'));
+    const existing = findRow('Artifacts', id);
+    if (existing) return existing.obj;
+    const kind = ['photo', 'sound', 'souvenir'].indexOf(p.kind) >= 0 ? p.kind : 'photo';
+    const log = p.log_id ? findRow('Log', p.log_id) : null;
+    const tripId = String(p.trip || (log && log.obj.trip_id) || '');
+    let fileId = '', mime = String(p.mime || '');
+    if (p.b64) {
+      const bytes = Utilities.base64Decode(String(p.b64));
+      const ext = /png/.test(mime) ? 'png' : /jpe?g/.test(mime) ? 'jpg' : /mp4|m4a|aac/.test(mime) ? 'm4a' : /webm/.test(mime) ? 'webm' : /ogg/.test(mime) ? 'ogg' : 'bin';
+      const when = (log && (log.obj.day || String(log.obj.logged_at).slice(0, 10))) || Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd');
+      const name = [when, (log && log.obj.title) || p.title || 'Stop', kind === 'souvenir' ? (p.title || 'souvenir') : kind]
+        .join(' · ').replace(/[\/:*?"<>|]/g, '-').slice(0, 120) + '.' + ext;
+      const file = tripFolder(tripId).createFile(Utilities.newBlob(bytes, mime || 'application/octet-stream', name));
+      fileId = file.getId();
+    }
+    const now = new Date().toISOString();
+    const row = { id: id, log_id: String(p.log_id || ''), trip_id: tripId, kind: kind, title: p.title || '', note: p.note || '',
+      file_id: fileId, mime: fileId ? mime : '', duration: p.duration || '', seq: p.seq != null ? String(p.seq) : '', created: now, updated: now };
+    withLock(function () { if (!findRow('Artifacts', id)) appendObj('Artifacts', row); });
+    return row;
+  },
+
+  /** A kept file, read back privately through the script: { mime, b64 }. */
+  file: function (p) {
+    const f = findRow('Artifacts', p.id);
+    if (!f || !f.obj.file_id) throw new Error('No file for that');
+    const blob = DriveApp.getFileById(f.obj.file_id).getBlob();
+    return { mime: f.obj.mime || blob.getContentType(), b64: Utilities.base64Encode(blob.getBytes()) };
+  },
+
+  updateArtifact: function (p) {
+    return withLock(function () {
+      const patch = parsePatch(p.patch);
+      ['file_id', 'mime', 'log_id', 'trip_id', 'kind'].forEach(function (k) { delete patch[k]; });
+      patch.updated = new Date().toISOString();
+      return updateRow('Artifacts', p.id, patch);
+    });
+  },
+
+  deleteArtifact: function (p) {
+    const f = findRow('Artifacts', p.id);
+    if (!f) return { id: p.id };
+    trashFile(f.obj.file_id);
+    withLock(function () { deleteRow('Artifacts', p.id); });
+    return { id: p.id };
   },
 
   /** Save a new order: ids in order → seq 0, 1, 2… */
@@ -801,6 +858,30 @@ function metersBetween(lat1, lng1, lat2, lng2) {
 /* ---------------------------------------------------------------
  * Sheet helpers
  * ------------------------------------------------------------- */
+function hasTab(name) { return !!SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name); }
+
+/** Drive: Travel Hub / <trip name>, made on first use and remembered in Script Properties. */
+function tripFolder(tripId) {
+  const props = PropertiesService.getScriptProperties();
+  const get = function (key, make) {
+    const fid = props.getProperty(key);
+    if (fid) { try { const f = DriveApp.getFolderById(fid); if (!f.isTrashed()) return f; } catch (e) {} }
+    const f = make(); props.setProperty(key, f.getId()); return f;
+  };
+  const root = get('FOLDER_root', function () { return DriveApp.createFolder('Travel Hub'); });
+  if (!tripId) return root;
+  const trip = readTable('Trips').filter(function (t) { return t.id === tripId; })[0];
+  return get('FOLDER_' + tripId, function () { return root.createFolder((trip && trip.name) || tripId); });
+}
+
+function trashFile(fileId) {
+  if (!fileId) return;
+  try { DriveApp.getFileById(fileId).setTrashed(true); } catch (e) {}
+}
+
+/** Run once from the editor after pasting: asks for Drive permission and makes the Travel Hub folder. */
+function testDrive() { Logger.log('Travel Hub folder: ' + tripFolder('').getUrl()); }
+
 function sheet(name) {
   const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
   if (!sh) throw new Error('Missing tab "' + name + '" — run setup()');
