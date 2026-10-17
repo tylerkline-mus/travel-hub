@@ -123,6 +123,17 @@ function fromBase64(b) {
   try { return Utilities.newBlob(Utilities.base64Decode(clean)).getDataAsString(); } catch (e) { return ''; }
 }
 
+/** Turns what a shortcut sends as `trip` into a trip id: 'auto', 'Someday', a trip id, or a trip's name. Unknown → Someday. */
+function resolveTripParam(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s || s.toLowerCase() === 'someday') return '';
+  if (s.toLowerCase() === 'auto') return currentOrNextTripId();
+  const trips = readTable('Trips');
+  const t = trips.filter(function (x) { return x.id === s; })[0] ||
+            trips.filter(function (x) { return String(x.name).trim().toLowerCase() === s.toLowerCase(); })[0];
+  return t ? t.id : '';
+}
+
 /** The trip happening now (a day either side counts), otherwise the next one coming up. '' if none. */
 function currentOrNextTripId() {
   const today = Utilities.formatDate(new Date(), 'UTC', 'yyyy-MM-dd');
@@ -166,7 +177,7 @@ const ACTIONS = {
   /** Add an item from pasted text / a Maps link. Works from GET (Shortcut) or POST (app). */
   add: function (p) {
     return withLock(function () {
-      const tripId = p.trip === 'auto' ? currentOrNextTripId() : (p.trip === 'someday' || !p.trip) ? '' : String(p.trip);
+      const tripId = resolveTripParam(p.trip);
       const id = p.id ? String(p.id) : newId('it');
       const existing = findRow('Items', id);
       if (existing) return existing.obj; // idempotent for the offline queue
