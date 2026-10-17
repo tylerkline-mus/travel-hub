@@ -91,23 +91,30 @@ Try it: in Google Maps, open a place → **Share** → **Send to Trip** → pick
 
 ---
 
-## 7. The "I'm here" shortcut (log a stop without opening the app)
+## 7. The "I'm here" shortcut (log a stop in one tap)
 
-One tap logs where you're standing to today's trip, with the place's name when Google knows it, and the real time. Put it on your Home Screen, the Action Button, or Back Tap.
+Two ways in, one shortcut:
+- **Share a place from Google Maps → I'm here.** Logs that place to today's trip, stamped with the moment you shared it.
+- **Tap it from your Home Screen, Action Button or Back Tap.** Logs where you're standing: the saved place you're at, otherwise the nearest place Google knows, otherwise "Somewhere".
 
 In the **Shortcuts** app, tap **+** and name it **I'm here**. Then:
 
-1. Add **Get Current Location**.
-2. Add **Get Details of Locations**: *Get* **Latitude** from **Current Location**.
-3. Add another **Get Details of Locations**: *Get* **Longitude** from **Current Location**.
-4. Add **Text**: your Web app URL followed by
-   `?action=here&format=text&token=YOURPASSPHRASE&lat=` then insert the **Latitude** variable, then `&lng=`, then insert the **Longitude** variable.
-5. Add **Get Contents of URL** with that Text.
+1. Tap **ⓘ** and turn on **Show in Share Sheet**. Set it to accept **URLs** and **Text**. Under *If there's no input*, choose **Continue**.
+2. Add **If**: *Shortcut Input* **has any value**.
+3. Inside the **If** branch:
+   - **URL Encode** with **Shortcut Input**.
+   - **Text**: your Web app URL followed by `?action=here&format=text&token=YOURPASSPHRASE&text=` then insert **URL Encoded Text**.
+4. Inside the **Otherwise** branch:
+   - **Get Current Location**.
+   - **Get Details of Locations**: **Latitude**.
+   - **Get Details of Locations**: **Longitude**.
+   - **Text**: your Web app URL followed by `?action=here&format=text&token=YOURPASSPHRASE&lat=` + **Latitude** + `&lng=` + **Longitude**.
+5. After **End If**, add **Get Contents of URL** with **If Result**.
 6. Add **Show Notification** with **Contents of URL**. It says what was logged, e.g. *Logged Kaffibarinn (Iceland, Autumn 2026).*
 
-To put it within reach: tap the shortcut's **ⓘ → Add to Home Screen**; or **Settings → Action Button → Shortcut**; or **Settings → Accessibility → Touch → Back Tap → Double Tap**.
+To put it within reach: **ⓘ → Add to Home Screen**; or **Settings → Action Button → Shortcut**; or **Settings → Accessibility → Touch → Back Tap → Double Tap**. In Google Maps, it appears in the share sheet's list of apps and actions; long-press it there to move it near the front.
 
-It logs to whichever trip is happening today (a day either side counts, for travel days). If you're standing at something saved to the trip, it logs that; otherwise the nearest place Google knows within about 60 m; otherwise just your location as "Somewhere", which you can rename in the app. A second tap at the same spot within half an hour doesn't log twice.
+It logs to whichever trip is happening today (a day either side counts, for travel days). A shared place that's already saved to the trip is logged as that place (and ticked off). A second log at the same spot within half an hour doesn't log twice. It needs signal; with none, open the app and use **I'm here** there, which saves offline.
 
 ---
 

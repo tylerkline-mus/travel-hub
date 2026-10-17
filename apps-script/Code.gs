@@ -314,11 +314,18 @@ const ACTIONS = {
     return placesNearby(lat, lng, Math.min(num(p.radius) || 80, 300), key);
   },
 
-  /** For the "I'm here" Shortcut: log where the phone is to today's trip, in one request.
-      GET ?action=here&token=…&lat=…&lng=…[&note=…][&trip=…]&format=text */
+  /** For the "I'm here" Shortcut: log to today's trip, in one request. Either a place shared from Google Maps
+      (text=the link) or where the phone is (lat, lng). Stamped with the moment it arrives.
+      GET ?action=here&token=…&format=text&(text=…|lat=…&lng=…)[&note=…][&trip=…] */
   here: function (p) {
-    const lat = num(p.lat), lng = num(p.lng);
-    if (lat === '' || lng === '') throw new Error('No location came through');
+    let lat = num(p.lat), lng = num(p.lng);
+    // a shared Google Maps link: look the place up first
+    let shared = null;
+    if (p.text && /https?:\/\//.test(String(p.text))) {
+      shared = resolveText(String(p.text));
+      if (shared.lat !== undefined && shared.lat !== '') { lat = num(shared.lat); lng = num(shared.lng); }
+    }
+    if (lat === '' || lng === '') throw new Error(shared ? 'Couldn’t find where that link points' : 'No location came through');
     // the trip happening today (a day either side counts, for travel days)
     let trip = null, day = '';
     readTable('Trips').forEach(function (t) {
@@ -331,15 +338,18 @@ const ACTIONS = {
     const tz = trip.timezone || 'UTC';
     const nowIso = new Date().toISOString(), time = Utilities.formatDate(new Date(), tz, 'HH:mm');
 
-    // standing at something already saved to the trip?
-    let item = null, best = 60;
+    // standing at (or sharing) something already saved to the trip?
+    let item = null, best = shared ? 40 : 60;
     readTable('Items').forEach(function (i) {
-      if (i.trip_id !== trip.id || i.lat === '' || i.lng === '' || i.kind === 'fixed' && /^(flight|stay)$/i.test(i.category)) return;
+      if (i.trip_id !== trip.id || i.kind === 'fixed' && /^(flight|stay)$/i.test(i.category)) return;
+      if (shared && shared.place_id && i.place_id === shared.place_id) { item = i; best = -1; return; }
+      if (best < 0 || i.lat === '' || i.lng === '') return;
       const d = metersBetween(lat, lng, +i.lat, +i.lng);
       if (d < best) { best = d; item = i; }
     });
-    let place = null;
-    if (!item) {
+    let place = shared && shared.title ? { place_id: shared.place_id || '', title: shared.title, lat: lat, lng: lng,
+      address: shared.address || '', city: shared.city || '', maps_url: shared.maps_url || '', category: shared.category || '' } : null;
+    if (!item && !place) {
       const key = PropertiesService.getScriptProperties().getProperty('PLACES_KEY');
       if (key) { try { place = placesNearby(lat, lng, 60, key)[0] || null; } catch (e) {} }
     }

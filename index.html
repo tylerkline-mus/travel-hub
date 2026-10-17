@@ -2619,6 +2619,7 @@ function openHere(tripId, d) {
     ${navigator.geolocation && isToday ? `<div class="hint here-status" id="h-where">Finding you…</div><div id="h-around"></div>` : ''}
     <h4>${dayPlan.length || others.length ? 'Or somewhere new' : 'Somewhere'}</h4>
     <div class="field"><textarea id="h-text" placeholder="Paste a Google Maps link, or type a name"></textarea></div>
+    ${navigator.clipboard && navigator.clipboard.readText ? `<button class="linkbtn" id="h-paste" style="margin:-8px 0 10px">Paste a link</button>` : ''}
     <div class="two">
       <div class="field"><label>Time (optional)</label><div class="inline"><input type="time" id="h-time"><button class="btn ghost small" id="h-now">Now</button></div></div>
       <div class="field"><label>Got here by</label><select id="h-mode">${MODES.map(([k, l]) => `<option value="${k}" ${k === (prev && prev.mode) ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
@@ -2670,6 +2671,8 @@ function openHere(tripId, d) {
     }, () => { where.textContent = 'Location is off, so the list isn’t sorted by distance.'; }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
     $$('[data-pick]', sh).forEach(el => el.addEventListener('click', () => { near = null; $$('[data-near]', sh).forEach(x => x.classList.remove('on')); }));
     ta.addEventListener('input', () => { if (ta.value.trim()) clearPicks(); });
+    const hp = $('#h-paste', sh);
+    if (hp) hp.onclick = async () => { try { ta.value = (await navigator.clipboard.readText()).trim(); if (ta.value) clearPicks(); } catch (e) { toast('Long-press the box to paste'); } };
     $('#h-save', sh).onclick = () => {
       const text = ta.value.trim();
       if (!picked && !near && !text) { ta.focus(); return; }
