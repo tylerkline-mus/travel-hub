@@ -64,7 +64,7 @@ a { color: var(--accent); }
 .iconbtn { width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line); background: var(--card);
   display: grid; place-items: center; cursor: pointer; flex: none; padding: 0; }
 .iconbtn svg { width: 18px; height: 18px; }
-.sync { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.sync { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; white-space: nowrap; cursor: pointer; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idea); }
 .dot.pending { background: #d8a136; } .dot.offline { background: var(--muted); }
 
@@ -563,8 +563,18 @@ const I = {
  * ============================================================ */
 async function api(action, payload = {}) {
   if (cfg && cfg.demo) return demoApi(action, payload);
-  const res = await fetch(cfg.url, { method: 'POST', body: JSON.stringify({ action, token: cfg.token, ...payload }) });
-  const j = await res.json();
+  let res;
+  try { res = await fetch(cfg.url, { method: 'POST', body: JSON.stringify({ action, token: cfg.token, ...payload }) }); }
+  catch (e) { const err = new Error('no connection'); err.detail = 'No connection (' + (e && e.message || e) + ')'; throw err; }
+  const txt = await res.text();
+  let j;
+  try { j = JSON.parse(txt); }
+  catch (e) {
+    // Google sent a page instead of an answer (a hiccup on their side, or the script needs attention)
+    const err = new Error('unexpected reply');
+    err.detail = 'Google replied ' + res.status + ': ' + txt.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw err;
+  }
   if (!j.ok) { const err = new Error(j.error || 'Server error'); err.server = true; throw err; }
   return j.data;
 }
@@ -607,13 +617,28 @@ async function flush() {
       outbox.shift(); saveLocal();
     } catch (e) {
       if (e.server) { toast('Couldn’t save: ' + e.message); outbox.shift(); saveLocal(); }
-      else { syncState = 'offline'; break; }
+      else { syncState = 'offline'; lastSyncError = e.detail || e.message; scheduleRetry(); break; }
     }
   }
   inFlight = null;
-  if (!outbox.length) syncState = 'ok';
+  if (!outbox.length) { syncState = 'ok'; lastSyncError = ''; retryDelay = 5000; }
   flushing = false; render();
 }
+
+/* If the Sheet can't be reached, keep trying by itself: 5 s, 10 s, 20 s… up to every 2 minutes. */
+let retryTimer = null, retryDelay = 5000, lastSyncError = '';
+function scheduleRetry() {
+  if (retryTimer) return;
+  retryTimer = setTimeout(() => { retryTimer = null; pull(); }, retryDelay);
+  retryDelay = Math.min(retryDelay * 2, 120000);
+}
+function syncNow() {
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+  retryDelay = 5000; ui.noRoutes = false;
+  return pull().then(() => toast(syncState === 'ok' ? 'Up to date'
+    : 'Still can’t reach your Sheet' + (lastSyncError ? ' — ' + lastSyncError : '')));
+}
+document.addEventListener('click', e => { if (cfg && !cfg.demo && e.target.closest && e.target.closest('.top .sync')) syncNow(); });
 
 async function pull() {
   if (!cfg) return;
@@ -626,6 +651,7 @@ async function pull() {
   } catch (e) {
     syncState = 'offline'; render();
     if (e.server) toast(e.message);
+    else { lastSyncError = e.detail || e.message; scheduleRetry(); }
   }
 }
 
@@ -691,7 +717,7 @@ function syncBadge() {
   const pending = outbox.length;
   const state = syncState === 'offline' ? 'offline' : pending ? 'pending' : 'ok';
   const label = cfg && cfg.demo ? '<span class="demo-tag">SAMPLE</span>' :
-    state === 'offline' ? `Offline${pending ? ' · ' + pending + ' waiting' : ''}` : pending ? 'Saving…' : 'Synced';
+    state === 'offline' ? `${navigator.onLine ? 'Retrying' : 'Offline'}${pending ? ' · ' + pending + ' waiting' : ''}` : pending ? 'Saving…' : 'Synced';
   return `<div class="sync">${cfg && cfg.demo ? '' : `<span class="dot ${state}"></span>`}${label}</div>`;
 }
 
@@ -2904,7 +2930,7 @@ function openSettings() {
       store.set('th_cfg', cfg); closeSheet(); ui.noRoutes = false; pull(); toast('Saved');
     };
     const sy = $('#st-sync', sh);
-    if (sy) sy.onclick = () => { closeSheet(); ui.noRoutes = false; pull().then(() => toast(syncState === 'ok' ? 'Up to date' : 'Still offline')); };
+    if (sy) sy.onclick = () => { closeSheet(); syncNow(); };
     const out = $('#st-out', sh);
     if (out) out.onclick = () => {
       if (outbox.length && !confirm(outbox.length + ' changes haven’t reached the Sheet yet. Disconnect anyway?')) return;
