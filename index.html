@@ -273,6 +273,7 @@ nav.tabs .add svg { width: 26px; height: 26px; }
 .stoprow { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .stoprow .body { flex: 1; min-width: 0; }
 
+.here-status { margin: -2px 2px 10px; }
 /* ---------- Recap poster ---------- */
 .recap .poster-frame { margin: 10px auto 16px; max-width: 420px; }
 .recap .poster-frame.story { max-width: 300px; }
@@ -2295,14 +2296,14 @@ function openHere(tripId, d) {
   const others = topItemsFor(tripId).filter(i => i.kind !== 'fixed' && !logged.has(i.id) && i.day !== d);
   const tours = topLogs(tripId, d).filter(l => { const it = l.item_id && itemById(l.item_id); return it && isTour(it); });
   const prev = topLogs(tripId, d).slice(-1)[0];
-  let picked = null, pos = null;
+  let picked = null, pos = null, near = null, nearList = [];
 
   const pickRow = i => `<div class="pick" data-pick="${esc(i.id)}"><span class="num ${i.kind === 'idea' ? 'hollow' : ''}" style="--c:${i.kind === 'fixed' ? 'var(--fixed)' : 'var(--place)'}">•</span><div class="body"><div class="title">${esc(i.title)}</div><div class="meta" data-dist="${esc(i.id)}">${esc(placeLine(i))}</div></div></div>`;
   openSheet(`
     <h3>${isToday ? 'Where are you?' : 'Add a stop · ' + esc(fmtDay(d, false))}</h3>
     ${dayPlan.length ? `<h4 style="margin-top:0">From the plan</h4><div id="h-plan">${dayPlan.map(pickRow).join('')}</div>` : ''}
     ${others.length ? `<details style="margin:6px 0 12px"><summary style="font-size:14px;color:var(--muted);cursor:pointer;padding:6px 2px">Other saved places (${others.length})</summary><div id="h-others" style="margin-top:8px">${others.map(pickRow).join('')}</div></details>` : ''}
-    ${navigator.geolocation && isToday ? `<button class="linkbtn" id="h-near" style="margin:-4px 0 8px">Sort by what’s near me</button>` : ''}
+    ${navigator.geolocation && isToday ? `<div class="hint here-status" id="h-where">Finding you…</div><div id="h-around"></div>` : ''}
     <h4>${dayPlan.length || others.length ? 'Or somewhere new' : 'Somewhere'}</h4>
     <div class="field"><textarea id="h-text" placeholder="Paste a Google Maps link, or type a name"></textarea></div>
     <div class="two">
@@ -2322,37 +2323,62 @@ function openHere(tripId, d) {
     bindPicks();
     ta.oninput = () => { if (ta.value.trim()) { picked = null; $$('[data-pick]', sh).forEach(x => x.classList.remove('on')); } };
     $('#h-now', sh).onclick = () => { $('#h-time', sh).value = tzNow(t.timezone).time; };
-    const near = $('#h-near', sh);
-    if (near) near.onclick = () => {
-      near.textContent = 'Finding you…';
-      navigator.geolocation.getCurrentPosition(p => {
-        pos = { lat: p.coords.latitude, lng: p.coords.longitude };
-        ['#h-plan', '#h-others'].forEach(sel => {
-          const box = $(sel, sh); if (!box) return;
-          const rows = $$('[data-pick]', box).map(el => ({ el, it: itemById(el.dataset.pick) }));
-          rows.forEach(r => { r.d = hasCoords(r.it) ? meters(pos, r.it) : 1e9; const m = $('[data-dist]', r.el); if (m && r.d < 1e9) m.textContent = [placeLine(r.it), fmtDist(r.d) + ' away'].filter(Boolean).join(' · '); });
-          rows.sort((a, b) => a.d - b.d).forEach(r => box.appendChild(r.el));
-          if (sel === '#h-plan' && rows[0] && rows[0].d < 150 && !picked) rows[0].el.click();
-        });
-        const det = $('details', sh); if (det && $('#h-others .pick', sh) && meters(pos, itemById($('#h-others .pick', sh).dataset.pick)) < 150) det.open = true;
-        near.textContent = 'Sorted by distance';
-      }, () => { near.textContent = 'Couldn’t get your location'; }, { enableHighAccuracy: true, timeout: 10000 });
+    // Where am I? Ask once, then sort the list, preselect what you're standing at, and show what's around you.
+    const clearPicks = () => { picked = null; near = null; $$('[data-pick], [data-near]', sh).forEach(x => x.classList.remove('on')); };
+    const where = $('#h-where', sh);
+    const showAround = list => {
+      nearList = (list || []).filter(n => !dayPlan.concat(others).some(i => i.place_id && i.place_id === n.place_id)).slice(0, 5);
+      const box = $('#h-around', sh); if (!box || !nearList.length) return;
+      box.innerHTML = `<h4 style="margin-top:4px">Around you</h4>` + nearList.map((n, k) => `<div class="pick" data-near="${k}"><span class="num hollow" style="--c:var(--found)">•</span><div class="body"><div class="title">${esc(n.title)}</div><div class="meta">${esc([n.category, n.dist != null ? fmtDist(n.dist) + ' away' : ''].filter(Boolean).join(' · '))}</div></div></div>`).join('');
+      $$('[data-near]', box).forEach(el => el.onclick = () => {
+        const on = !el.classList.contains('on'); clearPicks();
+        if (on) { el.classList.add('on'); near = nearList[+el.dataset.near]; ta.value = ''; }
+      });
     };
+    if (where) navigator.geolocation.getCurrentPosition(p => {
+      pos = { lat: p.coords.latitude, lng: p.coords.longitude };
+      let best = null;
+      ['#h-plan', '#h-others'].forEach(sel => {
+        const box = $(sel, sh); if (!box) return;
+        const rows = $$('[data-pick]', box).map(el => ({ el, it: itemById(el.dataset.pick) }));
+        rows.forEach(r => { r.d = hasCoords(r.it) ? meters(pos, r.it) : 1e9; const m = $('[data-dist]', r.el); if (m && r.d < 1e9) m.textContent = [placeLine(r.it), fmtDist(r.d) + ' away'].filter(Boolean).join(' · '); });
+        rows.sort((a, b) => a.d - b.d).forEach(r => box.appendChild(r.el));
+        const limit = sel === '#h-plan' ? 150 : 75;   // a planned stop can be a bit further off than a saved one
+        if (rows[0] && rows[0].d < limit && (!best || rows[0].d < best.d)) best = { ...rows[0], sel };
+      });
+      if (best && !picked && !near && !ta.value.trim()) {
+        if (best.sel === '#h-others') { const det = $('details', sh); if (det) det.open = true; }
+        best.el.click();
+        where.textContent = `You’re at ${best.it.title}, by the look of it.`;
+      } else where.textContent = 'Sorted by distance from you.';
+      if (navigator.onLine && (db.places || (cfg && cfg.demo))) {
+        api('nearby', { lat: pos.lat, lng: pos.lng }).then(list => { if (document.body.contains(sh)) showAround(list); }).catch(() => {});
+      }
+    }, () => { where.textContent = 'Location is off, so the list isn’t sorted by distance.'; }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
+    $$('[data-pick]', sh).forEach(el => el.addEventListener('click', () => { near = null; $$('[data-near]', sh).forEach(x => x.classList.remove('on')); }));
+    ta.addEventListener('input', () => { if (ta.value.trim()) clearPicks(); });
     $('#h-save', sh).onclick = () => {
       const text = ta.value.trim();
-      if (!picked && !text) { ta.focus(); return; }
+      if (!picked && !near && !text) { ta.focus(); return; }
       const parentSel = $('#h-parent', sh);
       const parent_id = parentSel ? parentSel.value : '';
       const it = picked ? itemById(picked) : null;
       const seq = parent_id ? logKids(parent_id).length : topLogs(tripId, d).length;
       const mode = $('#h-mode', sh).value;
-      const payload = { id: uid('lg'), trip: tripId, day: d, seq, time: $('#h-time', sh).value, mode: seq || parent_id ? mode : '',
-        parent_id, note: $('#h-note', sh).value.trim(), timezone: t.timezone || '', item_id: it ? it.id : undefined, text: it ? undefined : text };
+      // Logged on the spot? Then the time is real: fill it in unless you typed one.
+      let time = $('#h-time', sh).value;
+      const spot = it && hasCoords(it) ? it : near ? near : (!it && !isMapsUrl(text) ? pos : null);
+      if (!time && isToday && pos && spot && meters(pos, spot) < 300) time = tzNow(t.timezone).time;
+      const payload = { id: uid('lg'), trip: tripId, day: d, seq, time, mode: seq || parent_id ? mode : '',
+        parent_id, note: $('#h-note', sh).value.trim(), timezone: t.timezone || '', item_id: it ? it.id : undefined, text: it || near ? undefined : text,
+        logged_at: new Date().toISOString() };
       const local = { id: payload.id, trip_id: tripId, day: d, seq: String(seq), time: payload.time, mode: payload.mode, parent_id, note: payload.note,
-        item_id: it ? it.id : '', title: it ? it.title : (isUrl(text) ? linkTitle(text) : text), origin: it ? 'planned' : (isMapsUrl(text) ? '' : 'found'),
-        lat: it ? it.lat : (pos && !isMapsUrl(text) ? pos.lat : ''), lng: it ? it.lng : (pos && !isMapsUrl(text) ? pos.lng : ''), city: it ? it.city : '', _pending: !it && isMapsUrl(text) };
+        item_id: it ? it.id : '', title: it ? it.title : near ? near.title : (isUrl(text) ? linkTitle(text) : text), origin: it ? 'planned' : (isMapsUrl(text) ? '' : 'found'),
+        lat: it ? it.lat : near ? near.lat : (pos && !isMapsUrl(text) ? pos.lat : ''), lng: it ? it.lng : near ? near.lng : (pos && !isMapsUrl(text) ? pos.lng : ''),
+        city: it ? it.city : near ? near.city : '', place_id: near ? near.place_id : '', logged_at: payload.logged_at, _pending: !it && !near && isMapsUrl(text) };
+      if (near) Object.assign(payload, { place_id: near.place_id, title: near.title, lat: near.lat, lng: near.lng, address: near.address, city: near.city, maps_url: near.maps_url });
       // a typed name (no link) at your current spot keeps your location
-      if (!it && !isMapsUrl(text) && pos) { payload.title = text; payload.lat = pos.lat; payload.lng = pos.lng; }
+      else if (!it && !isMapsUrl(text) && pos) { payload.title = text; payload.lat = pos.lat; payload.lng = pos.lng; }
       queue('addLog', payload, () => { db.log.push(local); if (it) it.status = 'done'; });
       // logging a planned tour also logs its stops (delete any you skipped)
       if (it && isTour(it)) {
@@ -2362,7 +2388,7 @@ function openHere(tripId, d) {
         });
       }
       closeSheet();
-      toast('Logged');
+      toast('Logged ' + local.title);
     };
   });
 }
@@ -2692,6 +2718,8 @@ function demoApi(action, p) {
     else if (action === 'updateTrip') resolve(tripById(p.id));
     else if (action === 'attach') resolve(db.items.filter(i => p.ids.includes(i.id)));
     else if (action === 'routes') resolve(p.legs.map(() => null));
+    else if (action === 'nearby') resolve([['A tiny jazz kissa', 'Jazz club', 18], ['Corner bakery (sample)', 'Bakery', 41], ['Sentō bathhouse (sample)', 'Public bath', 77]]
+      .map(([title, category, dist], k) => ({ place_id: 'demo_near_' + k, title, category, dist, lat: +p.lat + dist / 111320, lng: +p.lng, address: '', city: 'Tokyo', maps_url: '' })));
     else resolve(null);
   }, 250));
 }

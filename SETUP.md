@@ -91,6 +91,26 @@ Try it: in Google Maps, open a place → **Share** → **Send to Trip** → pick
 
 ---
 
+## 7. The "I'm here" shortcut (log a stop without opening the app)
+
+One tap logs where you're standing to today's trip, with the place's name when Google knows it, and the real time. Put it on your Home Screen, the Action Button, or Back Tap.
+
+In the **Shortcuts** app, tap **+** and name it **I'm here**. Then:
+
+1. Add **Get Current Location**.
+2. Add **Get Details of Locations**: *Get* **Latitude** from **Current Location**.
+3. Add another **Get Details of Locations**: *Get* **Longitude** from **Current Location**.
+4. Add **Text**: your Web app URL followed by
+   `?action=here&format=text&token=YOURPASSPHRASE&lat=` then insert the **Latitude** variable, then `&lng=`, then insert the **Longitude** variable.
+5. Add **Get Contents of URL** with that Text.
+6. Add **Show Notification** with **Contents of URL**. It says what was logged, e.g. *Logged Kaffibarinn (Iceland, Autumn 2026).*
+
+To put it within reach: tap the shortcut's **ⓘ → Add to Home Screen**; or **Settings → Action Button → Shortcut**; or **Settings → Accessibility → Touch → Back Tap → Double Tap**.
+
+It logs to whichever trip is happening today (a day either side counts, for travel days). If you're standing at something saved to the trip, it logs that; otherwise the nearest place Google knows within about 60 m; otherwise just your location as "Somewhere", which you can rename in the app. A second tap at the same spot within half an hour doesn't log twice.
+
+---
+
 ## How the pieces talk
 
 - **The app** reads everything from the Sheet when it opens and writes each change back. It keeps a copy on the phone for offline use.

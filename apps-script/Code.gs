@@ -205,7 +205,11 @@ const ACTIONS = {
       if (p.item_id) { const f = findRow('Items', p.item_id); item = f ? f.obj : null; }
 
       let r = {};
-      if (item) {
+      if (!item && p.place_id) {
+        // a place picked from "Around you": the app already has its details
+        r = { title: p.title, lat: num(p.lat), lng: num(p.lng), place_id: String(p.place_id),
+              address: p.address || '', city: p.city || '', maps_url: p.maps_url || '' };
+      } else if (item) {
         r = { title: item.title, lat: item.lat, lng: item.lng, place_id: item.place_id,
               address: item.address, maps_url: item.maps_url, city: item.city };
       } else if (p.text) {
@@ -238,7 +242,7 @@ const ACTIONS = {
         place_id: r.place_id || '', lat: r.lat != null ? r.lat : '', lng: r.lng != null ? r.lng : '',
         address: r.address || '', city: r.city || '', maps_url: r.maps_url || '',
         origin: origin, note: p.note || '', would_return: p.would_return || '',
-        logged_at: now, timezone: p.timezone || '', created: now, updated: now,
+        logged_at: p.logged_at || now, timezone: p.timezone || '', created: now, updated: now,
       };
       appendObj('Log', log);
       if (item && item.status !== 'done') updateRow('Items', item.id, { status: 'done', updated: now });
@@ -299,6 +303,64 @@ const ACTIONS = {
     });
     if (fresh.length) withLock(function () { fresh.forEach(function (r) { appendObj('Routes', r); }); });
     return out;
+  },
+
+  /** Places right around a spot, closest first (the "Around you" list in I'm here). */
+  nearby: function (p) {
+    const key = PropertiesService.getScriptProperties().getProperty('PLACES_KEY');
+    const lat = num(p.lat), lng = num(p.lng);
+    if (!key || lat === '' || lng === '') return [];
+    return placesNearby(lat, lng, Math.min(num(p.radius) || 80, 300), key);
+  },
+
+  /** For the "I'm here" Shortcut: log where the phone is to today's trip, in one request.
+      GET ?action=here&token=…&lat=…&lng=…[&note=…][&trip=…]&format=text */
+  here: function (p) {
+    const lat = num(p.lat), lng = num(p.lng);
+    if (lat === '' || lng === '') throw new Error('No location came through');
+    // the trip happening today (a day either side counts, for travel days)
+    let trip = null, day = '';
+    readTable('Trips').forEach(function (t) {
+      if (trip || !t.start) return;
+      if (p.trip && t.id !== p.trip) return;
+      const today = Utilities.formatDate(new Date(), t.timezone || 'UTC', 'yyyy-MM-dd');
+      if (today >= shiftDay(t.start, -1) && today <= shiftDay(t.end || t.start, 1)) { trip = t; day = today; }
+    });
+    if (!trip) return 'No trip is happening today, so nothing was logged.';
+    const tz = trip.timezone || 'UTC';
+    const nowIso = new Date().toISOString(), time = Utilities.formatDate(new Date(), tz, 'HH:mm');
+
+    // standing at something already saved to the trip?
+    let item = null, best = 60;
+    readTable('Items').forEach(function (i) {
+      if (i.trip_id !== trip.id || i.lat === '' || i.lng === '' || i.kind === 'fixed' && /^(flight|stay)$/i.test(i.category)) return;
+      const d = metersBetween(lat, lng, +i.lat, +i.lng);
+      if (d < best) { best = d; item = i; }
+    });
+    let place = null;
+    if (!item) {
+      const key = PropertiesService.getScriptProperties().getProperty('PLACES_KEY');
+      if (key) { try { place = placesNearby(lat, lng, 60, key)[0] || null; } catch (e) {} }
+    }
+    const title = item ? item.title : place ? place.title : 'Somewhere';
+
+    // a second tap at the same spot within half an hour doesn't log twice
+    const today = readTable('Log').filter(function (l) { return l.trip_id === trip.id && l.day === day && !l.parent_id; });
+    const last = today.sort(function (a, b) { return (+a.seq || 0) - (+b.seq || 0); }).slice(-1)[0];
+    if (last && (Date.now() - new Date(last.logged_at).getTime()) < 30 * 60000 &&
+        ((item && last.item_id === item.id) || (place && last.place_id === place.place_id) ||
+         (last.lat !== '' && metersBetween(lat, lng, +last.lat, +last.lng) < 40))) {
+      return 'Already logged ' + last.title + '.';
+    }
+
+    const log = ACTIONS.addLog({
+      trip: trip.id, day: day, seq: today.length, time: time, timezone: tz, logged_at: nowIso, note: p.note || '',
+      item_id: item ? item.id : undefined,
+      place_id: place ? place.place_id : undefined, title: place ? place.title : (item ? undefined : title),
+      lat: place ? place.lat : lat, lng: place ? place.lng : lng,
+      address: place ? place.address : '', city: place ? place.city : '', maps_url: place ? place.maps_url : '',
+    });
+    return 'Logged ' + log.title + ' (' + trip.name + ').';
   },
 
   /** Preview a link without saving (used by the capture sheet). */
@@ -561,6 +623,42 @@ function textSearch(query, lat, lng, key) {
   if (j.error) throw new Error('Places: ' + j.error.message);
   return (j.places || [])[0] || null;
 }
+
+function placesNearby(lat, lng, radius, key) {
+  const res = UrlFetchApp.fetch('https://places.googleapis.com/v1/places:searchNearby', {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({
+      locationRestriction: { circle: { center: { latitude: lat, longitude: lng }, radius: radius } },
+      maxResultCount: 8, rankPreference: 'DISTANCE',
+      excludedTypes: ['parking', 'atm', 'bus_stop', 'route', 'street_address'],
+    }),
+    headers: {
+      'X-Goog-Api-Key': key,
+      'X-Goog-FieldMask': ['id', 'displayName', 'formattedAddress', 'location', 'primaryTypeDisplayName', 'googleMapsUri', 'addressComponents']
+        .map(function (f) { return 'places.' + f; }).join(','),
+    },
+    muteHttpExceptions: true,
+  });
+  const j = JSON.parse(res.getContentText());
+  if (j.error) throw new Error('Places: ' + j.error.message);
+  return (j.places || []).map(function (pl) {
+    const f = fromPlace(pl, '');
+    return { place_id: f.place_id, title: f.title || 'Unnamed place', category: f.category, address: f.address, city: f.city,
+             lat: f.lat, lng: f.lng, maps_url: f.maps_url, dist: Math.round(metersBetween(lat, lng, f.lat, f.lng)) };
+  });
+}
+
+function num(v) {
+  if (v === undefined || v === null || v === '') return '';
+  const n = parseFloat(String(v).replace(',', '.'));
+  return isFinite(n) ? n : '';
+}
+function shiftDay(ymd, n) {
+  const d = new Date(ymd + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n);
+  return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd');
+}
+function testNearby() { Logger.log(JSON.stringify(ACTIONS.nearby({ lat: 64.1471, lng: -21.9359 }), null, 2)); }
 
 function placeDetails(placeId, key) {
   const res = UrlFetchApp.fetch('https://places.googleapis.com/v1/places/' + encodeURIComponent(placeId), {

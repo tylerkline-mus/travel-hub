@@ -46,6 +46,12 @@ Sample mode runs fully offline. Test with Playwright at 390×844 @2x: route `cdn
 - After each sync the app looks up new suggestions once (`lookUpSuggestions` → `refreshItem`, remembered in `th_sug_looked`), so Claude only needs to write a Maps search URL. No script change was needed.
 - The "check my asks" procedure lives in Tyler's `travel-hub-asks` skill (holds the Sheet ID — never put it here).
 
+## I'm here (logging)
+
+- Opening **I'm here** for today asks for location right away: lists sort by distance, the saved place you're standing at is preselected (planned < 150 m, other saved < 75 m), and **Around you** shows nearby places from the script's `nearby` action (Places API (New) Nearby Search, closest first). Picking one logs it with `place_id`, name and coords.
+- Live times: if the phone was within 300 m of the stop when logged (and no time was typed), `time` is filled with now. `logged_at` is the phone's own timestamp (sent by the app), so offline queueing doesn't shift it. Backfilled stops get no automatic time — the poster's time-based credits rely on this.
+- Shortcut: `GET ?action=here&format=text&token&lat&lng[&note][&trip]` logs to the trip happening today (±1 day), matching a saved item within 60 m, else the nearest Google place within 60 m, else "Somewhere"; ignores a repeat at the same spot within 30 min. Setup steps in SETUP.md §7.
+
 ## Recap poster (built Oct 2026)
 
 - Route `#/trip/:id/recap` (button at the bottom of the Log tab). `recapData` → `drawPoster` on a canvas; Save image shares/downloads a PNG (1080×1350 post, 1080×1920 story).
@@ -54,7 +60,7 @@ Sample mode runs fully offline. Test with Playwright at 390×844 @2x: route `cdn
 - Data: a "score" strip (one stroke per day, length = stops, colored top = loved), coordinates and scale bar, a locator inset in the emptiest corner when zoomed to the densest area (`recapCluster`), and first-person liner notes (`recapNotes`) — no stat tiles.
 - Per-trip choices (size, look, zoom, ground, own line) live in localStorage `th_poster`.
 - **Ground** (Water and borders, default on): country-scale frames use Natural Earth 1:50m from `world-atlas@2` on jsDelivr (land tint, coastline, dashed borders; rings unwrapped across the date line); city-scale frames (< 40 km across, `groundScale`) use OSM water via Overpass (coastline, lakes/ponds > 80 m, rivers). The locator inset always gets the country outline. Fetched by the phone on the Poster screen only, kept in the Cache API (`travelhub-ground`, which `sw.js` leaves alone). Tests mock both: `npm i world-atlas@2` and a hand-made Overpass fixture.
-- Agreed next: credits (each toggleable; counted vs measured stats; personal ones like top Google category, places returned to) replacing the prose notes, log notes shown beside loved stops, and a Frame picker (whole trip / by stay / by place / by dates) with named, saved slices that become the title.
+- Agreed next: credits as names, not numbers, each toggleable — on: Favorite discovery, Went back to, Most often, First and last, Lingered longest, Off script, Longest walk, Home away from home (the neighborhood with most stops); off by default: Didn't live up to it, Brought home, Earliest morning / Latest night (only from live-logged times); cut: loved count, stops, days, beds, daylight, "With". Loved stays the accent color. Then artifacts per stop (photo, sound, souvenir) stored in Drive via the script replacing the prose notes, log notes shown beside loved stops, and a Frame picker (whole trip / by stay / by place / by dates) with named, saved slices that become the title.
 
 ## Original design notes for Ask Claude
 
