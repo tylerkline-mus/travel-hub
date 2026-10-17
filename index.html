@@ -2736,7 +2736,8 @@ function openHere(tripId, d) {
           if (list && list.length) showAround(list);
           else where.textContent = 'Sorted by distance from you. Google has nothing listed close by.';
         })();
-      }
+      } else if (navigator.onLine) where.textContent = 'Sorted by distance from you. Place lookup is off (Settings shows why).';
+
     }, () => { where.textContent = 'Location is off, so the list isn’t sorted by distance.'; }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
     $$('[data-pick]', sh).forEach(el => el.addEventListener('click', () => { near = null; pin = null; $$('[data-near], [data-pin]', sh).forEach(x => x.classList.remove('on')); }));
     ta.addEventListener('input', () => { if (ta.value.trim()) clearPicks(); });
