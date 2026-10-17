@@ -688,7 +688,7 @@ function placesNearby(lat, lng, radius, key) {
     payload: JSON.stringify({
       locationRestriction: { circle: { center: { latitude: lat, longitude: lng }, radius: radius } },
       maxResultCount: 8, rankPreference: 'DISTANCE',
-      excludedTypes: ['parking', 'atm', 'bus_stop', 'route', 'street_address'],
+      excludedTypes: ['parking', 'atm', 'bus_stop'],   // Nearby Search only accepts Table A types (no route / street_address)
     }),
     headers: {
       'X-Goog-Api-Key': key,
