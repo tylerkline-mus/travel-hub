@@ -1109,9 +1109,9 @@ function logContent(t) {
  * Recap poster — drawn on a canvas, exported as a PNG
  * ============================================================ */
 const POSTER_LOOKS = {
-  fog:   { name: 'Fog',   paper: '#D5D8D2', ink: '#1C2321', accent: '#2A44C9', faint: 'rgba(28,35,33,.24)', ground: 'rgba(28,35,33,.36)', land: 'rgba(28,35,33,.05)', grain: [28, 35, 33] },
-  night: { name: 'Night', paper: '#13243A', ink: '#E9E4D6', accent: '#F2C84B', faint: 'rgba(233,228,214,.22)', ground: 'rgba(233,228,214,.3)', land: 'rgba(233,228,214,.055)', grain: [233, 228, 214] },
-  riso:  { name: 'Riso',  paper: '#FBFBF8', ink: '#0078BF', accent: '#FF48B0', faint: 'rgba(0,120,191,.26)', ground: 'rgba(0,120,191,.4)', land: 'rgba(0,120,191,.06)', grain: [0, 70, 120], overprint: true },
+  fog:   { name: 'Fog',   paper: '#D5D8D2', ink: '#1C2321', accent: '#2A44C9', faint: 'rgba(28,35,33,.24)', ground: 'rgba(28,35,33,.36)', land: 'rgba(250,250,244,.26)', water: 'rgba(52,80,96,.15)', grain: [28, 35, 33] },
+  night: { name: 'Night', paper: '#13243A', ink: '#E9E4D6', accent: '#F2C84B', faint: 'rgba(233,228,214,.22)', ground: 'rgba(233,228,214,.3)', land: 'rgba(233,228,214,.075)', water: 'rgba(3,9,20,.34)', grain: [233, 228, 214] },
+  riso:  { name: 'Riso',  paper: '#FBFBF8', ink: '#0078BF', accent: '#FF48B0', faint: 'rgba(0,120,191,.26)', ground: 'rgba(0,120,191,.4)', land: 'rgba(0,120,191,.025)', water: 'rgba(0,120,191,.13)', grain: [0, 70, 120], overprint: true },
 };
 const POSTER_SIZES = { post: [1080, 1350], story: [1080, 1920] };
 const PF = '"Familjen Grotesk", "Helvetica Neue", Arial, sans-serif';
@@ -1471,10 +1471,10 @@ async function loadOSM(b, scale, roads) {
       return;
     }
     const kind = tg.natural === 'coastline' ? 'coast' : tg.highway ? (/^(motorway|trunk)$/.test(tg.highway) ? 'major' : 'road') : tg.waterway ? 'river' : 'water';
-    const add = g => { if (!g || g.length < 2) return; const pts = g.map(q => ({ lat: q.lat, lng: q.lon })), bb = geoBounds(pts);
+    const add = (g, role) => { if (!g || g.length < 2) return; const pts = g.map(q => ({ lat: q.lat, lng: q.lon })), bb = geoBounds(pts);
       if (kind === 'water' && meters({ lat: bb.s, lng: bb.w }, { lat: bb.n, lng: bb.e }) < 80) return;  // skip garden ponds
-      lines.push({ kind, pts, b: bb }); };
-    if (el.type === 'way') add(el.geometry); else (el.members || []).forEach(m => add(m.geometry));
+      lines.push({ kind, pts, b: bb, rel: el.type === 'relation' ? el.id : null, role: role || 'outer' }); };
+    if (el.type === 'way') add(el.geometry); else (el.members || []).forEach(m => add(m.geometry, m.role));
   });
   names.sort((a, b) => b.rank - a.rank || b.pop - a.pop);
   return { lines, names };
@@ -1491,6 +1491,14 @@ const roundBox = (b, pad) => {
   const dy = (b.n - b.s) * pad + 0.01, dx = (b.e - b.w) * pad + 0.01, r = v => Math.round(v * 50) / 50;
   return { s: r(b.s - dy) - 0.02, n: r(b.n + dy) + 0.02, w: r(b.w - dx) - 0.02, e: r(b.e + dx) + 0.02 };
 };
+/** The area to fetch: the stops, widened to the drawing's shape (wide on a post, tall on a story) with room to spare,
+    so the coast is there right to the edges of the map. */
+function groundBox(pts, size) {
+  const b = geoBounds(pts), k = Math.cos((b.s + b.n) / 2 * Math.PI / 180) || 1, A = size === 'story' ? 0.85 : 1.75;
+  const h = Math.max(b.n - b.s, 0.004), w = Math.max((b.e - b.w) * k, 0.004);
+  if (w / h > A) { const d = (w / A - h) / 2; b.s -= d; b.n += d; } else { const d = (h * A - w) / 2 / k; b.w -= d; b.e += d; }
+  return roundBox(b, 0.3);
+}
 function groundScale(framePts) {
   if (!framePts.length) return null;
   const b = geoBounds(framePts), m = meters({ lat: b.s, lng: b.w }, { lat: b.n, lng: b.e });
@@ -1508,6 +1516,7 @@ function drawGround(ctx, P, rect, ground, L, scale, lwBase = 1) {
   ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   // OSM lines (city and region): roads quietest, then rivers, water, coast
   const osm = ground.osm && ground.osmScale === scale ? ground.osm : null;
+  paintSurface(ctx, P, { x: 0, y: rect.y, w: ctx.canvas.width, h: rect.h }, ground, L, scale, osm, path, seen);
   if (osm && scale !== 'country') {
     ctx.strokeStyle = L.ground;
     const order = { road: 0, major: 1, river: 2, water: 3, coast: 4 };
@@ -1526,16 +1535,154 @@ function drawGround(ctx, P, rect, ground, L, scale, lwBase = 1) {
     ctx.setLineDash([]);
   }
   if (scale === 'country' && ground.world) {
-    ctx.fillStyle = L.land;
-    ground.world.lands.forEach(l => { if (!seen(l.b)) return; ctx.beginPath();
-      l.rings.forEach(r => r.forEach((p, i) => { const q = P(p); i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); }));
-      ctx.fill('evenodd'); });
     ctx.strokeStyle = L.ground;
     ground.world.lines.forEach(l => { if (!seen(l.b)) return;
       ctx.lineWidth = (l.kind === 'border' ? 1.1 : 1.6) * lwBase; ctx.setLineDash(l.kind === 'border' ? [5 * lwBase, 5 * lwBase] : []);
       path(l.pts); ctx.stroke(); });
   }
   ctx.restore();
+}
+/* ---- Surfaces: land and water get their own tones ----
+   Country scale: the world map's land over a water wash.
+   City and region: OpenStreetMap coastlines (land is on the left of every coastline way) split the drawing into areas on a
+   half-size mask; each area is water or land by which side of the coast it's on. Areas no coast touches ask the world map.
+   The edge of the fetched box is a wall too, since the coast may be missing beyond it. Lakes and wide rivers are filled on top. */
+function rgbaOf(c) {
+  const m = String(c).match(/rgba?\(([^)]+)\)/);
+  if (m) { const v = m[1].split(',').map(Number); return [v[0], v[1], v[2], v.length > 3 ? v[3] : 1]; }
+  const h = String(c).replace('#', '');
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), 1];
+}
+function inLand(world, p) {
+  for (const l of world.lands) for (const k of [0, 360, -360]) {
+    const lng = p.lng + k, b = l.b;
+    if (lng < b.w || lng > b.e || p.lat < b.s || p.lat > b.n) continue;
+    let inside = false;
+    l.rings.forEach(r => { for (let i = 0, j = r.length - 1; i < r.length; j = i++) { const a = r[i], c = r[j];
+      if ((a.lat > p.lat) !== (c.lat > p.lat) && lng < (c.lng - a.lng) * (p.lat - a.lat) / (c.lat - a.lat) + a.lng) inside = !inside; } });
+    if (inside) return true;
+  }
+  return false;
+}
+/** Join a relation's ways end to end into closed rings. */
+function joinRings(ways) {
+  const near = (a, b) => Math.abs(a.lat - b.lat) < 1e-6 && Math.abs(a.lng - b.lng) < 1e-6;
+  const left = ways.map(w => w.slice()), rings = [];
+  while (left.length) {
+    let ring = left.shift(), grew = true;
+    while (!near(ring[0], ring[ring.length - 1]) && grew) {
+      grew = false;
+      for (let i = 0; i < left.length; i++) {
+        const w = left[i], end = ring[ring.length - 1];
+        if (near(end, w[0])) ring = ring.concat(w.slice(1));
+        else if (near(end, w[w.length - 1])) ring = ring.concat(w.slice().reverse().slice(1));
+        else continue;
+        left.splice(i, 1); grew = true; break;
+      }
+    }
+    if (ring.length > 3 && near(ring[0], ring[ring.length - 1])) rings.push(ring);
+  }
+  return rings;
+}
+function paintSurface(ctx, P, area, ground, L, scale, osm, path, seen) {
+  if (!L.water) return;
+  const coasts = osm && scale !== 'country' ? osm.lines.filter(l => l.kind === 'coast') : [];
+  if (scale === 'city' || coasts.length) rasterSurface(ctx, P, area, ground, L, coasts, scale);
+  else if (ground.world) {
+    ctx.fillStyle = L.water; ctx.fillRect(area.x, area.y, area.w, area.h);
+    const land = new Path2D();
+    ground.world.lands.forEach(l => { if (!seen(l.b)) return;
+      l.rings.forEach(r => { r.forEach((p, i) => { const q = P(p); i ? land.lineTo(q.x, q.y) : land.moveTo(q.x, q.y); }); land.closePath(); }); });
+    ctx.fillStyle = L.paper; ctx.fill(land, 'evenodd'); ctx.fillStyle = L.land; ctx.fill(land, 'evenodd');
+  }
+  if (!osm || scale === 'country') return;
+  // lakes, ponds and wide rivers: paper first so the tones don't stack, then water; islands in them go back to land
+  const shape = rings => { const p2 = new Path2D(); rings.forEach(r => { r.forEach((p, i) => { const q = P(p); i ? p2.lineTo(q.x, q.y) : p2.moveTo(q.x, q.y); }); p2.closePath(); }); return p2; };
+  const water = osm.lines.filter(l => l.kind === 'water' && seen(l.b));
+  const outer = [], inner = [], rels = new Map();
+  water.forEach(l => { if (l.rel == null) { if (l.pts.length > 3) outer.push(l.pts); return; }
+    const g = rels.get(l.rel) || rels.set(l.rel, { outer: [], inner: [] }).get(l.rel); g[l.role === 'inner' ? 'inner' : 'outer'].push(l.pts); });
+  rels.forEach(g => { outer.push(...joinRings(g.outer)); inner.push(...joinRings(g.inner)); });
+  if (outer.length) { const p2 = shape(outer); ctx.fillStyle = L.paper; ctx.fill(p2, 'nonzero'); ctx.fillStyle = L.water; ctx.fill(p2, 'nonzero'); }
+  if (inner.length) { const p2 = shape(inner); ctx.fillStyle = L.paper; ctx.fill(p2, 'nonzero'); ctx.fillStyle = L.land; ctx.fill(p2, 'nonzero'); }
+}
+function rasterSurface(ctx, P, area, ground, L, coasts, scale) {
+  const k = 0.5, w = Math.max(1, Math.ceil(area.w * k)), h = Math.max(1, Math.ceil(area.h * k)), N = w * h;
+  const mc = document.createElement('canvas'); mc.width = w; mc.height = h;
+  const m = mc.getContext('2d');
+  const T = p => { const q = P(p); return { x: (q.x - area.x) * k, y: (q.y - area.y) * k }; };
+  const paths = coasts.map(l => l.pts.map(T));
+  m.strokeStyle = '#000'; m.lineWidth = 2; m.lineJoin = 'round'; m.lineCap = 'round';
+  paths.forEach(ps => { m.beginPath(); ps.forEach((q, i) => i ? m.lineTo(q.x, q.y) : m.moveTo(q.x, q.y)); m.stroke(); });
+  let inBox = () => true;
+  if (ground.osmBox && coasts.length) {
+    const a = T({ lat: ground.osmBox.n, lng: ground.osmBox.w }), c = T({ lat: ground.osmBox.s, lng: ground.osmBox.e });
+    m.strokeRect(a.x, a.y, c.x - a.x, c.y - a.y);
+    inBox = i => { const x = i % w, y = (i - x) / w; return x > a.x && x < c.x && y > a.y && y < c.y; };
+  }
+  const px = m.getImageData(0, 0, w, h).data, wall = new Uint8Array(N);
+  for (let i = 0; i < N; i++) wall[i] = px[i * 4 + 3] > 24 ? 1 : 0;
+  // label the areas between the walls
+  const lab = new Int32Array(N).fill(-1), stack = new Int32Array(N), samples = [], sizes = [];
+  let nl = 0;
+  for (let s = 0; s < N; s++) {
+    if (wall[s] || lab[s] >= 0) continue;
+    let sp = 0, cnt = 0;
+    stack[sp++] = s; lab[s] = nl;
+    while (sp) {
+      const i = stack[--sp], x = i % w; cnt++;
+      if (x > 0 && !wall[i - 1] && lab[i - 1] < 0) { lab[i - 1] = nl; stack[sp++] = i - 1; }
+      if (x < w - 1 && !wall[i + 1] && lab[i + 1] < 0) { lab[i + 1] = nl; stack[sp++] = i + 1; }
+      if (i >= w && !wall[i - w] && lab[i - w] < 0) { lab[i - w] = nl; stack[sp++] = i - w; }
+      if (i < N - w && !wall[i + w] && lab[i + w] < 0) { lab[i + w] = nl; stack[sp++] = i + w; }
+    }
+    samples.push([]); sizes.push(cnt); nl++;
+  }
+  // sample each area on an even grid (a few dozen points at most), for asking the world map
+  for (let y = 4; y < h; y += 14) for (let x = 4; x < w; x += 14) { const id = lab[y * w + x]; if (id >= 0 && samples[id].length < 40) samples[id].push(y * w + x); }
+  samples.forEach((smp, id) => { if (!smp.length) { const i = lab.indexOf(id); if (i >= 0) smp.push(i); } });
+  // votes: a little to the right of a coastline is water, a little to the left is land
+  const wv = new Float32Array(nl), lv = new Float32Array(nl);
+  paths.forEach(ps => { for (let j = 1; j < ps.length; j++) {
+    const a = ps[j - 1], b = ps[j], dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
+    if (len < 0.3) continue;
+    const n = Math.max(1, Math.floor(len / 6));
+    for (let t = 0; t < n; t++) {
+      const u = (t + 0.5) / n, mx = a.x + dx * u, my = a.y + dy * u;
+      const vote = (nx, ny, arr) => { const x = Math.round(mx + nx * 3.5), y = Math.round(my + ny * 3.5);
+        if (x < 0 || y < 0 || x >= w || y >= h) return; const id = lab[y * w + x]; if (id >= 0) arr[id] += len / n; };
+      vote(-dy / len, dx / len, wv); vote(dy / len, -dx / len, lv);
+    }
+  } });
+  const isWater = new Uint8Array(nl);
+  const worldWet = smp => { let wet = 0;
+    smp.forEach(i => { const x = i % w, y = (i - x) / w, g = P.inv(area.x + (x + 0.5) / k, area.y + (y + 0.5) / k); if (!inLand(ground.world, g)) wet++; });
+    return wet / smp.length; };
+  for (let id = 0; id < nl; id++) {
+    const smp = samples[id], inside = smp.some(inBox), tot = wv[id] + lv[id];
+    const ne = ground.world && smp.length ? worldWet(smp) : null;
+    // the coast decides when it agrees with itself, unless (zoomed out to a region) a big area flatly contradicts the world map:
+    // both mean the coast data was cut short and the sea has leaked round its end. Up close the world map is too coarse to overrule it.
+    if (inside && tot > 0 && Math.min(wv[id], lv[id]) < tot * 0.2) {
+      const v = wv[id] > lv[id];
+      isWater[id] = ne !== null && scale !== 'city' && sizes[id] > N * 0.03 && (v ? ne < 0.25 : ne > 0.75) ? (ne > 0.5 ? 1 : 0) : v ? 1 : 0;
+    } else if (ne !== null) isWater[id] = ne > 0.5 ? 1 : 0;
+    else isWater[id] = wv[id] > lv[id] ? 1 : 0;
+  }
+  // the walls take a neighbour's side, so land and water meet under the coastline
+  const cls = new Int8Array(N).fill(-1);
+  for (let i = 0; i < N; i++) if (lab[i] >= 0) cls[i] = isWater[lab[i]];
+  for (let pass = 0; pass < 4; pass++) for (let i = 0; i < N; i++) {
+    if (cls[i] >= 0) continue; const x = i % w;
+    const n = x > 0 && cls[i - 1] >= 0 ? cls[i - 1] : x < w - 1 && cls[i + 1] >= 0 ? cls[i + 1] : i >= w && cls[i - w] >= 0 ? cls[i - w] : i < N - w && cls[i + w] >= 0 ? cls[i + w] : -1;
+    if (n >= 0) cls[i] = n;
+  }
+  const [pr, pg, pb] = rgbaOf(L.paper), tone = c => { const [r, g, b, a] = rgbaOf(c); return [pr + (r - pr) * a, pg + (g - pg) * a, pb + (b - pb) * a]; };
+  const wc = tone(L.water), lc = tone(L.land), img = m.createImageData(w, h), d = img.data;
+  for (let i = 0; i < N; i++) { const c = cls[i] === 1 ? wc : lc; d[i * 4] = c[0]; d[i * 4 + 1] = c[1]; d[i * 4 + 2] = c[2]; d[i * 4 + 3] = cls[i] < 0 ? 0 : 255; }
+  m.putImageData(img, 0, 0);
+  ctx.save(); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(mc, area.x, area.y, area.w, area.h); ctx.restore();
 }
 /** Place names from OSM, quiet and upright (stop names are italic), only where there's room. */
 function drawPlaceNames(ctx, P, ground, scale, rect, taken, L, story, fade) {
@@ -1926,10 +2073,10 @@ function initRecap(tripId) {
     if (!f.framePts.length) return;
     if (!ground.world && !wanted.has('world')) { wanted.add('world'); loadWorld().then(w => { if (w) { ground.world = w; if ($('#poster') === canvas) redraw(); } else wanted.delete('world'); }); }
     const scale = groundScale(f.framePts), roads = p.ground === 'roads';
-    const box = roundBox(geoBounds(f.framePts), 0.35), key = JSON.stringify([box, scale, roads]);
+    const box = groundBox(f.framePts, p.size), key = JSON.stringify([box, scale, roads]);
     if (ground.osmKey !== key && !wanted.has(key)) {
       wanted.add(key);
-      loadOSM(box, scale, roads).then(o => { wanted.delete(key); if (o) { ground.osm = o; ground.osmScale = scale; ground.osmKey = key; if ($('#poster') === canvas) redraw(); } });
+      loadOSM(box, scale, roads).then(o => { wanted.delete(key); if (o) { ground.osm = o; ground.osmScale = scale; ground.osmKey = key; ground.osmBox = box; if ($('#poster') === canvas) redraw(); } });
     }
   };
   // a light placeholder while the typeface loads, then the real thing
@@ -2169,14 +2316,15 @@ function drawWorldShifted(ctx, B, rect, world, L, lwBase = 1) {
   const shifts = b => [-360, 0, 360, 720].filter(k => b.e + k >= vw && b.w + k <= ve && b.n >= vs && b.s <= vn);
   const unwrap = r => { let prev = null; return r.map(p => { let lng = p.lng; if (prev !== null) { while (lng - prev > 180) lng -= 360; while (lng - prev < -180) lng += 360; } prev = lng; return { lat: p.lat, lng }; }); };
   ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  ctx.fillStyle = L.land;
+  ctx.fillStyle = L.water; ctx.fillRect(0, rect.y, ctx.canvas.width, rect.h);
+  const land = new Path2D();
   world.lands.forEach(l => {
     const b = l.allB ||= geoBounds(l.rings.flat());
-    shifts(b).forEach(k => { ctx.beginPath();
+    shifts(b).forEach(k => {
       l.rings.forEach(r => { let last = null; r.forEach((p, i) => { const q = B({ lat: p.lat, lng: p.lng + k });
-        if (!i) { ctx.moveTo(q.x, q.y); last = q; } else if (Math.abs(q.x - last.x) + Math.abs(q.y - last.y) > 1) { ctx.lineTo(q.x, q.y); last = q; } }); ctx.closePath(); });
-      ctx.fill('evenodd'); });
+        if (!i) { land.moveTo(q.x, q.y); last = q; } else if (Math.abs(q.x - last.x) + Math.abs(q.y - last.y) > 1) { land.lineTo(q.x, q.y); last = q; } }); land.closePath(); }); });
   });
+  ctx.fillStyle = L.paper; ctx.fill(land, 'evenodd'); ctx.fillStyle = L.land; ctx.fill(land, 'evenodd');
   ctx.strokeStyle = L.ground;
   world.lines.forEach(l => {
     const pts = l.cont ||= unwrap(l.pts), b = l.cb ||= geoBounds(pts);
@@ -2596,16 +2744,16 @@ function drawRangePoster(canvas, R, p, ground, credits, style, opts = {}) {
 }
 
 /* ---- ground fetching shared by the range screen ---- */
-function fetchGroundInto(ground, framePts, pref, onDone, skipCountryNames) {
+function fetchGroundInto(ground, framePts, pref, onDone, skipCountryNames, size) {
   if (pref === 'none' || !framePts.length) return;
   const want = ground._want ||= new Set();
   if (!ground.world && !want.has('world')) { want.add('world'); loadWorld().then(w => { if (w) { ground.world = w; onDone(); } else want.delete('world'); }); }
   const scale = groundScale(framePts);
   if (scale === 'country' && skipCountryNames) return;
-  const roads = pref === 'roads', box = roundBox(geoBounds(framePts), 0.35), key = JSON.stringify([box, scale, roads]);
+  const roads = pref === 'roads', box = groundBox(framePts, size), key = JSON.stringify([box, scale, roads]);
   if (ground.osmKey !== key && !want.has(key)) {
     want.add(key);
-    loadOSM(box, scale, roads).then(o => { want.delete(key); if (o) { Object.assign(ground, { osm: o, osmScale: scale, osmKey: key }); onDone(); } });
+    loadOSM(box, scale, roads).then(o => { want.delete(key); if (o) { Object.assign(ground, { osm: o, osmScale: scale, osmKey: key, osmBox: box }); onDone(); } });
   }
 }
 const slugName = s => String(s || 'poster').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'poster';
@@ -2737,7 +2885,7 @@ function initRange() {
     if (!st) {
       st = { g: {}, data: recapData(x.t, tp.frame) }; tripSlide.set(x.t.id, st);
       const again = () => { if (alive() && st.canvas) drawTrip(st.canvas, x); };
-      fetchGroundInto(st.g, posterFrame(st.data, tp).framePts, tp.ground, again);
+      fetchGroundInto(st.g, posterFrame(st.data, tp).framePts, tp.ground, again, false, tp.size);
       if (st.data.lived) recapHood(st.data.stops).then(h => { if (h) { st.g.hood = h; again(); } });
     }
     st.canvas = c;
@@ -2775,7 +2923,7 @@ function initRange() {
     $$('[data-rfav]', box).forEach(sel => { sel.onclick = e => e.stopPropagation(); sel.onchange = () => { p.fav = sel.value; save(); redraw(); renderCredits(); }; });
   };
   // ground: world outlines when the map spans countries; OpenStreetMap water and names when it's one region or city
-  const fetchGround = () => { if (p.style === 'map' || p.style === 'carousel') fetchGroundInto(ground, rangeMapPoints(R, p), p.ground, redraw, true); };
+  const fetchGround = () => { if (p.style === 'map' || p.style === 'carousel') fetchGroundInto(ground, rangeMapPoints(R, p), p.ground, redraw, true, p.size); };
   $$('[data-rpref]').forEach(g => $$('button', g).forEach(b => b.onclick = () => {
     const k = g.dataset.rpref; p[k] = b.dataset.v; save();
     if (k === 'style' || k === 'size' && p.style === 'carousel') return render();
