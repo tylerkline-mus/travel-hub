@@ -274,6 +274,11 @@ nav.tabs .add svg { width: 26px; height: 26px; }
 .stoprow .body { flex: 1; min-width: 0; }
 
 .here-status { margin: -2px 2px 10px; }
+.credit-list { margin-bottom: 8px; }
+.check.credit span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.check.credit small { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.check.credit select { margin-top: 6px; font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); max-width: 100%; }
+.credit-notes { margin: 6px 0 18px; }
 /* ---------- Recap poster ---------- */
 .recap .poster-frame { margin: 10px auto 16px; max-width: 420px; }
 .recap .poster-frame.story { max-width: 300px; }
@@ -1098,7 +1103,9 @@ function recapData(t) {
     if (lived) {
       seq = flatLogs(t.id, d).filter(hasCoords).map(l => {
         const it = l.item_id ? itemById(l.item_id) : null;
-        return pt(l, { mode: l.parent_id ? 'tour' : l.mode, tour: !!l.parent_id, mark: l.rating === 'loved', found: l.origin === 'found', wasMaybe: !!(it && it.priority === 'maybe') });
+        return pt(l, { mode: l.parent_id ? 'tour' : l.mode, tour: !!l.parent_id, mark: l.rating === 'loved', found: l.origin === 'found', wasMaybe: !!(it && it.priority === 'maybe'),
+          wasMust: !!(it && it.priority === 'must'), meh: l.rating === 'meh', note: l.note || '', time: l.time || '', top: !l.parent_id, id: l.id,
+          category: l.category || (it && it.category) || '', key: l.item_id || l.place_id || `${l.title}|${(+l.lat).toFixed(3)},${(+l.lng).toFixed(3)}` });
       });
     } else {
       fixedEvents(t.id, d).forEach(e => {
@@ -1175,6 +1182,106 @@ const numWord = n => ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** Liner notes: plain first-person sentences instead of stat tiles. */
+/* ---- Credits: names, not numbers. Each one is only offered when the data behind it is solid. ---- */
+const CREDITS = [
+  ['fav', 'Favorite discovery', true], ['back', 'Went back to', true], ['often', 'Most often', true],
+  ['ends', 'First and last', true], ['linger', 'Lingered longest', true], ['offscript', 'Off script', true],
+  ['walk', 'Longest walk', true], ['hood', 'Home away from home', true],
+  ['early', 'Earliest morning', false], ['late', 'Latest night', false], ['letdown', 'Didn’t live up to it', false],
+];
+function pluralCat(c) {
+  const w = String(c).trim().toLowerCase().split(' '), last = w.pop();
+  const pl = /[^aeiou]y$/.test(last) ? last.slice(0, -1) + 'ies' : /(s|sh|ch|x)$/.test(last) ? last + 'es' : last + 's';
+  return cap([...w, pl].join(' '));
+}
+const minsOf = t => { const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
+function fmtClock(t) { let m = minsOf(t), h = Math.floor(m / 60) % 24; const ap = h < 12 ? 'am' : 'pm'; h = h % 12 || 12; m %= 60; return `${h}${m ? ':' + String(m).padStart(2, '0') : ''} ${ap}`; }
+function fmtSpan(min) {
+  const h = Math.round(min / 30) / 2;
+  if (min < 50) return `about ${Math.round(min / 5) * 5} minutes`;
+  return `about ${String(h).replace('.5', '½')} hour${h === 1 ? '' : 's'}`;
+}
+const dayName = d => { const x = parseDate(d); return `${DOW_LONG[x.getDay()]}, ${MON[x.getMonth()]} ${x.getDate()}`; };
+
+/** Every credit the data can honestly support, with its value. */
+function recapCredits(t, data, prefs, extras) {
+  const out = {};
+  const S = data.stops, tops = S.filter(s => s.top !== false);
+  if (data.lived) {
+    // Favorite discovery: a loved place found along the way (one with a note first), or the one Tyler picked
+    // Went back to: the same place on more than one visit
+    const visits = {};
+    S.forEach(s => { (visits[s.key] ||= { key: s.key, title: s.title, n: 0 }).n++; });
+    const back = Object.values(visits).filter(v => v.n > 1).sort((a, b) => b.n - a.n)[0];
+    const finds = [...new Map(S.filter(s => s.found).map(s => [s.key, s])).values()];
+    const favs = finds.filter(s => s.mark).sort((a, b) => (!!b.note - !!a.note) || ((back && a.key === back.key) - (back && b.key === back.key)));
+    const fav = (prefs.fav && finds.find(s => s.key === prefs.fav)) || favs[0];
+    if (fav) out.fav = { value: fav.title, choices: finds, chosen: fav.key };
+    if (back) out.back = { value: `${back.title}, ${back.n === 2 ? 'twice' : numWord(back.n) + ' times'}` };
+    // Most often: the kind of place
+    const cats = {};
+    S.forEach(s => { if (s.category && !/^(stay|flight|tour|place)$/i.test(s.category)) cats[s.category.toLowerCase()] = (cats[s.category.toLowerCase()] || 0) + 1; });
+    const top = Object.entries(cats).sort((a, b) => b[1] - a[1])[0];
+    if (top && top[1] > 1) out.often = { value: `${pluralCat(top[0])}, ${top[1]}` };
+    // First and last
+    if (tops.length > 1) out.ends = { value: `${tops[0].title} → ${tops[tops.length - 1].title}` };
+    // Lingered longest: the gap between two live-logged times on the same day
+    let best = null;
+    data.days.forEach(d => {
+      const timed = tops.filter(s => s.day === d && s.time);
+      timed.forEach((s, k) => { const n = timed[k + 1]; if (!n) return;
+        const gap = minsOf(n.time) - minsOf(s.time);
+        if (gap > 20 && gap < 8 * 60 && (!best || gap > best.gap)) best = { gap, s }; });
+    });
+    if (best) out.linger = { value: `${best.s.title}, ${fmtSpan(best.gap)}` };
+    // Off script: the day with the most unplanned stops
+    const off = data.days.map(d => ({ d, n: S.filter(s => s.day === d && s.found).length })).sort((a, b) => b.n - a.n)[0];
+    if (off && off.n > 1) out.offscript = { value: `${dayName(off.d)}, ${numWord(off.n)} unplanned stops` };
+    // Longest walk: only legs you marked as walks, measured along the real path when known
+    let walk = null;
+    data.tracks.forEach(tr => { let m = 0;
+      tr.pts.forEach((b, k) => { if (!k || b.mode !== 'walk') return; const a = tr.pts[k - 1];
+        const pl = routeCache[routeKey({ from: [a.lat, a.lng], to: [b.lat, b.lng], mode: 'walk' })];
+        if (pl) { const p = decodePolyline(pl); for (let j = 1; j < p.length; j++) m += meters({ lat: p[j - 1][0], lng: p[j - 1][1] }, { lat: p[j][0], lng: p[j][1] }); }
+        else m += meters(a, b) * 1.25; });
+      if (m > 1500 && (!walk || m > walk.m)) walk = { m, d: tr.day }; });
+    if (walk) out.walk = { value: `${dayName(walk.d)}, about ${walk.m >= 10000 ? Math.round(walk.m / 1000) : (walk.m / 1000).toFixed(1)} km` };
+    // Earliest morning / latest night: live-logged times only (after midnight counts as late)
+    const timedAll = tops.filter(s => s.time);
+    const early = timedAll.filter(s => minsOf(s.time) >= 240).sort((a, b) => minsOf(a.time) - minsOf(b.time))[0];
+    if (early && minsOf(early.time) < 10 * 60) out.early = { value: `${early.title}, ${fmtClock(early.time)}` };
+    const lateKey = s => (minsOf(s.time) < 240 ? minsOf(s.time) + 1440 : minsOf(s.time));
+    const late = timedAll.slice().sort((a, b) => lateKey(b) - lateKey(a))[0];
+    if (late && lateKey(late) >= 21 * 60) out.late = { value: `${late.title}, ${fmtClock(late.time)}` };
+    // Didn't live up to it: a must you rated meh
+    const letdown = S.find(s => s.wasMust && s.meh);
+    if (letdown) out.letdown = { value: letdown.title };
+  } else {
+    const cats = {};
+    itemsFor(t.id).filter(i => i.kind === 'place' && !isSuggestion(i) && i.category).forEach(i => { const c = i.category.toLowerCase(); cats[c] = (cats[c] || 0) + 1; });
+    const top = Object.entries(cats).sort((a, b) => b[1] - a[1])[0];
+    if (top && top[1] > 1) out.often = { value: `${pluralCat(top[0])}, ${top[1]} saved` };
+  }
+  if (extras && extras.hood) out.hood = { value: extras.hood };
+  return CREDITS.filter(([k]) => out[k]).map(([k, label, def]) => ({ key: k, label, ...out[k],
+    on: prefs.credits && k in prefs.credits ? !!prefs.credits[k] : def }));
+}
+
+/** The neighbourhood with the most stops, named by OpenStreetMap (asked once, then remembered). */
+async function recapHood(stops) {
+  if (stops.length < 3) return null;
+  let c = null, cn = 0;
+  stops.forEach(a => { const n = stops.filter(b => meters(a, b) < 700).length; if (n > cn) { cn = n; c = a; } });
+  if (cn < 3) return null;
+  const key = `${c.lat.toFixed(3)},${c.lng.toFixed(3)}`, memo = store.get('th_hoods', {});
+  if (memo[key] !== undefined) return memo[key];
+  const j = await cachedJSON(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=15&accept-language=en&lat=${c.lat.toFixed(4)}&lon=${c.lng.toFixed(4)}`, 12000);
+  if (!j || !j.address) return null;
+  const a = j.address, name = a.neighbourhood || a.quarter || a.suburb || a.city_district || a.borough || a.town || a.village || a.city || null;
+  memo[key] = name; store.set('th_hoods', memo);
+  return name;
+}
+
 function recapNotes(t, data) {
   const nDays = tripDays(t).length || data.days.length;
   const out = [];
@@ -1315,7 +1422,7 @@ function drawGround(ctx, P, rect, ground, L, scale, lwBase = 1) {
   ctx.restore();
 }
 
-function drawPoster(canvas, t, data, prefs, ground) {
+function drawPoster(canvas, t, data, prefs, ground, credits) {
   const [W, H] = POSTER_SIZES[prefs.size] || POSTER_SIZES.post;
   const L = POSTER_LOOKS[prefs.look] || POSTER_LOOKS.fog;
   const story = prefs.size === 'story';
@@ -1331,14 +1438,19 @@ function drawPoster(canvas, t, data, prefs, ground) {
   const titleLines = wrapText(ctx, t.name || 'Trip', CW).slice(0, 3);
   setSpacing(ctx, 0);
   const noteSize = story ? 30 : 27, noteLH = Math.round(noteSize * 1.42);
+  // credits, set like the back of a record sleeve: what on the left, who/where on the right
   ctx.font = `400 ${noteSize}px ${PF}`;
-  const noteLines = wrapText(ctx, recapNotes(t, data), Math.min(CW, 900));
+  const shown = (credits || []).filter(c => c.on).slice(0, story ? 8 : 6);
+  const labelW = Math.min(360, Math.max(0, ...shown.map(c => ctx.measureText(c.label).width)) + 34);
+  ctx.font = `500 ${noteSize}px ${PF}`;
+  const rows = shown.map(c => ({ label: c.label, lines: wrapText(ctx, c.value, CW - labelW).slice(0, 2) }));
+  const creditsH = rows.reduce((h, r) => h + r.lines.length * noteLH + 6, 0);
   const lineSize = noteSize + 4;
   ctx.font = `italic 400 ${lineSize}px ${PF}`;
   const ownLines = prefs.line ? wrapText(ctx, prefs.line, Math.min(CW, 900)).slice(0, 3) : [];
   const stripH = 84;
-  const bottomH = titleLines.length * titleSize * 1.0 + 26 + stripH + 34 +
-    (ownLines.length ? ownLines.length * Math.round(lineSize * 1.35) + 18 : 0) + noteLines.length * noteLH;
+  const bottomH = titleLines.length * titleSize * 1.0 + 26 + stripH + 58 +
+    (ownLines.length ? ownLines.length * Math.round(lineSize * 1.35) + (rows.length ? 22 : 0) : 0) + creditsH;
   const topY = M + 4;
   const mapRect = { x: M - 10, y: topY + 58, w: CW + 20, h: H - M - bottomH - (topY + 58) - 40 };
 
@@ -1377,7 +1489,16 @@ function drawPoster(canvas, t, data, prefs, ground) {
     const lw = story ? 3.4 : 3;
 
     // the ground: coast, water, borders — quiet hairlines under everything
-    if (useGround) drawGround(ctx, P, mapRect, ground, L, groundScale(framePts));
+    if (useGround) {
+      const gc = document.createElement('canvas'); gc.width = W; gc.height = H;
+      const g2 = gc.getContext('2d');
+      drawGround(g2, P, mapRect, ground, L, groundScale(framePts));
+      const fade = Math.min(90, mapRect.h * 0.15), gr = g2.createLinearGradient(0, mapRect.y, 0, mapRect.y + mapRect.h);
+      gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(fade / mapRect.h, 'rgba(0,0,0,1)');
+      gr.addColorStop(1 - fade / mapRect.h, 'rgba(0,0,0,1)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+      g2.globalCompositeOperation = 'destination-in'; g2.fillStyle = gr; g2.fillRect(0, mapRect.y, W, mapRect.h);
+      ctx.drawImage(gc, 0, 0);
+    }
 
     // saved but never reached
     ctx.fillStyle = L.faint;
@@ -1446,14 +1567,21 @@ function drawPoster(canvas, t, data, prefs, ground) {
     const seen = new Set();
     marks.slice(0, 40).forEach(s => {
       if (seen.has(s.title) || seen.size >= 8) return;
-      const q = P(s), w = ctx.measureText(s.title).width, h = story ? 36 : 34;
+      const note = prefs.notes !== false && s.note ? (s.note.length > 38 ? s.note.slice(0, 36).trim() + '…' : s.note) : '';
+      const nh = note ? (story ? 32 : 30) : 0, nf = `400 ${story ? 25 : 23}px ${PF}`, tf = ctx.font;
+      ctx.font = nf; const nw = note ? ctx.measureText(note).width : 0; ctx.font = tf;
+      const q = P(s), w = Math.max(ctx.measureText(s.title).width, nw), h = (story ? 36 : 34) + nh;
       const spots = [{ x: q.x + 17, y: q.y - 30 }, { x: q.x + 17, y: q.y + 2 }, { x: q.x - 17 - w, y: q.y - 30 }, { x: q.x - 17 - w, y: q.y + 2 },
-        { x: q.x - w / 2, y: q.y - 52 }, { x: q.x - w / 2, y: q.y + 18 }];
+        { x: q.x - w / 2, y: q.y - 22 - h }, { x: q.x - w / 2, y: q.y + 18 }, { x: q.x + 17, y: q.y - h + 4 }, { x: q.x - 17 - w, y: q.y - h + 4 }];
       const spot = spots.map(p => ({ ...p, w, h })).find(free);
       if (!spot) return;
       taken.push(spot); seen.add(s.title);
       ctx.fillStyle = L.overprint ? L.accent : L.ink;
-      ctx.fillText(s.title, spot.x, spot.y + h - 9);
+      ctx.textAlign = spot.x + w / 2 < q.x - 20 ? 'right' : 'left';
+      const tx = ctx.textAlign === 'right' ? spot.x + w : spot.x;
+      ctx.fillText(s.title, tx, spot.y + (story ? 36 : 34) - 9);
+      if (note) { const tf2 = ctx.font; ctx.font = nf; ctx.globalAlpha = 0.8; ctx.fillStyle = L.ink; ctx.fillText(note, tx, spot.y + h - 9); ctx.globalAlpha = 1; ctx.font = tf2; }
+      ctx.textAlign = 'left';
     });
     // stops already reserve their space
     ctx.restore();
@@ -1512,17 +1640,22 @@ function drawPoster(canvas, t, data, prefs, ground) {
     });
     if (N > 1) { ctx.textAlign = 'right'; ctx.fillText(endLabel, W - M, base + 29); ctx.textAlign = 'left'; }
   }
-  y += stripH + 34;
+  y += stripH + 58;
 
-  // ---- own line, then liner notes ----
+  // ---- own line, then the credits ----
   ctx.fillStyle = L.ink;
   if (ownLines.length) {
     ctx.font = `italic 400 ${lineSize}px ${PF}`;
     ownLines.forEach((ln, i) => ctx.fillText(ln, M, y + i * Math.round(lineSize * 1.35)));
-    y += ownLines.length * Math.round(lineSize * 1.35) + 18;
+    y += ownLines.length * Math.round(lineSize * 1.35) + 22;
   }
-  ctx.font = `400 ${noteSize}px ${PF}`;
-  noteLines.forEach((ln, i) => ctx.fillText(ln, M, y + i * noteLH));
+  rows.forEach(r => {
+    ctx.globalAlpha = 0.62; ctx.font = `400 ${noteSize}px ${PF}`; ctx.fillText(r.label, M, y);
+    ctx.globalAlpha = 1; ctx.font = `500 ${noteSize}px ${PF}`;
+    r.lines.forEach((ln, i) => ctx.fillText(ln, M + labelW, y + i * noteLH));
+    y += r.lines.length * noteLH + 6;
+  });
+  ctx.globalAlpha = 1;
 
   // ---- paper grain ----
   const img = ctx.getImageData(0, 0, W, H), px = img.data, [gr, gg, gb] = L.grain;
@@ -1549,6 +1682,10 @@ function recapView(t) {
     ${cluster ? `<div class="field"><label>Map</label></div>${seg('zoom', [['all', 'Whole trip'], ['close', 'Up close']])}` : ''}
     <div class="field"><label>Ground</label></div>${seg('ground', [['none', 'None'], ['water', 'Water and borders']])}
     <div class="field"><label for="rc-line">Your own line (optional)</label><input id="rc-line" maxlength="140" value="${esc(p.line)}" placeholder="Something only you’d write" autocomplete="off"></div>
+    <div class="field"><label>Credits</label></div>
+    <p class="hint" style="margin:-2px 2px 6px">A post fits six, a story eight, in this order.</p>
+    <div id="rc-credits" class="credit-list"></div>
+    ${data.lived && data.stops.some(s => s.mark && s.note) ? `<label class="check credit-notes"><input type="checkbox" id="rc-notes" ${p.notes !== false ? 'checked' : ''}><span>Show my notes beside places I loved</span></label>` : ''}
     <button class="btn" id="rc-save">Save image</button>
   </main>`;
 }
@@ -1559,7 +1696,20 @@ function initRecap(tripId) {
   const p = posterPrefs(t.id);
   let data = recapData(t);
   const ground = {};
-  const redraw = () => { drawPoster(canvas, t, data, p, ground); $('.poster-frame').className = 'poster-frame ' + p.size; };
+  let credits = [];
+  const redraw = () => { credits = recapCredits(t, data, p, ground); drawPoster(canvas, t, data, p, ground, credits); $('.poster-frame').className = 'poster-frame ' + p.size; };
+  // the credits list: each one a switch, with the value it'll print
+  const renderCredits = () => {
+    const box = $('#rc-credits'); if (!box) return;
+    box.innerHTML = credits.length ? credits.map(c => `<label class="check credit"><input type="checkbox" data-credit="${c.key}" ${c.on ? 'checked' : ''}>
+      <span>${esc(c.label)}${c.choices && c.choices.length > 1 ? '' : `<small>${esc(c.value)}</small>`}${c.choices && c.choices.length > 1 ? `<select data-fav>${c.choices.map(s => `<option value="${esc(s.key)}" ${s.key === c.chosen ? 'selected' : ''}>${esc(s.title)}</option>`).join('')}</select>` : ''}</span></label>`).join('')
+      : `<p class="hint" style="margin:0 2px 14px">Credits appear once there’s enough logged to say something true.</p>`;
+    $$('[data-credit]', box).forEach(cb => cb.onchange = () => { p.credits = { ...(p.credits || {}), [cb.dataset.credit]: cb.checked }; savePosterPrefs(t.id, p); redraw(); });
+    $$('[data-fav]', box).forEach(sel => { sel.onclick = e => e.stopPropagation(); sel.onchange = () => { p.fav = sel.value; savePosterPrefs(t.id, p); redraw(); renderCredits(); }; });
+  };
+  const rn = $('#rc-notes'); if (rn) rn.onchange = () => { p.notes = rn.checked; savePosterPrefs(t.id, p); redraw(); };
+  // "Home away from home": the neighbourhood with the most stops, named once by OpenStreetMap
+  if (data.lived) recapHood(data.stops).then(h => { if (h && $('#poster') === canvas) { ground.hood = h; redraw(); renderCredits(); } });
   // Ground: world outlines for the country view and the inset, OSM water for city-sized frames. Fetched once, then cached.
   const wanted = new Set();
   const fetchGround = () => {
@@ -1576,7 +1726,7 @@ function initRecap(tripId) {
     }
   };
   // a light placeholder while the typeface loads, then the real thing
-  redraw();
+  redraw(); renderCredits();
   loadPosterFonts().then(redraw);
   fetchGround();
   // fetch any real paths we don't have yet (cached in the Sheet, so each leg is paid for once)
@@ -2376,7 +2526,7 @@ function openHere(tripId, d) {
         item_id: it ? it.id : '', title: it ? it.title : near ? near.title : (isUrl(text) ? linkTitle(text) : text), origin: it ? 'planned' : (isMapsUrl(text) ? '' : 'found'),
         lat: it ? it.lat : near ? near.lat : (pos && !isMapsUrl(text) ? pos.lat : ''), lng: it ? it.lng : near ? near.lng : (pos && !isMapsUrl(text) ? pos.lng : ''),
         city: it ? it.city : near ? near.city : '', place_id: near ? near.place_id : '', logged_at: payload.logged_at, _pending: !it && !near && isMapsUrl(text) };
-      if (near) Object.assign(payload, { place_id: near.place_id, title: near.title, lat: near.lat, lng: near.lng, address: near.address, city: near.city, maps_url: near.maps_url });
+      if (near) { Object.assign(payload, { place_id: near.place_id, title: near.title, lat: near.lat, lng: near.lng, address: near.address, city: near.city, maps_url: near.maps_url, category: near.category || '' }); local.category = near.category || ''; }
       // a typed name (no link) at your current spot keeps your location
       else if (!it && !isMapsUrl(text) && pos) { payload.title = text; payload.lat = pos.lat; payload.lng = pos.lng; }
       queue('addLog', payload, () => { db.log.push(local); if (it) it.status = 'done'; });
@@ -2680,18 +2830,20 @@ function demoData() {
     log: [
       { id: 'l1', trip_id: 'tr_demo1', day: d(-1), seq: '0', title: 'Haneda Airport', origin: 'found', time: '15:20', lat: 35.5494, lng: 139.7798 },
       { id: 'l2', trip_id: 'tr_demo1', day: d(-1), seq: '1', item_id: 'f2', title: 'Hotel in Kuramae', origin: 'planned', mode: 'train', time: '17:05', lat: 35.7037, lng: 139.7930 },
-      { id: 'l3', rating: 'loved', trip_id: 'tr_demo1', day: d(-1), seq: '2', title: 'Ramen counter near Kuramae', origin: 'found', mode: 'walk', note: 'Shio ramen, 8 seats', would_return: 'yes', lat: 35.7045, lng: 139.7925 },
-      { id: 'l4', rating: 'loved', trip_id: 'tr_demo1', day: d(0), seq: '0', item_id: 'p1', title: 'Sensō-ji', origin: 'planned', mode: 'walk', time: '08:10', lat: 35.7148, lng: 139.7967 },
-      { id: 'l5', rating: 'liked', trip_id: 'tr_demo1', day: d(0), seq: '1', title: 'Kappabashi kitchen street', origin: 'found', mode: 'walk', note: 'Bought a knife', lat: 35.7130, lng: 139.7890 },
-      { id: 'l6', rating: 'loved', trip_id: 'tr_demo1', day: d(0), seq: '2', item_id: 'p3', title: 'Yanaka Ginza', origin: 'planned', mode: 'transit', lat: 35.7275, lng: 139.7660 },
-      { id: 'l7', rating: 'liked', trip_id: 'tr_demo1', day: d(0), seq: '3', title: 'Nezu Shrine', origin: 'found', mode: 'walk', lat: 35.7202, lng: 139.7607 },
+      { id: 'l3', rating: 'loved', trip_id: 'tr_demo1', day: d(-1), seq: '2', title: 'Ramen counter near Kuramae', origin: 'found', mode: 'walk', note: 'Shio ramen, 8 seats', would_return: 'yes', category: 'Ramen restaurant', time: '19:40', lat: 35.7045, lng: 139.7925 },
+      { id: 'l4', rating: 'loved', trip_id: 'tr_demo1', day: d(0), seq: '0', item_id: 'p1', title: 'Sensō-ji', origin: 'planned', mode: 'walk', time: '07:10', lat: 35.7148, lng: 139.7967 },
+      { id: 'l5', rating: 'liked', trip_id: 'tr_demo1', day: d(0), seq: '1', title: 'Kappabashi kitchen street', origin: 'found', mode: 'walk', note: 'Bought a knife', category: 'Shopping street', time: '09:40', lat: 35.7130, lng: 139.7890 },
+      { id: 'l6', rating: 'loved', trip_id: 'tr_demo1', day: d(0), seq: '2', item_id: 'p3', title: 'Yanaka Ginza', origin: 'planned', mode: 'transit', time: '12:30', lat: 35.7275, lng: 139.7660 },
+      { id: 'l7', rating: 'liked', trip_id: 'tr_demo1', day: d(0), seq: '3', title: 'Nezu Shrine', origin: 'found', mode: 'walk', category: 'Shrine', time: '14:15', lat: 35.7202, lng: 139.7607 },
       { id: 'l8', trip_id: 'tr_demo1', day: d(1), seq: '0', item_id: 'f3', title: 'Nikko day tour', origin: 'planned', mode: 'walk', lat: 35.7111, lng: 139.7976 },
       { id: 'l8a', trip_id: 'tr_demo1', day: d(1), seq: '0', parent_id: 'l8', item_id: 'c1', title: 'Nikkō Tōshō-gū', origin: 'planned', mode: 'tour', lat: 36.7580, lng: 139.5987 },
       { id: 'l8b', rating: 'loved', trip_id: 'tr_demo1', day: d(1), seq: '1', parent_id: 'l8', item_id: 'c2', title: 'Kegon Falls', origin: 'planned', mode: 'tour', lat: 36.7383, lng: 139.5025 },
-      { id: 'l9', rating: 'loved', trip_id: 'tr_demo1', day: d(2), seq: '0', item_id: 'p4', title: 'Golden Gai', origin: 'planned', mode: 'transit', lat: 35.6938, lng: 139.7036 },
-      { id: 'l10', rating: 'liked', trip_id: 'tr_demo1', day: d(2), seq: '1', item_id: 'p5', title: 'Disk Union Shinjuku', origin: 'planned', mode: 'walk', lat: 35.6920, lng: 139.7030 },
-      { id: 'l11', rating: 'meh', trip_id: 'tr_demo1', day: d(2), seq: '2', title: 'Omoide Yokocho', origin: 'found', mode: 'walk', lat: 35.6930, lng: 139.6995 },
-      { id: 'l12', rating: 'loved', trip_id: 'tr_demo1', day: d(2), seq: '3', title: 'A tiny jazz kissa', origin: 'found', mode: 'walk', lat: 35.6905, lng: 139.7058 },
+      { id: 'l9', rating: 'loved', trip_id: 'tr_demo1', day: d(2), seq: '0', item_id: 'p4', title: 'Golden Gai', origin: 'planned', mode: 'transit', time: '19:30', lat: 35.6938, lng: 139.7036 },
+      { id: 'l10', rating: 'liked', trip_id: 'tr_demo1', day: d(2), seq: '1', item_id: 'p5', title: 'Disk Union Shinjuku', origin: 'planned', mode: 'walk', time: '21:00', lat: 35.6920, lng: 139.7030 },
+      { id: 'l11', rating: 'meh', trip_id: 'tr_demo1', day: d(2), seq: '2', title: 'Omoide Yokocho', origin: 'found', mode: 'walk', category: 'Bar', time: '22:10', lat: 35.6930, lng: 139.6995 },
+      { id: 'l12', rating: 'loved', trip_id: 'tr_demo1', day: d(2), seq: '3', title: 'A tiny jazz kissa', origin: 'found', mode: 'walk', category: 'Bar', time: '00:50', note: 'Bill Evans all night', lat: 35.6905, lng: 139.7058 },
+      { id: 'l13', rating: 'loved', trip_id: 'tr_demo1', day: d(3), seq: '0', title: 'Ramen counter near Kuramae', origin: 'found', mode: 'walk', category: 'Ramen restaurant', lat: 35.7045, lng: 139.7925 },
+      { id: 'l14', rating: 'meh', trip_id: 'tr_demo1', day: d(3), seq: '1', item_id: 'p9', title: 'Torikizoku Kuramae', origin: 'planned', mode: 'walk', lat: 35.7030, lng: 139.7915 },
     ],
   };
 }

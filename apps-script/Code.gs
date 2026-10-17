@@ -21,7 +21,7 @@ const SHEETS = {
   Plan:  ['trip_id', 'day', 'item_id', 'order', 'note'],
   Log:   ['id', 'trip_id', 'item_id', 'place_id', 'title', 'lat', 'lng', 'logged_at', 'timezone',
           'origin', 'note', 'would_return', 'cost', 'currency', 'photo_url', 'created',
-          'parent_id', 'day', 'seq', 'time', 'mode', 'address', 'city', 'maps_url', 'updated', 'rating'],
+          'parent_id', 'day', 'seq', 'time', 'mode', 'address', 'city', 'maps_url', 'updated', 'rating', 'category'],
   Routes: ['key', 'polyline', 'duration', 'distance', 'created'],
 };
 
@@ -242,6 +242,7 @@ const ACTIONS = {
         place_id: r.place_id || '', lat: r.lat != null ? r.lat : '', lng: r.lng != null ? r.lng : '',
         address: r.address || '', city: r.city || '', maps_url: r.maps_url || '',
         origin: origin, note: p.note || '', would_return: p.would_return || '',
+        category: p.category || (item && item.category) || r.category || '',
         logged_at: p.logged_at || now, timezone: p.timezone || '', created: now, updated: now,
       };
       appendObj('Log', log);
@@ -359,6 +360,7 @@ const ACTIONS = {
       place_id: place ? place.place_id : undefined, title: place ? place.title : (item ? undefined : title),
       lat: place ? place.lat : lat, lng: place ? place.lng : lng,
       address: place ? place.address : '', city: place ? place.city : '', maps_url: place ? place.maps_url : '',
+      category: place ? place.category : '',
     });
     return 'Logged ' + log.title + ' (' + trip.name + ').';
   },
