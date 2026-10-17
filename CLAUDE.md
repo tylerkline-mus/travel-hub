@@ -52,7 +52,9 @@ Sample mode runs fully offline. Test with Playwright at 390×844 @2x: route `cdn
 - Draws from the Log once anything is logged, otherwise from the plan (planned stops, tours; musts in color).
 - Design (deliberately not the app's cream/terracotta): ECM-sleeve restraint, routes as a pen line (real paths from the Routes cache, else a gentle bow), stays as squares, found-along-the-way as open rings, loved places in the accent with hand labels in italic. Looks: Fog / Night / Riso (accent overprinted with multiply, slightly off register). One typeface: Familjen Grotesk, loaded only on this screen. Paper grain is a seeded noise pass.
 - Data: a "score" strip (one stroke per day, length = stops, colored top = loved), coordinates and scale bar, a locator inset in the emptiest corner when zoomed to the densest area (`recapCluster`), and first-person liner notes (`recapNotes`) — no stat tiles.
-- Per-trip choices (size, look, zoom, own line) live in localStorage `th_poster`.
+- Per-trip choices (size, look, zoom, ground, own line) live in localStorage `th_poster`.
+- **Ground** (Water and borders, default on): country-scale frames use Natural Earth 1:50m from `world-atlas@2` on jsDelivr (land tint, coastline, dashed borders; rings unwrapped across the date line); city-scale frames (< 40 km across, `groundScale`) use OSM water via Overpass (coastline, lakes/ponds > 80 m, rivers). The locator inset always gets the country outline. Fetched by the phone on the Poster screen only, kept in the Cache API (`travelhub-ground`, which `sw.js` leaves alone). Tests mock both: `npm i world-atlas@2` and a hand-made Overpass fixture.
+- Agreed next: credits (each toggleable; counted vs measured stats; personal ones like top Google category, places returned to) replacing the prose notes, log notes shown beside loved stops, and a Frame picker (whole trip / by stay / by place / by dates) with named, saved slices that become the title.
 
 ## Original design notes for Ask Claude
 

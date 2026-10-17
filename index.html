@@ -1056,15 +1056,15 @@ function logContent(t) {
  * Recap poster — drawn on a canvas, exported as a PNG
  * ============================================================ */
 const POSTER_LOOKS = {
-  fog:   { name: 'Fog',   paper: '#D5D8D2', ink: '#1C2321', accent: '#2A44C9', faint: 'rgba(28,35,33,.24)', grain: [28, 35, 33] },
-  night: { name: 'Night', paper: '#13243A', ink: '#E9E4D6', accent: '#F2C84B', faint: 'rgba(233,228,214,.22)', grain: [233, 228, 214] },
-  riso:  { name: 'Riso',  paper: '#FBFBF8', ink: '#0078BF', accent: '#FF48B0', faint: 'rgba(0,120,191,.26)', grain: [0, 70, 120], overprint: true },
+  fog:   { name: 'Fog',   paper: '#D5D8D2', ink: '#1C2321', accent: '#2A44C9', faint: 'rgba(28,35,33,.24)', ground: 'rgba(28,35,33,.36)', land: 'rgba(28,35,33,.05)', grain: [28, 35, 33] },
+  night: { name: 'Night', paper: '#13243A', ink: '#E9E4D6', accent: '#F2C84B', faint: 'rgba(233,228,214,.22)', ground: 'rgba(233,228,214,.3)', land: 'rgba(233,228,214,.055)', grain: [233, 228, 214] },
+  riso:  { name: 'Riso',  paper: '#FBFBF8', ink: '#0078BF', accent: '#FF48B0', faint: 'rgba(0,120,191,.26)', ground: 'rgba(0,120,191,.4)', land: 'rgba(0,120,191,.06)', grain: [0, 70, 120], overprint: true },
 };
 const POSTER_SIZES = { post: [1080, 1350], story: [1080, 1920] };
 const PF = '"Familjen Grotesk", "Helvetica Neue", Arial, sans-serif';
 const MONTH_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-function posterPrefs(tripId) { return Object.assign({ size: 'post', look: 'fog', zoom: 'close', line: '' }, store.get('th_poster', {})[tripId] || {}); }
+function posterPrefs(tripId) { return Object.assign({ size: 'post', look: 'fog', zoom: 'close', ground: 'water', line: '' }, store.get('th_poster', {})[tripId] || {}); }
 function savePosterPrefs(tripId, p) { const all = store.get('th_poster', {}); all[tripId] = p; store.set('th_poster', all); }
 
 let posterFonts = null;
@@ -1155,6 +1155,7 @@ function projector(b, rect, pad = 0.08) {
   const cx = (b.w + b.e) / 2 * k, cy = (b.s + b.n) / 2;
   const f = p => ({ x: rect.x + rect.w / 2 + (p.lng * k - cx) * sc, y: rect.y + rect.h / 2 - (p.lat - cy) * sc });
   f.metersPerPx = 111320 / sc;
+  f.inv = (x, y) => ({ lng: ((x - rect.x - rect.w / 2) / sc + cx) / k, lat: cy - (y - rect.y - rect.h / 2) / sc });
   return f;
 }
 function dms(v, pos, neg) {
@@ -1210,7 +1211,110 @@ function wrapText(ctx, text, maxW) {
 }
 function setSpacing(ctx, px) { if ('letterSpacing' in ctx) ctx.letterSpacing = px + 'px'; }
 
-function drawPoster(canvas, t, data, prefs) {
+/* ---- Ground: coastlines, water and borders under the drawing ----
+   Country scale: Natural Earth 1:50m (world-atlas on jsDelivr) — coast, land tint, borders.
+   City scale: OpenStreetMap water via Overpass — coastline, lakes and ponds, rivers.
+   Both are fetched by the phone only on this screen and kept in the Cache API. */
+const GROUND_CACHE = 'travelhub-ground';
+async function cachedJSON(url, timeoutMs = 20000) {
+  try {
+    const c = 'caches' in window ? await caches.open(GROUND_CACHE) : null;
+    let res = c ? await c.match(url) : null;
+    if (!res) {
+      const ac = new AbortController(), tm = setTimeout(() => ac.abort(), timeoutMs);
+      res = await fetch(url, { signal: ac.signal }); clearTimeout(tm);
+      if (!res.ok) return null;
+      if (c) c.put(url, res.clone()).catch(() => {});
+    }
+    return await res.json();
+  } catch (e) { return null; }
+}
+let worldP = null;
+function loadWorld() {
+  return worldP ||= cachedJSON('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-50m.json').then(t => t ? decodeWorld(t) : (worldP = null));
+}
+function decodeWorld(topo) {
+  const [sx, sy] = topo.transform.scale, [tx, ty] = topo.transform.translate;
+  const arcs = topo.arcs.map(a => { let x = 0, y = 0; return a.map(([dx, dy]) => { x += dx; y += dy; return { lng: x * sx + tx, lat: y * sy + ty }; }); });
+  const use = arcs.map(() => new Set()), polys = [];
+  topo.objects.countries.geometries.forEach((g, gi) => {
+    const P = g.type === 'Polygon' ? [g.arcs] : g.type === 'MultiPolygon' ? g.arcs : [];
+    P.forEach(poly => { polys.push(poly); poly.forEach(ring => ring.forEach(i => use[i < 0 ? ~i : i].add(gi))); });
+  });
+  const ring = r => r.flatMap((i, j) => { const a = i < 0 ? arcs[~i].slice().reverse() : arcs[i]; return j ? a.slice(1) : a; });
+  // keep each ring continuous across the date line (Russia, Fiji…) so a fill never smears across the poster
+  const unwrap = r => { let prev = null; return r.map(p => { let lng = p.lng; if (prev !== null) { while (lng - prev > 180) lng -= 360; while (lng - prev < -180) lng += 360; } prev = lng; return { lat: p.lat, lng }; }); };
+  const lands = polys.map(poly => { const rings = poly.map(r => unwrap(ring(r))); return { rings, b: geoBounds(rings[0]) }; });
+  const lines = arcs.map((a, i) => ({ pts: a, b: geoBounds(a), kind: use[i].size > 1 ? 'border' : 'coast' }));
+  return { lands, lines };
+}
+function overpassURL(b) {
+  const bb = [b.s, b.w, b.n, b.e].map(v => v.toFixed(3)).join(',');
+  const q = `[out:json][timeout:25];(way["natural"="coastline"](${bb});way["natural"="water"](${bb});relation["natural"="water"](${bb});way["waterway"~"^(river|canal)$"](${bb}););out geom qt;`;
+  return 'https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(q);
+}
+async function loadWater(b) {
+  const j = await cachedJSON(overpassURL(b), 30000);
+  if (!j) return null;
+  const lines = [];
+  (j.elements || []).forEach(el => {
+    const tg = el.tags || {};
+    const kind = tg.natural === 'coastline' ? 'coast' : tg.waterway ? 'river' : 'water';
+    const add = g => { if (!g || g.length < 2) return; const pts = g.map(q => ({ lat: q.lat, lng: q.lon })), bb = geoBounds(pts);
+      if (kind === 'water' && meters({ lat: bb.s, lng: bb.w }, { lat: bb.n, lng: bb.e }) < 80) return;  // skip garden ponds
+      lines.push({ kind, pts, b: bb }); };
+    if (el.type === 'way') add(el.geometry); else (el.members || []).forEach(m => add(m.geometry));
+  });
+  return { lines };
+}
+/** What the poster frames, shared by drawing and by the ground fetch. */
+function posterFrame(data, prefs) {
+  const everything = [...data.stops, ...data.homes];
+  const cluster = recapCluster(data.stops);
+  const zoomed = prefs.zoom === 'close' && cluster;
+  const framePts = zoomed ? cluster : (everything.length ? everything : data.unvisited);
+  return { everything, cluster, zoomed, framePts };
+}
+const roundBox = (b, pad) => {
+  const dy = (b.n - b.s) * pad + 0.01, dx = (b.e - b.w) * pad + 0.01, r = v => Math.round(v * 50) / 50;
+  return { s: r(b.s - dy) - 0.02, n: r(b.n + dy) + 0.02, w: r(b.w - dx) - 0.02, e: r(b.e + dx) + 0.02 };
+};
+/** City-scale frames (under ~40 km across) get OSM water; anything wider uses the world outlines. */
+function groundScale(framePts) {
+  if (!framePts.length) return null;
+  const b = geoBounds(framePts);
+  return meters({ lat: b.s, lng: b.w }, { lat: b.n, lng: b.e }) < 40000 ? 'city' : 'country';
+}
+function drawGround(ctx, P, rect, ground, L, scale, lwBase = 1) {
+  if (!ground) return;
+  const a = P.inv(rect.x, rect.y), c = P.inv(rect.x + rect.w, rect.y + rect.h);
+  const pad = Math.max(c.lng - a.lng, a.lat - c.lat) * 0.5;
+  const view = { s: c.lat - pad, n: a.lat + pad, w: a.lng - pad, e: c.lng + pad };
+  const seen = b => b.e >= view.w && b.w <= view.e && b.n >= view.s && b.s <= view.n;
+  const path = pts => { let last = null; ctx.beginPath(); pts.forEach(p => { const q = P(p);
+    if (!last || Math.abs(p.lng - last.lng) > 180) ctx.moveTo(q.x, q.y); else if (Math.abs(q.x - last.x) + Math.abs(q.y - last.y) > 1.2) { ctx.lineTo(q.x, q.y); } else return;
+    last = { lng: p.lng, x: q.x, y: q.y }; }); };
+  ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  if (scale === 'country' && ground.world) {
+    ctx.fillStyle = L.land;
+    ground.world.lands.forEach(l => { if (!seen(l.b)) return; ctx.beginPath();
+      l.rings.forEach(r => r.forEach((p, i) => { const q = P(p); i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); }));
+      ctx.fill('evenodd'); });
+    ctx.strokeStyle = L.ground;
+    ground.world.lines.forEach(l => { if (!seen(l.b)) return;
+      ctx.lineWidth = (l.kind === 'border' ? 1.1 : 1.6) * lwBase; ctx.setLineDash(l.kind === 'border' ? [5 * lwBase, 5 * lwBase] : []);
+      path(l.pts); ctx.stroke(); });
+  } else if (scale === 'city' && ground.water) {
+    ctx.strokeStyle = L.ground;
+    ground.water.lines.forEach(l => { if (!seen(l.b)) return;
+      ctx.lineWidth = (l.kind === 'coast' ? 1.8 : l.kind === 'river' ? 1.1 : 1.4) * lwBase;
+      ctx.globalAlpha = l.kind === 'river' ? 0.7 : 1;
+      path(l.pts); ctx.stroke(); });
+  }
+  ctx.restore();
+}
+
+function drawPoster(canvas, t, data, prefs, ground) {
   const [W, H] = POSTER_SIZES[prefs.size] || POSTER_SIZES.post;
   const L = POSTER_LOOKS[prefs.look] || POSTER_LOOKS.fog;
   const story = prefs.size === 'story';
@@ -1231,29 +1335,27 @@ function drawPoster(canvas, t, data, prefs) {
   const lineSize = noteSize + 4;
   ctx.font = `italic 400 ${lineSize}px ${PF}`;
   const ownLines = prefs.line ? wrapText(ctx, prefs.line, Math.min(CW, 900)).slice(0, 3) : [];
-  const stripH = 78;
+  const stripH = 84;
   const bottomH = titleLines.length * titleSize * 1.0 + 26 + stripH + 34 +
     (ownLines.length ? ownLines.length * Math.round(lineSize * 1.35) + 18 : 0) + noteLines.length * noteLH;
   const topY = M + 4;
-  const mapRect = { x: M - 10, y: topY + 50, w: CW + 20, h: H - M - bottomH - (topY + 50) - 40 };
+  const mapRect = { x: M - 10, y: topY + 58, w: CW + 20, h: H - M - bottomH - (topY + 58) - 40 };
 
   // ---- top line: dates left, coordinates right ----
   const centre = data.stops.length ? data.stops : data.homes.length ? data.homes : data.unvisited;
-  ctx.fillStyle = L.ink; ctx.font = `500 ${story ? 28 : 26}px ${PF}`;
-  ctx.textAlign = 'left'; ctx.fillText(longRange(t.start || data.days[0], t.end || data.days[data.days.length - 1]), M, topY + 22);
+  ctx.fillStyle = L.ink; ctx.font = `500 ${story ? 34 : 31}px ${PF}`;
+  ctx.textAlign = 'left'; ctx.fillText(longRange(t.start || data.days[0], t.end || data.days[data.days.length - 1]), M, topY + 26);
   if (centre.length) {
     const c = centre.reduce((a, p) => ({ lat: a.lat + p.lat / centre.length, lng: a.lng + p.lng / centre.length }), { lat: 0, lng: 0 });
-    ctx.font = `400 ${story ? 28 : 26}px ${PF}`; ctx.textAlign = 'right';
+    ctx.font = `400 ${story ? 34 : 31}px ${PF}`; ctx.textAlign = 'right';
     if ('fontVariantNumeric' in ctx) ctx.fontVariantNumeric = 'tabular-nums';
-    ctx.fillText(`${dms(c.lat, 'N', 'S')}   ${dms(c.lng, 'E', 'W')}`, W - M, topY + 22);
+    ctx.fillText(`${dms(c.lat, 'N', 'S')}   ${dms(c.lng, 'E', 'W')}`, W - M, topY + 26);
     ctx.textAlign = 'left';
   }
 
   // ---- the drawing ----
-  const everything = [...data.stops, ...data.homes];
-  const cluster = recapCluster(data.stops);
-  const zoomed = prefs.zoom === 'close' && cluster;
-  const framePts = zoomed ? cluster : (everything.length ? everything : data.unvisited);
+  const { everything, cluster, zoomed, framePts } = posterFrame(data, prefs);
+  const useGround = prefs.ground !== 'none' && ground;
   if (!framePts.length) {
     ctx.fillStyle = L.faint; ctx.font = `italic 400 30px ${PF}`; ctx.textAlign = 'center';
     ctx.fillText('Nothing with a location yet.', W / 2, mapRect.y + mapRect.h / 2); ctx.textAlign = 'left';
@@ -1272,6 +1374,9 @@ function drawPoster(canvas, t, data, prefs) {
       inset = boxes.reduce((a, b) => busy(b) < busy(a) ? b : a);
     }
     const lw = story ? 3.4 : 3;
+
+    // the ground: coast, water, borders — quiet hairlines under everything
+    if (useGround) drawGround(ctx, P, mapRect, ground, L, groundScale(framePts));
 
     // saved but never reached
     ctx.fillStyle = L.faint;
@@ -1317,7 +1422,7 @@ function drawPoster(canvas, t, data, prefs) {
     const px = len / P.metersPerPx, sy = mapRect.y + mapRect.h - 6;
     ctx.strokeStyle = L.ink; ctx.lineWidth = 2; ctx.beginPath();
     ctx.moveTo(M, sy - 8); ctx.lineTo(M, sy); ctx.lineTo(M + px, sy); ctx.lineTo(M + px, sy - 8); ctx.stroke();
-    ctx.fillStyle = L.ink; ctx.font = `400 21px ${PF}`;
+    ctx.fillStyle = L.ink; ctx.font = `400 25px ${PF}`;
     ctx.fillText(len >= 1000 ? `${len / 1000} km` : `${len} m`, M + px + 12, sy + 1);
     ctx.restore();
 
@@ -1328,7 +1433,7 @@ function drawPoster(canvas, t, data, prefs) {
     const marks = data.stops.filter(s => s.mark);
     marks.forEach(s => { const q = P(s); ctx.beginPath(); ctx.arc(q.x, q.y, 9, 0, Math.PI * 2); ctx.fill(); });
     // hand labels for the loved places, nudged so they don't collide
-    ctx.font = `italic 400 ${story ? 25 : 23}px ${PF}`;
+    ctx.font = `italic 400 ${story ? 33 : 30}px ${PF}`;
     const taken = [{ x: M, y: mapRect.y + mapRect.h - 40, w: 260, h: 40 }];
     if (inset) taken.push({ x: inset.x - 6, y: inset.y - 6, w: inset.w + 12, h: inset.h + 12 });
     [...data.stops, ...data.homes].forEach(s => { const q = P(s); taken.push({ x: q.x - 9, y: q.y - 9, w: 18, h: 18 }); });
@@ -1340,14 +1445,14 @@ function drawPoster(canvas, t, data, prefs) {
     const seen = new Set();
     marks.slice(0, 40).forEach(s => {
       if (seen.has(s.title) || seen.size >= 8) return;
-      const q = P(s), w = ctx.measureText(s.title).width, h = 26;
-      const spots = [{ x: q.x + 16, y: q.y - 22 }, { x: q.x + 16, y: q.y + 2 }, { x: q.x - 16 - w, y: q.y - 22 }, { x: q.x - 16 - w, y: q.y + 2 },
-        { x: q.x - w / 2, y: q.y - 44 }, { x: q.x - w / 2, y: q.y + 16 }];
+      const q = P(s), w = ctx.measureText(s.title).width, h = story ? 36 : 34;
+      const spots = [{ x: q.x + 17, y: q.y - 30 }, { x: q.x + 17, y: q.y + 2 }, { x: q.x - 17 - w, y: q.y - 30 }, { x: q.x - 17 - w, y: q.y + 2 },
+        { x: q.x - w / 2, y: q.y - 52 }, { x: q.x - w / 2, y: q.y + 18 }];
       const spot = spots.map(p => ({ ...p, w, h })).find(free);
       if (!spot) return;
       taken.push(spot); seen.add(s.title);
       ctx.fillStyle = L.overprint ? L.accent : L.ink;
-      ctx.fillText(s.title, spot.x, spot.y + 19);
+      ctx.fillText(s.title, spot.x, spot.y + h - 9);
     });
     // stops already reserve their space
     ctx.restore();
@@ -1358,6 +1463,8 @@ function drawPoster(canvas, t, data, prefs) {
       ctx.fillStyle = L.paper; ctx.fillRect(box.x, box.y, box.w, box.h);
       ctx.strokeStyle = L.ink; ctx.lineWidth = 1.5; ctx.strokeRect(box.x, box.y, box.w, box.h);
       const Q = projector(geoBounds(everything), box, 0.14);
+      if (useGround && ground.world) { ctx.save(); ctx.beginPath(); ctx.rect(box.x, box.y, box.w, box.h); ctx.clip();
+        drawGround(ctx, Q, box, ground, L, 'country', 0.8); ctx.restore(); }
       ctx.fillStyle = L.ink;
       everything.forEach(p => { const q = Q(p); ctx.beginPath(); ctx.arc(q.x, q.y, 2.4, 0, Math.PI * 2); ctx.fill(); });
       const cb = geoBounds(cluster), a = Q({ lat: cb.n, lng: cb.w }), b = Q({ lat: cb.s, lng: cb.e });
@@ -1393,16 +1500,16 @@ function drawPoster(canvas, t, data, prefs) {
       const hl = (h - 6) * d.marks / d.n + (d.marks === d.n ? 6 : 0); ctx.fillRect(x - sw / 2, base - h, sw, hl); });
     ctx.restore();
     // dates: the first day of each month, and the last day at the right
-    ctx.fillStyle = L.ink; ctx.font = `400 20px ${PF}`;
+    ctx.fillStyle = L.ink; ctx.font = `400 24px ${PF}`;
     const lastD = parseDate(data.perDay[N - 1].day), endLabel = MON[lastD.getMonth()] + ' ' + lastD.getDate();
     const endW = ctx.measureText(endLabel).width;
     let lastM = -1, lastX = -999;
     data.perDay.forEach((d, i) => {
       const dt = parseDate(d.day), x = M + step * i;
-      if (dt.getMonth() !== lastM && x - lastX > 80 && x < W - M - endW - 90) { ctx.fillText(MON[dt.getMonth()] + ' ' + dt.getDate(), x, base + 25); lastX = x; }
+      if (dt.getMonth() !== lastM && x - lastX > 80 && x < W - M - endW - 90) { ctx.fillText(MON[dt.getMonth()] + ' ' + dt.getDate(), x, base + 29); lastX = x; }
       lastM = dt.getMonth();
     });
-    if (N > 1) { ctx.textAlign = 'right'; ctx.fillText(endLabel, W - M, base + 25); ctx.textAlign = 'left'; }
+    if (N > 1) { ctx.textAlign = 'right'; ctx.fillText(endLabel, W - M, base + 29); ctx.textAlign = 'left'; }
   }
   y += stripH + 34;
 
@@ -1439,6 +1546,7 @@ function recapView(t) {
     <div class="field"><label>Size</label></div>${seg('size', [['post', 'Post 4:5'], ['story', 'Story 9:16']])}
     <div class="field"><label>Look</label></div>${seg('look', Object.entries(POSTER_LOOKS).map(([k, v]) => [k, v.name]))}
     ${cluster ? `<div class="field"><label>Map</label></div>${seg('zoom', [['all', 'Whole trip'], ['close', 'Up close']])}` : ''}
+    <div class="field"><label>Ground</label></div>${seg('ground', [['none', 'None'], ['water', 'Water and borders']])}
     <div class="field"><label for="rc-line">Your own line (optional)</label><input id="rc-line" maxlength="140" value="${esc(p.line)}" placeholder="Something only you’d write" autocomplete="off"></div>
     <button class="btn" id="rc-save">Save image</button>
   </main>`;
@@ -1449,10 +1557,27 @@ function initRecap(tripId) {
   const canvas = $('#poster'); if (!canvas) return;
   const p = posterPrefs(t.id);
   let data = recapData(t);
-  const redraw = () => { drawPoster(canvas, t, data, p); $('.poster-frame').className = 'poster-frame ' + p.size; };
+  const ground = {};
+  const redraw = () => { drawPoster(canvas, t, data, p, ground); $('.poster-frame').className = 'poster-frame ' + p.size; };
+  // Ground: world outlines for the country view and the inset, OSM water for city-sized frames. Fetched once, then cached.
+  const wanted = new Set();
+  const fetchGround = () => {
+    if (p.ground === 'none') return;
+    const f = posterFrame(data, p);
+    if (!f.framePts.length) return;
+    if (!ground.world && !wanted.has('world')) { wanted.add('world'); loadWorld().then(w => { if (w) { ground.world = w; if ($('#poster') === canvas) redraw(); } else wanted.delete('world'); }); }
+    if (groundScale(f.framePts) === 'city') {
+      const box = roundBox(geoBounds(f.framePts), 0.35), key = JSON.stringify(box);
+      if (ground.waterKey !== key && !wanted.has(key)) {
+        wanted.add(key);
+        loadWater(box).then(w => { wanted.delete(key); if (w) { ground.water = w; ground.waterKey = key; if ($('#poster') === canvas) redraw(); } });
+      }
+    }
+  };
   // a light placeholder while the typeface loads, then the real thing
   redraw();
   loadPosterFonts().then(redraw);
+  fetchGround();
   // fetch any real paths we don't have yet (cached in the Sheet, so each leg is paid for once)
   const legs = [];
   data.tracks.forEach(tr => tr.pts.forEach((b, k) => { if (!k) return; const a = tr.pts[k - 1];
@@ -1462,7 +1587,7 @@ function initRecap(tripId) {
 
   $$('[data-pref]').forEach(g => $$('button', g).forEach(b => b.onclick = () => {
     p[g.dataset.pref] = b.dataset.v; savePosterPrefs(t.id, p);
-    $$('button', g).forEach(x => x.classList.toggle('on', x === b)); redraw();
+    $$('button', g).forEach(x => x.classList.toggle('on', x === b)); redraw(); fetchGround();
   }));
   let tm;
   $('#rc-line').oninput = e => { p.line = e.target.value; clearTimeout(tm); tm = setTimeout(() => { savePosterPrefs(t.id, p); redraw(); }, 250); };
