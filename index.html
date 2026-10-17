@@ -285,6 +285,8 @@ nav.tabs .add svg { width: 26px; height: 26px; }
 .check.credit small { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .check.credit select { margin-top: 6px; font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); max-width: 100%; }
 .credit-notes { margin: 6px 0 18px; }
+.recap .check.shade { margin: -6px 0 16px; border-bottom: 0; }
+.recap .check.shade[hidden] { display: none; }
 /* ---------- Recap poster ---------- */
 .recap .poster-frame { margin: 10px auto 16px; max-width: 420px; }
 .recap .poster-frame.story { max-width: 300px; }
@@ -1109,9 +1111,9 @@ function logContent(t) {
  * Recap poster — drawn on a canvas, exported as a PNG
  * ============================================================ */
 const POSTER_LOOKS = {
-  fog:   { name: 'Fog',   paper: '#D5D8D2', ink: '#1C2321', accent: '#2A44C9', faint: 'rgba(28,35,33,.24)', ground: 'rgba(28,35,33,.36)', land: 'rgba(250,250,244,.26)', water: 'rgba(52,80,96,.15)', grain: [28, 35, 33] },
-  night: { name: 'Night', paper: '#13243A', ink: '#E9E4D6', accent: '#F2C84B', faint: 'rgba(233,228,214,.22)', ground: 'rgba(233,228,214,.3)', land: 'rgba(233,228,214,.075)', water: 'rgba(3,9,20,.34)', grain: [233, 228, 214] },
-  riso:  { name: 'Riso',  paper: '#FBFBF8', ink: '#0078BF', accent: '#FF48B0', faint: 'rgba(0,120,191,.26)', ground: 'rgba(0,120,191,.4)', land: 'rgba(0,120,191,.025)', water: 'rgba(0,120,191,.13)', grain: [0, 70, 120], overprint: true },
+  fog:   { name: 'Fog',   paper: '#D5D8D2', ink: '#1C2321', accent: '#2A44C9', faint: 'rgba(28,35,33,.24)', ground: 'rgba(28,35,33,.36)', hint: 'rgba(28,35,33,.05)', land: 'rgba(250,250,244,.26)', water: 'rgba(52,80,96,.15)', grain: [28, 35, 33] },
+  night: { name: 'Night', paper: '#13243A', ink: '#E9E4D6', accent: '#F2C84B', faint: 'rgba(233,228,214,.22)', ground: 'rgba(233,228,214,.3)', hint: 'rgba(233,228,214,.055)', land: 'rgba(233,228,214,.075)', water: 'rgba(3,9,20,.34)', grain: [233, 228, 214] },
+  riso:  { name: 'Riso',  paper: '#FBFBF8', ink: '#0078BF', accent: '#FF48B0', faint: 'rgba(0,120,191,.26)', ground: 'rgba(0,120,191,.4)', hint: 'rgba(0,120,191,.06)', land: 'rgba(0,120,191,.025)', water: 'rgba(0,120,191,.13)', grain: [0, 70, 120], overprint: true },
 };
 const POSTER_SIZES = { post: [1080, 1350], story: [1080, 1920] };
 const PF = '"Familjen Grotesk", "Helvetica Neue", Arial, sans-serif';
@@ -1504,7 +1506,7 @@ function groundScale(framePts) {
   const b = geoBounds(framePts), m = meters({ lat: b.s, lng: b.w }, { lat: b.n, lng: b.e });
   return m < 40000 ? 'city' : m < 400000 ? 'region' : 'country';
 }
-function drawGround(ctx, P, rect, ground, L, scale, lwBase = 1) {
+function drawGround(ctx, P, rect, ground, L, scale, lwBase = 1, shade = false) {
   if (!ground) return;
   const a = P.inv(rect.x, rect.y), c = P.inv(rect.x + rect.w, rect.y + rect.h);
   const pad = Math.max(c.lng - a.lng, a.lat - c.lat) * 0.5;
@@ -1516,7 +1518,14 @@ function drawGround(ctx, P, rect, ground, L, scale, lwBase = 1) {
   ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   // OSM lines (city and region): roads quietest, then rivers, water, coast
   const osm = ground.osm && ground.osmScale === scale ? ground.osm : null;
-  paintSurface(ctx, P, { x: 0, y: rect.y, w: ctx.canvas.width, h: rect.h }, ground, L, scale, osm, path, seen);
+  // shaded: land and water in their own tones. Unshaded: hairlines only (and the faint land tint on country maps), the constellation look
+  if (shade) paintSurface(ctx, P, { x: 0, y: rect.y, w: ctx.canvas.width, h: rect.h }, ground, L, scale, osm, path, seen);
+  else if (scale === 'country' && ground.world) {
+    ctx.fillStyle = L.hint;
+    ground.world.lands.forEach(l => { if (!seen(l.b)) return; ctx.beginPath();
+      l.rings.forEach(r => r.forEach((p, i) => { const q = P(p); i ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y); }));
+      ctx.fill('evenodd'); });
+  }
   if (osm && scale !== 'country') {
     ctx.strokeStyle = L.ground;
     const order = { road: 0, major: 1, river: 2, water: 3, coast: 4 };
@@ -1782,7 +1791,7 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     if (useGround) {
       const gc = document.createElement('canvas'); gc.width = W; gc.height = H;
       const g2 = gc.getContext('2d');
-      drawGround(g2, P, mapRect, ground, L, groundScale(framePts));
+      drawGround(g2, P, mapRect, ground, L, groundScale(framePts), 1, !!prefs.shade);
       const fade = Math.min(90, mapRect.h * 0.15), gr = g2.createLinearGradient(0, mapRect.y, 0, mapRect.y + mapRect.h);
       gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(fade / mapRect.h, 'rgba(0,0,0,1)');
       gr.addColorStop(1 - fade / mapRect.h, 'rgba(0,0,0,1)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
@@ -1892,7 +1901,7 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
       ctx.strokeStyle = L.ink; ctx.lineWidth = 1.5; ctx.strokeRect(box.x, box.y, box.w, box.h);
       const Q = projector(geoBounds(insetAll), box, 0.14);
       if (useGround && ground.world) { ctx.save(); ctx.beginPath(); ctx.rect(box.x, box.y, box.w, box.h); ctx.clip();
-        drawGround(ctx, Q, box, ground, L, 'country', 0.8); ctx.restore(); }
+        drawGround(ctx, Q, box, ground, L, 'country', 0.8, !!prefs.shade); ctx.restore(); }
       ctx.fillStyle = L.ink;
       insetAll.forEach(p => { const q = Q(p); ctx.beginPath(); ctx.arc(q.x, q.y, 2.4, 0, Math.PI * 2); ctx.fill(); });
       const cb = geoBounds(framePts), a = Q({ lat: cb.n, lng: cb.w }), b = Q({ lat: cb.s, lng: cb.e });
@@ -2007,6 +2016,7 @@ function recapView(t) {
     <div class="field"><label>Look</label></div>${seg('look', Object.entries(POSTER_LOOKS).map(([k, v]) => [k, v.name]))}
     ${cluster ? `<div class="field"><label>Map</label></div>${seg('zoom', [['all', 'Whole trip'], ['close', 'Up close']])}` : ''}
     <div class="field"><label>Ground</label></div>${seg('ground', [['none', 'None'], ['water', 'Water and names'], ['roads', 'Plus roads']])}
+    <label class="check shade" id="rc-shade-row" ${p.ground === 'none' ? 'hidden' : ''}><input type="checkbox" id="rc-shade" ${p.shade ? 'checked' : ''}><span>Shade land and water<small>Off keeps just the lines</small></span></label>
     <div class="field"><label for="rc-line">Your own line (optional)</label><input id="rc-line" maxlength="140" value="${esc(p.line)}" placeholder="Something only you’d write" autocomplete="off"></div>
     <div class="field"><label>Credits</label></div>
     <p class="hint" style="margin:-2px 2px 6px">A post fits six, a story eight, in this order.</p>
@@ -2090,8 +2100,10 @@ function initRecap(tripId) {
     if (!routeCache[routeKey(leg)] && leg.mode !== 'train' && leg.mode !== 'tour' && meters(a, b) < 30000) legs.push(leg); }));
   if (legs.length) getRoutes(legs.slice(0, 120)).then(() => { if ($('#poster') === canvas) { data = recapData(t, p.frame); redraw(); } });
 
+  const sh = $('#rc-shade'); if (sh) sh.onchange = () => { p.shade = sh.checked; savePosterPrefs(t.id, p); redraw(); };
   $$('[data-pref]').forEach(g => $$('button', g).forEach(b => b.onclick = () => {
     p[g.dataset.pref] = b.dataset.v; savePosterPrefs(t.id, p);
+    if (g.dataset.pref === 'ground') $('#rc-shade-row').hidden = p.ground === 'none';
     $$('button', g).forEach(x => x.classList.toggle('on', x === b)); redraw(); fetchGround();
   }));
   let tm;
@@ -2310,13 +2322,13 @@ function rangeCut(lngs) {
 }
 /** World outlines drawn on a projector whose longitudes may run past 180: each shape is drawn
     at whichever copies (−360, 0, +360…) land in view, so nothing smears across the poster. */
-function drawWorldShifted(ctx, B, rect, world, L, lwBase = 1) {
+function drawWorldShifted(ctx, B, rect, world, L, lwBase = 1, shade = true) {
   const a = B.inv(rect.x, rect.y), c = B.inv(rect.x + rect.w, rect.y + rect.h);
   const vw = a.lng - 4, ve = c.lng + 4, vn = a.lat + 4, vs = c.lat - 4;
   const shifts = b => [-360, 0, 360, 720].filter(k => b.e + k >= vw && b.w + k <= ve && b.n >= vs && b.s <= vn);
   const unwrap = r => { let prev = null; return r.map(p => { let lng = p.lng; if (prev !== null) { while (lng - prev > 180) lng -= 360; while (lng - prev < -180) lng += 360; } prev = lng; return { lat: p.lat, lng }; }); };
   ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  ctx.fillStyle = L.water; ctx.fillRect(0, rect.y, ctx.canvas.width, rect.h);
+  if (shade) { ctx.fillStyle = L.water; ctx.fillRect(0, rect.y, ctx.canvas.width, rect.h); }
   const land = new Path2D();
   world.lands.forEach(l => {
     const b = l.allB ||= geoBounds(l.rings.flat());
@@ -2324,7 +2336,8 @@ function drawWorldShifted(ctx, B, rect, world, L, lwBase = 1) {
       l.rings.forEach(r => { let last = null; r.forEach((p, i) => { const q = B({ lat: p.lat, lng: p.lng + k });
         if (!i) { land.moveTo(q.x, q.y); last = q; } else if (Math.abs(q.x - last.x) + Math.abs(q.y - last.y) > 1) { land.lineTo(q.x, q.y); last = q; } }); land.closePath(); }); });
   });
-  ctx.fillStyle = L.paper; ctx.fill(land, 'evenodd'); ctx.fillStyle = L.land; ctx.fill(land, 'evenodd');
+  if (shade) { ctx.fillStyle = L.paper; ctx.fill(land, 'evenodd'); ctx.fillStyle = L.land; ctx.fill(land, 'evenodd'); }
+  else { ctx.fillStyle = L.hint; ctx.fill(land, 'evenodd'); }
   ctx.strokeStyle = L.ground;
   world.lines.forEach(l => {
     const pts = l.cont ||= unwrap(l.pts), b = l.cb ||= geoBounds(pts);
@@ -2397,8 +2410,8 @@ function drawRangeMap(ctx, R, p, ground, rect, L, story, W) {
   if (p.ground !== 'none' && ground) {
     const gc = document.createElement('canvas'); gc.width = ctx.canvas.width; gc.height = ctx.canvas.height;
     const g2 = gc.getContext('2d');
-    if (scale === 'country' && ground.world) drawWorldShifted(g2, base, rect, ground.world, L, far ? 0.75 : 1);
-    else if (scale !== 'country') drawGround(g2, P, rect, ground, L, scale);
+    if (scale === 'country' && ground.world) drawWorldShifted(g2, base, rect, ground.world, L, far ? 0.75 : 1, p.shade !== false);
+    else if (scale !== 'country') drawGround(g2, P, rect, ground, L, scale, 1, p.shade !== false);
     fadeEdges(gc, rect); ctx.drawImage(gc, 0, 0);
   }
   const lw = far ? 1.7 : mid ? 2.3 : (story ? 3.2 : 2.8);
@@ -2800,7 +2813,8 @@ function rangeView() {
     <div class="field"><label>Style</label></div>${seg('style', RANGE_STYLES)}
     <div class="field"><label>Size</label></div>${seg('size', [['post', 'Post 4:5'], ['story', 'Story 9:16']])}
     <div class="field"><label>Look</label></div>${seg('look', Object.entries(POSTER_LOOKS).map(([k, v]) => [k, v.name]))}
-    ${usesMap ? `<div class="field"><label>Ground</label></div>${seg('ground', [['none', 'None'], ['water', 'Water and names'], ['roads', 'Plus roads']])}` : ''}
+    ${usesMap ? `<div class="field"><label>Ground</label></div>${seg('ground', [['none', 'None'], ['water', 'Water and names'], ['roads', 'Plus roads']])}
+      <label class="check shade" id="rg-shade-row" ${p.ground === 'none' ? 'hidden' : ''}><input type="checkbox" id="rg-shade" ${p.shade !== false ? 'checked' : ''}><span>Shade land and water<small>${p.style === 'carousel' ? 'On the map slide; each trip slide keeps its own setting' : 'Off keeps just the lines'}</small></span></label>` : ''}
     ${R.inRange.length ? `<div class="field"><label>Trips</label></div><div class="credit-list">${tripRows}</div>` : ''}
     <div class="field"><label>Home</label></div>
     <div class="range-home">${R.home ? `<span>${esc(R.home.name)}</span><button class="linkbtn" id="rg-home">Change to here</button><button class="linkbtn" id="rg-nohome">Clear</button>`
@@ -2924,8 +2938,10 @@ function initRange() {
   };
   // ground: world outlines when the map spans countries; OpenStreetMap water and names when it's one region or city
   const fetchGround = () => { if (p.style === 'map' || p.style === 'carousel') fetchGroundInto(ground, rangeMapPoints(R, p), p.ground, redraw, true, p.size); };
+  const sh = $('#rg-shade'); if (sh) sh.onchange = () => { p.shade = sh.checked; save(); redraw(); };
   $$('[data-rpref]').forEach(g => $$('button', g).forEach(b => b.onclick = () => {
     const k = g.dataset.rpref; p[k] = b.dataset.v; save();
+    if (k === 'ground' && $('#rg-shade-row')) $('#rg-shade-row').hidden = p.ground === 'none';
     if (k === 'style' || k === 'size' && p.style === 'carousel') return render();
     $$('button', g).forEach(x => x.classList.toggle('on', x === b)); tripSlide.clear(); redraw(); fetchGround();
   }));
