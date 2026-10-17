@@ -3711,7 +3711,10 @@ function openHere(tripId, d) {
     };
     const where = $('#h-where', sh);
     const showAround = list => {
-      nearList = (list || []).filter(n => !dayPlan.concat(others).some(i => i.place_id && i.place_id === n.place_id)).slice(0, 5);
+      const seen = [];   // same name within 50 m = the same place listed twice
+      nearList = (list || []).filter(n => !dayPlan.concat(others).some(i => i.place_id && i.place_id === n.place_id))
+        .filter(n => { const k = String(n.title || '').trim().toLowerCase(); if (seen.some(o => o.k === k && meters(o.n, n) < 50)) return false; seen.push({ k, n }); return true; })
+        .slice(0, 5);
       const box = $('#h-around', sh); if (!box || !nearList.length) return;
       box.innerHTML = `<h4 style="margin-top:4px">Around you</h4>` + nearList.map((n, k) => `<div class="pick" data-near="${k}"><span class="num hollow" style="--c:var(--found)">•</span><div class="body"><div class="title">${esc(n.title)}</div><div class="meta">${esc([n.category, n.dist != null ? fmtDist(n.dist) + ' away' : ''].filter(Boolean).join(' · '))}</div></div></div>`).join('');
       $$('[data-near]', box).forEach(el => el.onclick = () => {
