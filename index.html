@@ -2626,6 +2626,23 @@ function openAddToDay(tripId, d) {
 }
 
 /* ---------- Travelogue: I'm here ---------- */
+/** Name a spot by its street, else its neighbourhood, else the town (OpenStreetMap). Null when offline. */
+async function hereName(p) {
+  if (cfg && cfg.demo) return { title: 'Nakamise-dōri', city: 'Tokyo' };
+  if (!navigator.onLine) return null;
+  try {
+    const ac = new AbortController(), tm = setTimeout(() => ac.abort(), 6000);
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=17&accept-language=en&lat=${p.lat.toFixed(5)}&lon=${p.lng.toFixed(5)}`, { signal: ac.signal });
+    clearTimeout(tm);
+    if (!res.ok) return null;
+    const a = (await res.json()).address || {};
+    const city = a.city || a.town || a.village || a.municipality || '';
+    const title = a.road || a.pedestrian || a.footway || a.path || a.square || a.neighbourhood || a.quarter || a.suburb || city;
+    return title ? { title, city } : null;
+  } catch (e) { return null; }
+}
+
+/* ---------- Travelogue: I'm here ---------- */
 function openHere(tripId, d) {
   const t = tripById(tripId); if (!t) return;
   const now = tzNow(t.timezone);
@@ -2635,14 +2652,14 @@ function openHere(tripId, d) {
   const others = topItemsFor(tripId).filter(i => i.kind !== 'fixed' && !logged.has(i.id) && i.day !== d);
   const tours = topLogs(tripId, d).filter(l => { const it = l.item_id && itemById(l.item_id); return it && isTour(it); });
   const prev = topLogs(tripId, d).slice(-1)[0];
-  let picked = null, pos = null, near = null, nearList = [];
+  let picked = null, pos = null, near = null, nearList = [], pin = null;
 
   const pickRow = i => `<div class="pick" data-pick="${esc(i.id)}"><span class="num ${i.kind === 'idea' ? 'hollow' : ''}" style="--c:${i.kind === 'fixed' ? 'var(--fixed)' : 'var(--place)'}">•</span><div class="body"><div class="title">${esc(i.title)}</div><div class="meta" data-dist="${esc(i.id)}">${esc(placeLine(i))}</div></div></div>`;
   openSheet(`
     <h3>${isToday ? 'Where are you?' : 'Add a stop · ' + esc(fmtDay(d, false))}</h3>
     ${dayPlan.length ? `<h4 style="margin-top:0">From the plan</h4><div id="h-plan">${dayPlan.map(pickRow).join('')}</div>` : ''}
     ${others.length ? `<details style="margin:6px 0 12px"><summary style="font-size:14px;color:var(--muted);cursor:pointer;padding:6px 2px">Other saved places (${others.length})</summary><div id="h-others" style="margin-top:8px">${others.map(pickRow).join('')}</div></details>` : ''}
-    ${navigator.geolocation && isToday ? `<div class="hint here-status" id="h-where">Finding you…</div><div id="h-around"></div>` : ''}
+    ${navigator.geolocation && isToday ? `<div class="hint here-status" id="h-where">Finding you…</div><div id="h-around"></div><div id="h-pin"></div>` : ''}
     <h4>${dayPlan.length || others.length ? 'Or somewhere new' : 'Somewhere'}</h4>
     <div class="field"><textarea id="h-text" placeholder="Paste a Google Maps link, or type a name"></textarea></div>
     ${navigator.clipboard && navigator.clipboard.readText ? `<button class="linkbtn" id="h-paste" style="margin:-8px 0 10px">Paste a link</button>` : ''}
@@ -2664,7 +2681,21 @@ function openHere(tripId, d) {
     ta.oninput = () => { if (ta.value.trim()) { picked = null; $$('[data-pick]', sh).forEach(x => x.classList.remove('on')); } };
     $('#h-now', sh).onclick = () => { $('#h-time', sh).value = tzNow(t.timezone).time; };
     // Where am I? Ask once, then sort the list, preselect what you're standing at, and show what's around you.
-    const clearPicks = () => { picked = null; near = null; $$('[data-pick], [data-near]', sh).forEach(x => x.classList.remove('on')); };
+    const clearPicks = () => { picked = null; near = null; pin = null; $$('[data-pick], [data-near], [data-pin]', sh).forEach(x => x.classList.remove('on')); };
+    // "Just this spot": a pin where you're standing, named by its street (or neighbourhood). Rename it later from the Log.
+    let pinPlace = null;
+    const showPin = () => {
+      const box = $('#h-pin', sh); if (!box || !pos) return;
+      pinPlace = { title: 'Dropped pin', lat: pos.lat, lng: pos.lng, city: '' };
+      box.innerHTML = `<div class="pick" data-pin="1"><span class="num hollow" style="--c:var(--found)">•</span><div class="body"><div class="title">Just this spot</div><div class="meta" id="h-pin-name">Finding the street…</div></div></div>`;
+      const el = $('[data-pin]', box);
+      el.onclick = () => { const on = !el.classList.contains('on'); clearPicks(); if (on) { el.classList.add('on'); pin = pinPlace; ta.value = ''; } };
+      hereName(pos).then(n => {
+        const m = $('#h-pin-name', sh); if (!m) return;
+        if (n) { pinPlace.title = n.title; pinPlace.city = n.city; m.textContent = 'Pin on ' + n.title; }
+        else m.textContent = 'A pin where you’re standing';
+      });
+    };
     const where = $('#h-where', sh);
     const showAround = list => {
       nearList = (list || []).filter(n => !dayPlan.concat(others).some(i => i.place_id && i.place_id === n.place_id)).slice(0, 5);
@@ -2691,17 +2722,18 @@ function openHere(tripId, d) {
         best.el.click();
         where.textContent = `You’re at ${best.it.title}, by the look of it.`;
       } else where.textContent = 'Sorted by distance from you.';
+      showPin();
       if (navigator.onLine && (db.places || (cfg && cfg.demo))) {
         api('nearby', { lat: pos.lat, lng: pos.lng }).then(list => { if (document.body.contains(sh)) showAround(list); }).catch(() => {});
       }
     }, () => { where.textContent = 'Location is off, so the list isn’t sorted by distance.'; }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
-    $$('[data-pick]', sh).forEach(el => el.addEventListener('click', () => { near = null; $$('[data-near]', sh).forEach(x => x.classList.remove('on')); }));
+    $$('[data-pick]', sh).forEach(el => el.addEventListener('click', () => { near = null; pin = null; $$('[data-near], [data-pin]', sh).forEach(x => x.classList.remove('on')); }));
     ta.addEventListener('input', () => { if (ta.value.trim()) clearPicks(); });
     const hp = $('#h-paste', sh);
     if (hp) hp.onclick = async () => { try { ta.value = (await navigator.clipboard.readText()).trim(); if (ta.value) clearPicks(); } catch (e) { toast('Long-press the box to paste'); } };
     $('#h-save', sh).onclick = () => {
       const text = ta.value.trim();
-      if (!picked && !near && !text) { ta.focus(); return; }
+      if (!picked && !near && !pin && !text) { ta.focus(); return; }
       const parentSel = $('#h-parent', sh);
       const parent_id = parentSel ? parentSel.value : '';
       const it = picked ? itemById(picked) : null;
@@ -2709,16 +2741,17 @@ function openHere(tripId, d) {
       const mode = $('#h-mode', sh).value;
       // Logged on the spot? Then the time is real: fill it in unless you typed one.
       let time = $('#h-time', sh).value;
-      const spot = it && hasCoords(it) ? it : near ? near : (!it && !isMapsUrl(text) ? pos : null);
+      const spot = it && hasCoords(it) ? it : near ? near : pin ? pin : (!it && !isMapsUrl(text) ? pos : null);
       if (!time && isToday && pos && spot && meters(pos, spot) < 300) time = tzNow(t.timezone).time;
       const payload = { id: uid('lg'), trip: tripId, day: d, seq, time, mode: seq || parent_id ? mode : '',
-        parent_id, note: $('#h-note', sh).value.trim(), timezone: t.timezone || '', item_id: it ? it.id : undefined, text: it || near ? undefined : text,
+        parent_id, note: $('#h-note', sh).value.trim(), timezone: t.timezone || '', item_id: it ? it.id : undefined, text: it || near || pin ? undefined : text,
         logged_at: new Date().toISOString() };
       const local = { id: payload.id, trip_id: tripId, day: d, seq: String(seq), time: payload.time, mode: payload.mode, parent_id, note: payload.note,
-        item_id: it ? it.id : '', title: it ? it.title : near ? near.title : (isUrl(text) ? linkTitle(text) : text), origin: it ? 'planned' : (isMapsUrl(text) ? '' : 'found'),
-        lat: it ? it.lat : near ? near.lat : (pos && !isMapsUrl(text) ? pos.lat : ''), lng: it ? it.lng : near ? near.lng : (pos && !isMapsUrl(text) ? pos.lng : ''),
-        city: it ? it.city : near ? near.city : '', place_id: near ? near.place_id : '', logged_at: payload.logged_at, _pending: !it && !near && isMapsUrl(text) };
+        item_id: it ? it.id : '', title: it ? it.title : near ? near.title : pin ? pin.title : (isUrl(text) ? linkTitle(text) : text), origin: it ? 'planned' : (isMapsUrl(text) ? '' : 'found'),
+        lat: it ? it.lat : near ? near.lat : pin ? pin.lat : (pos && !isMapsUrl(text) ? pos.lat : ''), lng: it ? it.lng : near ? near.lng : pin ? pin.lng : (pos && !isMapsUrl(text) ? pos.lng : ''),
+        city: it ? it.city : near ? near.city : pin ? pin.city : '', place_id: near ? near.place_id : '', logged_at: payload.logged_at, _pending: !it && !near && isMapsUrl(text) };
       if (near) { Object.assign(payload, { place_id: near.place_id, title: near.title, lat: near.lat, lng: near.lng, address: near.address, city: near.city, maps_url: near.maps_url, category: near.category || '' }); local.category = near.category || ''; }
+      else if (pin) Object.assign(payload, { title: pin.title, lat: pin.lat, lng: pin.lng, city: pin.city });
       // a typed name (no link) at your current spot keeps your location
       else if (!it && !isMapsUrl(text) && pos) { payload.title = text; payload.lat = pos.lat; payload.lng = pos.lng; }
       queue('addLog', payload, () => { db.log.push(local); if (it) it.status = 'done'; });
