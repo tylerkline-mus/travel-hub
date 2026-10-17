@@ -1070,7 +1070,7 @@ const POSTER_SIZES = { post: [1080, 1350], story: [1080, 1920] };
 const PF = '"Familjen Grotesk", "Helvetica Neue", Arial, sans-serif';
 const MONTH_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-function posterPrefs(tripId) { return Object.assign({ size: 'post', look: 'fog', zoom: 'close', ground: 'water', line: '' }, store.get('th_poster', {})[tripId] || {}); }
+function posterPrefs(tripId) { return Object.assign({ size: 'post', look: 'fog', zoom: 'close', ground: 'roads', line: '' }, store.get('th_poster', {})[tripId] || {}); }
 function savePosterPrefs(tripId, p) { const all = store.get('th_poster', {}); all[tripId] = p; store.set('th_poster', all); }
 
 let posterFonts = null;
@@ -1356,24 +1356,44 @@ function decodeWorld(topo) {
   const lines = arcs.map((a, i) => ({ pts: a, b: geoBounds(a), kind: use[i].size > 1 ? 'border' : 'coast' }));
   return { lands, lines };
 }
-function overpassURL(b) {
-  const bb = [b.s, b.w, b.n, b.e].map(v => v.toFixed(3)).join(',');
-  const q = `[out:json][timeout:25];(way["natural"="coastline"](${bb});way["natural"="water"](${bb});relation["natural"="water"](${bb});way["waterway"~"^(river|canal)$"](${bb}););out geom qt;`;
-  return 'https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(q);
+/** OpenStreetMap detail for the ground, chosen by how much of the world the poster shows:
+    city (< 40 km): coast, lakes and ponds, rivers, neighbourhood names, and with roads on, main streets;
+    region (< 400 km): coast, named rivers, city and town names, and with roads on, motorways;
+    country: city names only (the outline comes from the world map). */
+function overpassURL(b, scale, roads) {
+  const bb = [b.s, b.w, b.n, b.e].map(v => v.toFixed(3)).join(','), q = [];
+  const spanKm = meters({ lat: b.s, lng: b.w }, { lat: b.n, lng: b.e }) / 1000;
+  if (scale === 'city') {
+    q.push(`way["natural"="coastline"]`, `way["natural"="water"]`, `relation["natural"="water"]`, `way["waterway"~"^(river|canal)$"]`, `node["place"~"^(suburb|neighbourhood|quarter)$"]`);
+    if (roads) q.push(`way["highway"~"^(motorway|trunk|primary|secondary)$"]`);
+  } else if (scale === 'region') {
+    q.push(`way["natural"="coastline"]`, `node["place"~"^(city|town)$"]`);
+    if (spanKm < 260) q.push(`way["waterway"="river"]["name"]`);
+    if (roads) q.push(`way["highway"~"^(motorway|trunk)$"]`);
+  } else q.push(`node["place"="city"]`);
+  const body = `[out:json][timeout:40];(${q.map(x => x + `(${bb})`).join(';')};);out geom qt;`;
+  return 'https://overpass-api.de/api/interpreter?data=' + encodeURIComponent(body);
 }
-async function loadWater(b) {
-  const j = await cachedJSON(overpassURL(b), 30000);
+async function loadOSM(b, scale, roads) {
+  const j = await cachedJSON(overpassURL(b, scale, roads), 45000);
   if (!j) return null;
-  const lines = [];
+  const lines = [], names = [];
+  const RANK = { city: 5, town: 4, suburb: 3, quarter: 2, neighbourhood: 2, village: 1 };
   (j.elements || []).forEach(el => {
     const tg = el.tags || {};
-    const kind = tg.natural === 'coastline' ? 'coast' : tg.waterway ? 'river' : 'water';
+    if (el.type === 'node') {
+      const name = tg['name:en'] || tg.name;
+      if (name && tg.place) names.push({ name, lat: el.lat, lng: el.lon, rank: RANK[tg.place] || 1, pop: +tg.population || 0 });
+      return;
+    }
+    const kind = tg.natural === 'coastline' ? 'coast' : tg.highway ? (/^(motorway|trunk)$/.test(tg.highway) ? 'major' : 'road') : tg.waterway ? 'river' : 'water';
     const add = g => { if (!g || g.length < 2) return; const pts = g.map(q => ({ lat: q.lat, lng: q.lon })), bb = geoBounds(pts);
       if (kind === 'water' && meters({ lat: bb.s, lng: bb.w }, { lat: bb.n, lng: bb.e }) < 80) return;  // skip garden ponds
       lines.push({ kind, pts, b: bb }); };
     if (el.type === 'way') add(el.geometry); else (el.members || []).forEach(m => add(m.geometry));
   });
-  return { lines };
+  names.sort((a, b) => b.rank - a.rank || b.pop - a.pop);
+  return { lines, names };
 }
 /** What the poster frames, shared by drawing and by the ground fetch. */
 function posterFrame(data, prefs) {
@@ -1387,11 +1407,10 @@ const roundBox = (b, pad) => {
   const dy = (b.n - b.s) * pad + 0.01, dx = (b.e - b.w) * pad + 0.01, r = v => Math.round(v * 50) / 50;
   return { s: r(b.s - dy) - 0.02, n: r(b.n + dy) + 0.02, w: r(b.w - dx) - 0.02, e: r(b.e + dx) + 0.02 };
 };
-/** City-scale frames (under ~40 km across) get OSM water; anything wider uses the world outlines. */
 function groundScale(framePts) {
   if (!framePts.length) return null;
-  const b = geoBounds(framePts);
-  return meters({ lat: b.s, lng: b.w }, { lat: b.n, lng: b.e }) < 40000 ? 'city' : 'country';
+  const b = geoBounds(framePts), m = meters({ lat: b.s, lng: b.w }, { lat: b.n, lng: b.e });
+  return m < 40000 ? 'city' : m < 400000 ? 'region' : 'country';
 }
 function drawGround(ctx, P, rect, ground, L, scale, lwBase = 1) {
   if (!ground) return;
@@ -1403,6 +1422,25 @@ function drawGround(ctx, P, rect, ground, L, scale, lwBase = 1) {
     if (!last || Math.abs(p.lng - last.lng) > 180) ctx.moveTo(q.x, q.y); else if (Math.abs(q.x - last.x) + Math.abs(q.y - last.y) > 1.2) { ctx.lineTo(q.x, q.y); } else return;
     last = { lng: p.lng, x: q.x, y: q.y }; }); };
   ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  // OSM lines (city and region): roads quietest, then rivers, water, coast
+  const osm = ground.osm && ground.osmScale === scale ? ground.osm : null;
+  if (osm && scale !== 'country') {
+    ctx.strokeStyle = L.ground;
+    const order = { road: 0, major: 1, river: 2, water: 3, coast: 4 };
+    osm.lines.slice().sort((a, b) => order[a.kind] - order[b.kind]).forEach(l => { if (!seen(l.b)) return;
+      ctx.lineWidth = ({ road: 0.9, major: 1.5, river: 1.3, water: 1.4, coast: 1.8 })[l.kind] * lwBase;
+      ctx.globalAlpha = ({ road: 0.5, major: 0.65, river: 0.85, water: 1, coast: 1 })[l.kind];
+      path(l.pts); ctx.stroke(); });
+    ctx.globalAlpha = 1;
+  }
+  if (scale === 'region' && ground.world) {
+    // the world map's borders (and coast, where OSM had none) for orientation
+    ctx.strokeStyle = L.ground;
+    ground.world.lines.forEach(l => { if (!seen(l.b) || (l.kind === 'coast' && osm && osm.lines.some(x => x.kind === 'coast'))) return;
+      ctx.lineWidth = (l.kind === 'border' ? 1.1 : 1.5) * lwBase; ctx.setLineDash(l.kind === 'border' ? [5 * lwBase, 5 * lwBase] : []);
+      path(l.pts); ctx.stroke(); });
+    ctx.setLineDash([]);
+  }
   if (scale === 'country' && ground.world) {
     ctx.fillStyle = L.land;
     ground.world.lands.forEach(l => { if (!seen(l.b)) return; ctx.beginPath();
@@ -1412,14 +1450,29 @@ function drawGround(ctx, P, rect, ground, L, scale, lwBase = 1) {
     ground.world.lines.forEach(l => { if (!seen(l.b)) return;
       ctx.lineWidth = (l.kind === 'border' ? 1.1 : 1.6) * lwBase; ctx.setLineDash(l.kind === 'border' ? [5 * lwBase, 5 * lwBase] : []);
       path(l.pts); ctx.stroke(); });
-  } else if (scale === 'city' && ground.water) {
-    ctx.strokeStyle = L.ground;
-    ground.water.lines.forEach(l => { if (!seen(l.b)) return;
-      ctx.lineWidth = (l.kind === 'coast' ? 1.8 : l.kind === 'river' ? 1.1 : 1.4) * lwBase;
-      ctx.globalAlpha = l.kind === 'river' ? 0.7 : 1;
-      path(l.pts); ctx.stroke(); });
   }
   ctx.restore();
+}
+/** Place names from OSM, quiet and upright (stop names are italic), only where there's room. */
+function drawPlaceNames(ctx, P, ground, scale, rect, taken, L, story, fade) {
+  const osm = ground && ground.osm && ground.osmScale === scale ? ground.osm : null;
+  if (!osm || !osm.names.length) return;
+  ctx.save();
+  ctx.font = `400 ${story ? 24 : 22}px ${PF}`; setSpacing(ctx, 1.2); ctx.fillStyle = L.ink; ctx.globalAlpha = 0.5; ctx.textAlign = 'center';
+  let n = 0;
+  for (const p of osm.names) {
+    if (n >= (story ? 12 : 9)) break;
+    const q = P(p), w = ctx.measureText(p.name).width;
+    // on the spot if it's free; a city or town may shift a little above or below (your stops are often right on top of it)
+    const offs = p.rank >= 4 ? [[0, 0], [0, 46], [0, -46], [-(w / 2 + 40), 0], [w / 2 + 40, 0], [0, 84], [-(w / 2 + 40), 46], [w / 2 + 40, 46]] : [[0, 0]];
+    const boxAt = ([dx, dy]) => ({ x: q.x + dx - w / 2 - 6, y: q.y + dy - 20, w: w + 12, h: 28 });
+    const fits = box => !(box.x < 24 || box.x + box.w > rect.x + rect.w - 14 || box.y < rect.y + fade * 0.6 || box.y + box.h > rect.y + rect.h - fade * 0.6) &&
+      !taken.some(o => box.x < o.x + o.w && box.x + box.w > o.x && box.y < o.y + o.h && box.y + box.h > o.y);
+    const off = offs.find(o => fits(boxAt(o)));
+    if (!off) continue;
+    ctx.fillText(p.name, q.x + off[0], q.y + off[1]); taken.push(boxAt(off)); n++;
+  }
+  ctx.restore(); setSpacing(ctx, 0);
 }
 
 function drawPoster(canvas, t, data, prefs, ground, credits) {
@@ -1565,26 +1618,35 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     const free = r => r.x > 8 && r.x + r.w < W - 8 && r.y > mapRect.y - 10 && r.y + r.h < mapRect.y + mapRect.h &&
       !taken.some(o => r.x < o.x + o.w && r.x + r.w > o.x && r.y < o.y + o.h && r.y + r.h > o.y);
     const seen = new Set();
-    marks.slice(0, 40).forEach(s => {
-      if (seen.has(s.title) || seen.size >= 8) return;
+    const labelled = [...marks, ...data.stops.filter(s => !s.mark && s.note), ...data.stops.filter(s => !s.mark && !s.note && s.top !== false), ...data.stops.filter(s => !s.mark && !s.note && s.top === false)];
+    const big = `italic 400 ${story ? 33 : 30}px ${PF}`, small = `italic 400 ${story ? 27 : 25}px ${PF}`;
+    labelled.forEach(s => {
+      if (!s.title || seen.has(s.title) || seen.size >= (story ? 12 : 10)) return;
+      ctx.font = s.mark ? big : small;
       const note = prefs.notes !== false && s.note ? (s.note.length > 38 ? s.note.slice(0, 36).trim() + '…' : s.note) : '';
       const nh = note ? (story ? 32 : 30) : 0, nf = `400 ${story ? 25 : 23}px ${PF}`, tf = ctx.font;
       ctx.font = nf; const nw = note ? ctx.measureText(note).width : 0; ctx.font = tf;
-      const q = P(s), w = Math.max(ctx.measureText(s.title).width, nw), h = (story ? 36 : 34) + nh;
+      const lh = s.mark ? (story ? 36 : 34) : (story ? 30 : 28);
+      const q = P(s), w = Math.max(ctx.measureText(s.title).width, nw), h = lh + nh;
       const spots = [{ x: q.x + 17, y: q.y - 30 }, { x: q.x + 17, y: q.y + 2 }, { x: q.x - 17 - w, y: q.y - 30 }, { x: q.x - 17 - w, y: q.y + 2 },
         { x: q.x - w / 2, y: q.y - 22 - h }, { x: q.x - w / 2, y: q.y + 18 }, { x: q.x + 17, y: q.y - h + 4 }, { x: q.x - 17 - w, y: q.y - h + 4 }];
       const spot = spots.map(p => ({ ...p, w, h })).find(free);
       if (!spot) return;
       taken.push(spot); seen.add(s.title);
-      ctx.fillStyle = L.overprint ? L.accent : L.ink;
+      ctx.save();
+      // only the loved names are printed in the second ink on Riso; the rest sit in register with the drawing
+      if (!s.mark && L.overprint) { ctx.globalCompositeOperation = 'source-over'; ctx.translate(-2.2, 1.6); }
+      ctx.fillStyle = s.mark && L.overprint ? L.accent : L.ink;
+      if (!s.mark) ctx.globalAlpha = 0.88;
       ctx.textAlign = spot.x + w / 2 < q.x - 20 ? 'right' : 'left';
       const tx = ctx.textAlign === 'right' ? spot.x + w : spot.x;
-      ctx.fillText(s.title, tx, spot.y + (story ? 36 : 34) - 9);
-      if (note) { const tf2 = ctx.font; ctx.font = nf; ctx.globalAlpha = 0.8; ctx.fillStyle = L.ink; ctx.fillText(note, tx, spot.y + h - 9); ctx.globalAlpha = 1; ctx.font = tf2; }
-      ctx.textAlign = 'left';
+      ctx.fillText(s.title, tx, spot.y + lh - 9);
+      if (note) { ctx.font = nf; ctx.globalAlpha = 0.8; ctx.fillStyle = L.ink; ctx.fillText(note, tx, spot.y + h - 9); }
+      ctx.restore();
     });
-    // stops already reserve their space
     ctx.restore();
+    // place names from the map go wherever is still free
+    if (useGround) drawPlaceNames(ctx, P, ground, groundScale(framePts), mapRect, taken, L, story, Math.min(90, mapRect.h * 0.15));
 
     // locator inset when zoomed in: the whole trip, with the drawn area boxed
     if (inset) {
@@ -1680,7 +1742,7 @@ function recapView(t) {
     <div class="field"><label>Size</label></div>${seg('size', [['post', 'Post 4:5'], ['story', 'Story 9:16']])}
     <div class="field"><label>Look</label></div>${seg('look', Object.entries(POSTER_LOOKS).map(([k, v]) => [k, v.name]))}
     ${cluster ? `<div class="field"><label>Map</label></div>${seg('zoom', [['all', 'Whole trip'], ['close', 'Up close']])}` : ''}
-    <div class="field"><label>Ground</label></div>${seg('ground', [['none', 'None'], ['water', 'Water and borders']])}
+    <div class="field"><label>Ground</label></div>${seg('ground', [['none', 'None'], ['water', 'Water and names'], ['roads', 'Plus roads']])}
     <div class="field"><label for="rc-line">Your own line (optional)</label><input id="rc-line" maxlength="140" value="${esc(p.line)}" placeholder="Something only you’d write" autocomplete="off"></div>
     <div class="field"><label>Credits</label></div>
     <p class="hint" style="margin:-2px 2px 6px">A post fits six, a story eight, in this order.</p>
@@ -1717,12 +1779,11 @@ function initRecap(tripId) {
     const f = posterFrame(data, p);
     if (!f.framePts.length) return;
     if (!ground.world && !wanted.has('world')) { wanted.add('world'); loadWorld().then(w => { if (w) { ground.world = w; if ($('#poster') === canvas) redraw(); } else wanted.delete('world'); }); }
-    if (groundScale(f.framePts) === 'city') {
-      const box = roundBox(geoBounds(f.framePts), 0.35), key = JSON.stringify(box);
-      if (ground.waterKey !== key && !wanted.has(key)) {
-        wanted.add(key);
-        loadWater(box).then(w => { wanted.delete(key); if (w) { ground.water = w; ground.waterKey = key; if ($('#poster') === canvas) redraw(); } });
-      }
+    const scale = groundScale(f.framePts), roads = p.ground === 'roads';
+    const box = roundBox(geoBounds(f.framePts), 0.35), key = JSON.stringify([box, scale, roads]);
+    if (ground.osmKey !== key && !wanted.has(key)) {
+      wanted.add(key);
+      loadOSM(box, scale, roads).then(o => { wanted.delete(key); if (o) { ground.osm = o; ground.osmScale = scale; ground.osmKey = key; if ($('#poster') === canvas) redraw(); } });
     }
   };
   // a light placeholder while the typeface loads, then the real thing
