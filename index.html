@@ -275,6 +275,12 @@ nav.tabs .add svg { width: 26px; height: 26px; }
 
 .here-status { margin: -2px 2px 10px; }
 .credit-list { margin-bottom: 8px; }
+.recap select#rc-frame { width: 100%; }
+.slices { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 18px; }
+.slice { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; background: var(--card); overflow: hidden; }
+.slice.on { border-color: var(--ink); }
+.slice button { border: 0; background: none; padding: 7px 4px 7px 13px; font-size: 14px; cursor: pointer; color: var(--ink); }
+.slice button + button { padding: 7px 11px 7px 6px; color: var(--muted); }
 .check.credit span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .check.credit small { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .check.credit select { margin-top: 6px; font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); max-width: 100%; }
@@ -1070,7 +1076,7 @@ const POSTER_SIZES = { post: [1080, 1350], story: [1080, 1920] };
 const PF = '"Familjen Grotesk", "Helvetica Neue", Arial, sans-serif';
 const MONTH_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-function posterPrefs(tripId) { return Object.assign({ size: 'post', look: 'fog', zoom: 'close', ground: 'roads', line: '' }, store.get('th_poster', {})[tripId] || {}); }
+function posterPrefs(tripId) { return Object.assign({ size: 'post', look: 'fog', zoom: 'close', ground: 'roads', line: '', frame: { kind: 'all' }, slices: [] }, store.get('th_poster', {})[tripId] || {}); }
 function savePosterPrefs(tripId, p) { const all = store.get('th_poster', {}); all[tripId] = p; store.set('th_poster', all); }
 
 let posterFonts = null;
@@ -1090,21 +1096,32 @@ function loadPosterFonts() {
 }
 
 /** Everything the poster draws: per-day tracks, stops, stays, places saved but not visited, and the numbers. */
-function recapData(t) {
+/** A frame cuts the trip: the whole thing, one stay's nights, one area, or a run of dates. */
+function frameTest(t, frame) {
+  const f = frame || { kind: 'all' };
+  const stay = f.kind === 'stay' ? itemById(f.id) : null;
+  const inDay = d => f.kind === 'dates' ? (!f.from || d >= f.from) && (!f.to || d <= f.to)
+    : stay ? d >= stay.day && d <= (stay.end_day || stay.day) : true;
+  const inArea = p => f.kind !== 'place' || meters(p, f) < f.r * 1000;
+  return { inDay, inArea, all: f.kind === 'all' || !f.kind || (f.kind === 'stay' && !stay) };
+}
+function recapData(t, frame) {
   const logs = db.log.filter(l => l.trip_id === t.id);
   const lived = logs.some(hasCoords);
   const days = lived ? logDays(t) : tripDays(t);
-  const pt = (o, extra) => Object.assign({ lat: +o.lat, lng: +o.lng, title: o.title || '' }, extra);
-  const tracks = [], stops = [], homes = new Map(), perDay = [];
+  const ft = frameTest(t, frame);
+  const pt = (o, extra) => Object.assign({ lat: +o.lat, lng: +o.lng, title: o.title || '', city: o.city || '', region: o.region || '' }, extra);
+  const tracks = [], stops = [], homes = new Map(), perDay = [], allPts = [];
   days.forEach(d => {
     const home = stayForMorning(t.id, d);
-    if (home && hasCoords(home)) homes.set(home.id, pt(home));
+    if (home && hasCoords(home)) allPts.push(pt(home));
     let seq = [];
     if (lived) {
       seq = flatLogs(t.id, d).filter(hasCoords).map(l => {
         const it = l.item_id ? itemById(l.item_id) : null;
         return pt(l, { mode: l.parent_id ? 'tour' : l.mode, tour: !!l.parent_id, mark: l.rating === 'loved', found: l.origin === 'found', wasMaybe: !!(it && it.priority === 'maybe'),
           wasMust: !!(it && it.priority === 'must'), meh: l.rating === 'meh', note: l.note || '', time: l.time || '', top: !l.parent_id, id: l.id,
+          city: l.city || (it && it.city) || '', region: (it && it.region) || '',
           category: l.category || (it && it.category) || '', key: l.item_id || l.place_id || `${l.title}|${(+l.lat).toFixed(3)},${(+l.lng).toFixed(3)}` });
       });
     } else {
@@ -1115,14 +1132,19 @@ function recapData(t) {
       });
       plannedStops(t.id, d).filter(hasCoords).forEach(s => seq.push(pt(s, { mode: '', mark: s.priority === 'must' })));
     }
-    seq.forEach(s => { s.day = d; stops.push(s); });
-    const path = (home && hasCoords(home) && seq.length ? [pt(home, { home: true })] : []).concat(seq);
+    seq.forEach(s => { s.day = d; allPts.push(s); });
+    const total = seq.length;
+    seq = ft.inDay(d) ? seq.filter(ft.inArea) : [];
+    const homeIn = home && hasCoords(home) && ft.inDay(d) && ft.inArea(pt(home));
+    if (homeIn && (seq.length || ft.all || frame && frame.kind === 'stay')) homes.set(home.id, pt(home));
+    seq.forEach(s => stops.push(s));
+    const path = (homeIn && seq.length ? [pt(home, { home: true })] : []).concat(seq);
     if (path.length > 1) tracks.push({ day: d, pts: path });
-    perDay.push({ day: d, n: seq.length, marks: seq.filter(s => s.mark).length });
+    perDay.push({ day: d, n: total, marks: seq.filter(s => s.mark).length, in: ft.all || (ft.inDay(d) && (seq.length > 0 || !frame || frame.kind !== 'place')) });
   });
   // Places saved but not visited (lived) / saved without a day (plan): faint dots
   const unvisited = itemsFor(t.id).filter(i => hasCoords(i) && i.kind !== 'fixed' && !isSuggestion(i) && !i.parent_id &&
-    (lived ? i.status !== 'done' && !logs.some(l => l.item_id === i.id) : !i.day)).map(i => pt(i));
+    (lived ? i.status !== 'done' && !logs.some(l => l.item_id === i.id) : !i.day)).map(i => pt(i)).filter(ft.inArea);
 
   // Leg lengths: real path when the Routes cache has it, else straight line
   let walked = 0, moved = 0;
@@ -1137,9 +1159,30 @@ function recapData(t) {
     moved += m; if (mode === 'walk') walked += m;
   }));
   const busiest = perDay.reduce((x, y) => (y.n > (x ? x.n : 0) ? y : x), null);
-  return { lived, days, tracks, stops, homes: [...homes.values()], unvisited, perDay, walked, moved, busiest,
+  const inDays = perDay.filter(x => x.in).map(x => x.day);
+  return { lived, days, tracks, stops, homes: [...homes.values()], unvisited, perDay, walked, moved, busiest, allPts, sliced: !ft.all,
+    from: inDays[0], to: inDays[inDays.length - 1],
     found: stops.filter(s => s.found).length, marked: stops.filter(s => s.mark),
     maybeLoved: stops.filter(s => s.mark && s.wasMaybe && lived) };
+}
+
+/** The trip's areas: stops grouped when within ~30 km of each other (a day trip stays one area), named by their most common city or region. */
+function recapAreas(t) {
+  const pts = recapData(t).allPts;
+  const groups = [];
+  pts.forEach(p => {
+    const hits = groups.filter(g => g.some(q => meters(p, q) < 30000));
+    if (!hits.length) groups.push([p]);
+    else { hits[0].push(p); hits.slice(1).forEach(g => { hits[0].push(...g); groups.splice(groups.indexOf(g), 1); }); }
+  });
+  if (groups.length < 2) return [];
+  return groups.map(g => {
+    const c = g.reduce((a, p) => ({ lat: a.lat + p.lat / g.length, lng: a.lng + p.lng / g.length }), { lat: 0, lng: 0 });
+    const r = Math.max(...g.map(p => meters(c, p))) / 1000 + 3;
+    const tally = k => { const c = {}; g.forEach(p => { if (p[k]) c[p[k]] = (c[p[k]] || 0) + 1; }); return Object.entries(c).sort((a, b) => b[1] - a[1])[0]; };
+    const name = tally('city') || tally('region');
+    return { name: name ? name[0] : 'Around ' + g[0].title, lat: c.lat, lng: c.lng, r: Math.round(r * 10) / 10, n: g.length };
+  }).sort((a, b) => b.n - a.n);
 }
 
 /** The densest area (the city you spent the most time in) — used for "zoom in" and the locator inset. */
@@ -1488,7 +1531,10 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
   // ---- measure the bottom block first so the drawing gets the rest ----
   const titleSize = story ? 104 : 92;
   ctx.font = `600 ${titleSize}px ${PF}`; setSpacing(ctx, -titleSize * 0.03);
-  const titleLines = wrapText(ctx, t.name || 'Trip', CW).slice(0, 3);
+  const sliceName = prefs.frame && prefs.frame.name ? prefs.frame.name : '';
+  const titleLines = wrapText(ctx, sliceName || t.name || 'Trip', CW).slice(0, 3);
+  const kicker = sliceName && sliceName !== t.name ? t.name : '';   // the trip's own name, small, above a slice's title
+  const kickerH = kicker ? 44 : 0;
   setSpacing(ctx, 0);
   const noteSize = story ? 30 : 27, noteLH = Math.round(noteSize * 1.42);
   // credits, set like the back of a record sleeve: what on the left, who/where on the right
@@ -1502,7 +1548,7 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
   ctx.font = `italic 400 ${lineSize}px ${PF}`;
   const ownLines = prefs.line ? wrapText(ctx, prefs.line, Math.min(CW, 900)).slice(0, 3) : [];
   const stripH = 84;
-  const bottomH = titleLines.length * titleSize * 1.0 + 26 + stripH + 58 +
+  const bottomH = kickerH + titleLines.length * titleSize * 1.0 + 26 + stripH + 58 +
     (ownLines.length ? ownLines.length * Math.round(lineSize * 1.35) + (rows.length ? 22 : 0) : 0) + creditsH;
   const topY = M + 4;
   const mapRect = { x: M - 10, y: topY + 58, w: CW + 20, h: H - M - bottomH - (topY + 58) - 40 };
@@ -1510,7 +1556,7 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
   // ---- top line: dates left, coordinates right ----
   const centre = data.stops.length ? data.stops : data.homes.length ? data.homes : data.unvisited;
   ctx.fillStyle = L.ink; ctx.font = `500 ${story ? 34 : 31}px ${PF}`;
-  ctx.textAlign = 'left'; ctx.fillText(longRange(t.start || data.days[0], t.end || data.days[data.days.length - 1]), M, topY + 26);
+  ctx.textAlign = 'left'; ctx.fillText(data.sliced && data.from ? longRange(data.from, data.to) : longRange(t.start || data.days[0], t.end || data.days[data.days.length - 1]), M, topY + 26);
   if (centre.length) {
     const c = centre.reduce((a, p) => ({ lat: a.lat + p.lat / centre.length, lng: a.lng + p.lng / centre.length }), { lat: 0, lng: 0 });
     ctx.font = `400 ${story ? 34 : 31}px ${PF}`; ctx.textAlign = 'right';
@@ -1530,7 +1576,10 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     ctx.save(); ctx.beginPath(); ctx.rect(0, mapRect.y, W, mapRect.h); ctx.clip();  // lines may bleed off the sides, never into the type
     // the locator inset goes in whichever corner of the drawing is emptiest
     let inset = null;
-    if (zoomed && everything.length > cluster.length) {
+    const insetAll = data.sliced ? data.allPts : everything;
+    const insetShows = framePts.length && insetAll.length > framePts.length &&
+      (b => meters({ lat: b.s, lng: b.w }, { lat: b.n, lng: b.e }))(geoBounds(insetAll)) > 3 * Math.max(500, (b => meters({ lat: b.s, lng: b.w }, { lat: b.n, lng: b.e }))(geoBounds(framePts)));
+    if ((zoomed || data.sliced) && insetShows) {
       const S = story ? 230 : 200, xs = [W - M - S, M], ys = [mapRect.y + mapRect.h - S - 4, mapRect.y + 4];
       const probe = [...everything, ...data.unvisited].map(P);
       data.tracks.forEach(tr => tr.pts.forEach((b, k) => { if (!k) return; const A = P(tr.pts[k - 1]), B = P(b);
@@ -1653,12 +1702,12 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
       const box = inset;
       ctx.fillStyle = L.paper; ctx.fillRect(box.x, box.y, box.w, box.h);
       ctx.strokeStyle = L.ink; ctx.lineWidth = 1.5; ctx.strokeRect(box.x, box.y, box.w, box.h);
-      const Q = projector(geoBounds(everything), box, 0.14);
+      const Q = projector(geoBounds(insetAll), box, 0.14);
       if (useGround && ground.world) { ctx.save(); ctx.beginPath(); ctx.rect(box.x, box.y, box.w, box.h); ctx.clip();
         drawGround(ctx, Q, box, ground, L, 'country', 0.8); ctx.restore(); }
       ctx.fillStyle = L.ink;
-      everything.forEach(p => { const q = Q(p); ctx.beginPath(); ctx.arc(q.x, q.y, 2.4, 0, Math.PI * 2); ctx.fill(); });
-      const cb = geoBounds(cluster), a = Q({ lat: cb.n, lng: cb.w }), b = Q({ lat: cb.s, lng: cb.e });
+      insetAll.forEach(p => { const q = Q(p); ctx.beginPath(); ctx.arc(q.x, q.y, 2.4, 0, Math.PI * 2); ctx.fill(); });
+      const cb = geoBounds(framePts), a = Q({ lat: cb.n, lng: cb.w }), b = Q({ lat: cb.s, lng: cb.e });
       ctx.save(); if (L.overprint) ctx.globalCompositeOperation = 'multiply';
       ctx.strokeStyle = L.accent; ctx.lineWidth = 2.5;
       ctx.strokeRect(Math.min(a.x, b.x) - 6, Math.min(a.y, b.y) - 6, Math.abs(b.x - a.x) + 12, Math.abs(b.y - a.y) + 12);
@@ -1668,6 +1717,11 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
 
   // ---- title ----
   let y = H - M - bottomH + titleSize * 0.82;
+  if (kicker) {
+    ctx.fillStyle = L.ink; ctx.globalAlpha = 0.62; ctx.font = `500 ${story ? 32 : 30}px ${PF}`;
+    ctx.fillText(kicker, M, y - titleSize * 0.82 + 30); ctx.globalAlpha = 1;
+    y += kickerH;
+  }
   ctx.fillStyle = L.ink; ctx.font = `600 ${titleSize}px ${PF}`; setSpacing(ctx, -titleSize * 0.03);
   titleLines.forEach((ln, i) => ctx.fillText(ln, M - 4, y + i * titleSize));
   setSpacing(ctx, 0);
@@ -1682,9 +1736,11 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     ctx.fillStyle = L.ink;
     data.perDay.forEach((d, i) => {
       const x = M + step * i + step / 2;
+      ctx.globalAlpha = d.in === false ? 0.2 : 1;
       if (d.n) { const h = hOf(d.n), hl = d.marks ? (h - 6) * d.marks / d.n + (d.marks === d.n ? 6 : 0) : 0; ctx.fillRect(x - sw / 2, base - h + hl, sw, h - hl); }
       else { ctx.beginPath(); ctx.arc(x, base - 3, 1.8, 0, Math.PI * 2); ctx.fill(); }
     });
+    ctx.globalAlpha = 1;
     ctx.save(); if (L.overprint) { ctx.globalCompositeOperation = 'multiply'; ctx.translate(2.2, -1.6); }
     ctx.fillStyle = L.accent;
     data.perDay.forEach((d, i) => { if (!d.marks) return; const x = M + step * i + step / 2, h = hOf(d.n);
@@ -1732,13 +1788,30 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
 
 function recapView(t) {
   const p = posterPrefs(t.id);
-  const data = recapData(t);
+  const data = recapData(t, p.frame);
+  const f = p.frame || { kind: 'all' };
+  const stays = topItemsFor(t.id).filter(i => i.kind === 'fixed' && isStay(i) && i.day).sort((a, b) => a.day.localeCompare(b.day));
+  const areas = recapAreas(t);
+  const cur = f.sliceId ? 'slice:' + f.sliceId : f.kind === 'stay' ? 'stay:' + f.id : f.kind === 'place' ? 'place:' + areas.findIndex(a => meters(a, f) < 3000) : f.kind === 'dates' ? 'dates' : 'all';
+  const opt = (v, l) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`;
+  const frameSelect = `<select id="rc-frame">${opt('all', 'Whole trip')}
+    ${stays.length > 1 ? `<optgroup label="A stay">${stays.map(st => opt('stay:' + st.id, `${st.city || st.title}, ${fmtRange(st.day, st.end_day || st.day)}`)).join('')}</optgroup>` : ''}
+    ${areas.length ? `<optgroup label="A place">${areas.map((a, k) => opt('place:' + k, a.name)).join('')}</optgroup>` : ''}
+    <optgroup label="Dates">${opt('dates', 'Pick dates…')}</optgroup>
+    ${(p.slices || []).length ? `<optgroup label="Saved">${p.slices.map(sl => opt('slice:' + sl.id, sl.name)).join('')}</optgroup>` : ''}</select>`;
   const cluster = recapCluster(data.stops);
   const seg = (key, opts) => `<div class="seg" data-pref="${key}">${opts.map(([k, l]) => `<button data-v="${k}" class="${p[key] === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
   return `<header class="top"><button class="iconbtn" data-go="#/trip/${encodeURIComponent(t.id)}/log" aria-label="Back">${I.back}</button><h1>Poster</h1>${syncBadge()}</header>
   <main class="recap">
     <div class="poster-frame ${p.size}"><canvas id="poster" aria-label="Poster for ${esc(t.name)}"></canvas></div>
     ${data.lived ? '' : `<p class="hint recap-hint">Nothing’s logged yet, so this is drawn from your plan. Once you log stops on the trip, it draws what you actually did.</p>`}
+    <div class="field"><label for="rc-frame">Frame</label>${frameSelect}</div>
+    <div class="two" id="rc-dates" ${f.kind === 'dates' ? '' : 'hidden'}>
+      <div class="field"><label for="rc-from">From</label><input type="date" id="rc-from" value="${esc(f.from || t.start || '')}"></div>
+      <div class="field"><label for="rc-to">To</label><input type="date" id="rc-to" value="${esc(f.to || t.end || '')}"></div>
+    </div>
+    <div class="field"><label for="rc-title">Title</label><div class="inline"><input id="rc-title" maxlength="60" value="${esc(f.name || '')}" placeholder="${esc(t.name)}" autocomplete="off"><button class="btn ghost small" id="rc-keep">${f.sliceId ? 'Update' : 'Save'}</button></div></div>
+    ${(p.slices || []).length ? `<div class="slices">${p.slices.map(sl => `<span class="slice ${sl.id === f.sliceId ? 'on' : ''}"><button data-slice="${esc(sl.id)}">${esc(sl.name)}</button><button data-unslice="${esc(sl.id)}" aria-label="Remove ${esc(sl.name)}">✕</button></span>`).join('')}</div>` : ''}
     <div class="field"><label>Size</label></div>${seg('size', [['post', 'Post 4:5'], ['story', 'Story 9:16']])}
     <div class="field"><label>Look</label></div>${seg('look', Object.entries(POSTER_LOOKS).map(([k, v]) => [k, v.name]))}
     ${cluster ? `<div class="field"><label>Map</label></div>${seg('zoom', [['all', 'Whole trip'], ['close', 'Up close']])}` : ''}
@@ -1756,8 +1829,37 @@ function initRecap(tripId) {
   const t = tripById(tripId); if (!t) return;
   const canvas = $('#poster'); if (!canvas) return;
   const p = posterPrefs(t.id);
-  let data = recapData(t);
+  let data = recapData(t, p.frame);
   const ground = {};
+  // ---- frames: choosing one redraws the whole screen (its options depend on it) ----
+  const setFrame = fr => { p.frame = fr; savePosterPrefs(t.id, p); render(); };
+  const areas = recapAreas(t);
+  $('#rc-frame').onchange = e => {
+    const v = e.target.value, [kind, id] = v.split(':');
+    if (kind === 'all') setFrame({ kind: 'all' });
+    else if (kind === 'stay') { const st = itemById(id); setFrame({ kind: 'stay', id, name: st ? (st.city || st.title) : '' }); }
+    else if (kind === 'place') { const a = areas[+id]; setFrame({ kind: 'place', lat: a.lat, lng: a.lng, r: a.r, name: a.name }); }
+    else if (kind === 'dates') setFrame({ kind: 'dates', from: t.start || data.days[0], to: t.end || data.days[data.days.length - 1], name: '' });
+    else if (kind === 'slice') { const sl = (p.slices || []).find(x => x.id === id); if (sl) setFrame({ ...sl.frame, name: sl.name, sliceId: sl.id }); }
+  };
+  ['#rc-from', '#rc-to'].forEach(sel => { const el = $(sel); if (el) el.onchange = () => setFrame({ ...p.frame, from: $('#rc-from').value, to: $('#rc-to').value }); });
+  let tt;
+  $('#rc-title').oninput = e => { p.frame = { ...p.frame, name: e.target.value }; clearTimeout(tt); tt = setTimeout(() => { savePosterPrefs(t.id, p); redraw(); }, 250); };
+  $('#rc-keep').onclick = () => {
+    const name = ($('#rc-title').value || '').trim();
+    if (!name) { $('#rc-title').focus(); return toast('Give it a name first'); }
+    const { name: _n, sliceId, ...frame } = p.frame;
+    const slices = (p.slices || []).slice(), i = slices.findIndex(x => x.id === sliceId);
+    const sl = { id: i >= 0 ? sliceId : uid('sl'), name, frame };
+    if (i >= 0) slices[i] = sl; else slices.push(sl);
+    p.slices = slices; toast(i >= 0 ? 'Updated ' + name : 'Saved ' + name);
+    setFrame({ ...frame, name, sliceId: sl.id });
+  };
+  $$('[data-slice]').forEach(b => b.onclick = () => { const sl = p.slices.find(x => x.id === b.dataset.slice); if (sl) setFrame({ ...sl.frame, name: sl.name, sliceId: sl.id }); });
+  $$('[data-unslice]').forEach(b => b.onclick = () => {
+    const id = b.dataset.unslice; p.slices = p.slices.filter(x => x.id !== id);
+    setFrame(p.frame.sliceId === id ? { ...p.frame, sliceId: undefined } : p.frame);
+  });
   let credits = [];
   const redraw = () => { credits = recapCredits(t, data, p, ground); drawPoster(canvas, t, data, p, ground, credits); $('.poster-frame').className = 'poster-frame ' + p.size; };
   // the credits list: each one a switch, with the value it'll print
@@ -1795,7 +1897,7 @@ function initRecap(tripId) {
   data.tracks.forEach(tr => tr.pts.forEach((b, k) => { if (!k) return; const a = tr.pts[k - 1];
     const leg = { from: [a.lat, a.lng], to: [b.lat, b.lng], mode: b.mode || guessMode(a, b) };
     if (!routeCache[routeKey(leg)] && leg.mode !== 'train' && leg.mode !== 'tour' && meters(a, b) < 30000) legs.push(leg); }));
-  if (legs.length) getRoutes(legs.slice(0, 120)).then(() => { if ($('#poster') === canvas) { data = recapData(t); redraw(); } });
+  if (legs.length) getRoutes(legs.slice(0, 120)).then(() => { if ($('#poster') === canvas) { data = recapData(t, p.frame); redraw(); } });
 
   $$('[data-pref]').forEach(g => $$('button', g).forEach(b => b.onclick = () => {
     p[g.dataset.pref] = b.dataset.v; savePosterPrefs(t.id, p);

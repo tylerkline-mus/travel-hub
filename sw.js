@@ -2,7 +2,7 @@
 // Pages: network first, fall back to the saved copy.
 // Icons, fonts, map library: saved copy first.
 // Map tiles: every tile you look at is kept, so maps you've viewed work offline later.
-const CACHE = 'travelhub-v9';
+const CACHE = 'travelhub-v10';
 const TILES = 'travelhub-tiles';
 const MAX_TILES = 6000;            // roughly 100–150 MB at most; oldest are dropped first
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-192.png', './icon-512.png'];
