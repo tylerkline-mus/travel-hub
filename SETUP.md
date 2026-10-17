@@ -78,7 +78,7 @@ In the **Shortcuts** app, tap **+** and name it **Send to Trip**. Then:
 1. Add **Get Text from Input**. Its input should be **Shortcut Input**.
 2. Tap **ⓘ** (or the shortcut name → **Details**) and turn on **Show in Share Sheet**. Leave all input types on.
 3. Add **Base64 Encode**. Its input should be **Text** (from step 1). Tap the **›** arrow on it and set **Line Breaks** to **None**.
-4. Add **Text** and type your Web app URL followed by `?action=add&format=text&trip=auto&token=YOURPASSPHRASE&b64=` — then insert **Base64 Encoded** right after `b64=`.
+4. Add **Text** and type your Web app URL followed by `?action=add&b64=`, insert **Base64 Encoded**, then type `&format=text&trip=auto&token=YOURPASSPHRASE&end=1`. (Shortcuts drops whatever comes last in the address, so `&end=1` is a throwaway at the end.)
 5. Add **Get Contents of URL** with the **Text** from step 4.
 6. Add **Show Notification** with **Contents of URL**. It says e.g. *Saved Barn8 to Iceland, Autumn 2026.*
 
@@ -98,12 +98,12 @@ In the **Shortcuts** app, tap **+** and name it **I'm here**. Then:
 2. Add **If**: *Shortcut Input* **has any value**.
 3. Inside the **If** branch:
    - **Base64 Encode** with **Shortcut Input** (tap **›**, set **Line Breaks** to **None**).
-   - **Text**: your Web app URL followed by `?action=here&format=text&token=YOURPASSPHRASE&b64=` then insert **Base64 Encoded**. (Not `&text=` with a URL-encoded link — Shortcuts cuts that off at `https://`.)
+   - **Text**: your Web app URL followed by `?action=here&b64=`, insert **Base64 Encoded**, then `&format=text&token=YOURPASSPHRASE&end=1`. (Not `&text=` with a URL-encoded link — Shortcuts cuts that off at `https://`.)
 4. Inside the **Otherwise** branch:
    - **Get Current Location**.
    - **Get Details of Locations**: **Latitude**.
    - **Get Details of Locations**: **Longitude**.
-   - **Text**: your Web app URL followed by `?action=here&format=text&token=YOURPASSPHRASE&lat=` + **Latitude** + `&lng=` + **Longitude**.
+   - **Text**: your Web app URL followed by `?action=here&format=text&token=YOURPASSPHRASE&lat=` + **Latitude** + `&lng=` + **Longitude** + `&end=1`.
 5. After **End If**, add **Get Contents of URL** with **If Result**.
 6. Add **Show Notification** with **Contents of URL**. It says what was logged, e.g. *Logged Kaffibarinn (Iceland, Autumn 2026).*
 
