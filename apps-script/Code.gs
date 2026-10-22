@@ -455,7 +455,10 @@ const ACTIONS = {
       const key = PropertiesService.getScriptProperties().getProperty('PLACES_KEY');
       if (key) { try { place = placesNearby(lat, lng, 60, key)[0] || null; } catch (e) {} }
     }
-    const title = item ? item.title : place ? place.title : 'Somewhere';
+    // nothing listed here: name the spot by its street, else neighbourhood, else town (as the app's "Just this spot")
+    let spot = null;
+    if (!item && !place) spot = spotName(lat, lng);
+    const title = item ? item.title : place ? place.title : spot ? spot.title : 'Somewhere';
 
     // a second tap at the same spot within half an hour doesn't log twice
     const today = readTable('Log').filter(function (l) { return l.trip_id === trip.id && l.day === day && !l.parent_id; });
@@ -471,7 +474,7 @@ const ACTIONS = {
       item_id: item ? item.id : undefined,
       place_id: place ? place.place_id : undefined, title: place ? place.title : (item ? undefined : title),
       lat: place ? place.lat : lat, lng: place ? place.lng : lng,
-      address: place ? place.address : '', city: place ? place.city : '', maps_url: place ? place.maps_url : '',
+      address: place ? place.address : '', city: place ? place.city : spot ? spot.city : '', maps_url: place ? place.maps_url : '',
       category: place ? place.category : '',
     });
     return 'Logged ' + log.title + ' (' + trip.name + ').';
@@ -736,6 +739,19 @@ function textSearch(query, lat, lng, key) {
   const j = JSON.parse(res.getContentText());
   if (j.error) throw new Error('Places: ' + j.error.message);
   return (j.places || [])[0] || null;
+}
+
+/** Name a spot by its street, else its neighbourhood, else the town (OpenStreetMap). Null if the lookup fails. */
+function spotName(lat, lng) {
+  try {
+    const res = UrlFetchApp.fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=17&accept-language=en&lat=' +
+      (+lat).toFixed(5) + '&lon=' + (+lng).toFixed(5), { muteHttpExceptions: true, headers: { 'User-Agent': 'TravelHub/1.0 (personal trip log)' } });
+    if (res.getResponseCode() !== 200) return null;
+    const a = JSON.parse(res.getContentText()).address || {};
+    const city = a.city || a.town || a.village || a.municipality || '';
+    const title = a.road || a.pedestrian || a.footway || a.path || a.square || a.neighbourhood || a.quarter || a.suburb || city;
+    return title ? { title: title, city: city } : null;
+  } catch (e) { return null; }
 }
 
 function placesNearby(lat, lng, radius, key) {

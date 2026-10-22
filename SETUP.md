@@ -99,7 +99,7 @@ Try it: in Google Maps, open a place → **Share** → **Send to Trip**. It appe
 
 Two ways in, one shortcut:
 - **Share a place from Google Maps → I'm here.** Logs that place to today's trip, stamped with the moment you shared it.
-- **Tap it from your Home Screen, Action Button or Back Tap.** Logs where you're standing: the saved place you're at, otherwise the nearest place Google knows, otherwise "Somewhere".
+- **Tap it from your Home Screen, Action Button or Back Tap.** Logs where you're standing: the saved place you're at, otherwise the nearest place Google knows, otherwise the street or neighbourhood you're on (rename it in the app). "Somewhere" only if even that lookup fails.
 
 In the **Shortcuts** app, tap **+** and name it **I'm here**. Then (details go in a JSON request body, as in §6 — never inside the address):
 
