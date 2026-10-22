@@ -149,6 +149,10 @@ main { padding: 6px 16px 24px; max-width: 720px; margin: 0 auto; }
 .plan-empty { font-size: 13px; color: var(--muted); padding: 4px 14px 10px; }
 .night { font-size: 13px; color: var(--muted); padding: 9px 14px 11px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--fixed) 6%, transparent); display: flex; gap: 8px; align-items: center; }
 .night svg { width: 15px; height: 15px; flex: none; }
+.sun { font-size: 12.5px; color: var(--muted); padding: 0 14px 10px; display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+.sun svg { width: 14px; height: 14px; flex: none; color: color-mix(in srgb, var(--accent) 70%, var(--muted)); }
+.sun b { color: var(--ink, inherit); font-weight: 600; }
+.sun .len { opacity: .85; }
 .moves { display: flex; gap: 4px; flex: none; }
 .moves button { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: var(--paper); cursor: pointer; padding: 0; font-size: 14px; }
 .moves button:disabled { opacity: .3; }
@@ -549,6 +553,55 @@ function fixedEvents(tripId, d) {
   });
   return out.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
 }
+/* ---------- Daylight ---------- */
+/** Sunrise and sunset (UTC Dates) for a day at a place; {polar:'night'|'day'} when the sun doesn't rise or set. */
+function sunTimes(day, lat, lng) {
+  const rad = Math.PI / 180, [y, m, d] = day.split('-').map(Number);
+  const n = Math.round(Date.UTC(y, m - 1, d, 12) / 86400000 + 2440587.5 - 2451545);
+  const J = n - lng / 360;
+  const M = (357.5291 + 0.98560028 * J) % 360;
+  const C = 1.9148 * Math.sin(M * rad) + 0.02 * Math.sin(2 * M * rad) + 0.0003 * Math.sin(3 * M * rad);
+  const L = (M + C + 180 + 102.9372) % 360;
+  const transit = 2451545 + J + 0.0053 * Math.sin(M * rad) - 0.0069 * Math.sin(2 * L * rad);
+  const dec = Math.asin(Math.sin(L * rad) * Math.sin(23.4397 * rad));
+  const cosW = (Math.sin(-0.833 * rad) - Math.sin(lat * rad) * Math.sin(dec)) / (Math.cos(lat * rad) * Math.cos(dec));
+  if (cosW > 1) return { polar: 'night' };
+  if (cosW < -1) return { polar: 'day' };
+  const w = Math.acos(cosW) / rad / 360;
+  const toDate = j => new Date((j - 2440587.5) * 86400000);
+  return { rise: toDate(transit - w), set: toDate(transit + w) };
+}
+/** Where you'll spend a day's daylight: where you wake up, else where you sleep, else the day's first planned stop. */
+function dayPlace(t, d) {
+  const c = [stayForMorning(t.id, d), stayForNight(t.id, d), ...plannedStops(t.id, d)].find(x => x && hasCoords(x));
+  return c ? { lat: +c.lat, lng: +c.lng } : null;
+}
+function clockIn(date, tz) {
+  try {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz || undefined, hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(date).map(x => [x.type, x.value]));
+    return fmtTime(`${p.hour === '24' ? '00' : p.hour}:${p.minute}`);
+  } catch (e) { return fmtTime(String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0')); }
+}
+function hoursMins(ms) {
+  const m = Math.round(ms / 60000), h = Math.floor(m / 60);
+  return h ? `${h} h${m % 60 ? ' ' + (m % 60) + ' min' : ''}` : `${m} min`;
+}
+/** "☀ 10:48am – 3:29pm · 4 h 41 min of daylight, 6 min less than yesterday" */
+function daylightRow(t, d) {
+  const at = dayPlace(t, d);
+  if (!at) return '';
+  const s = sunTimes(d, at.lat, at.lng);
+  if (s.polar) return `<div class="sun">${I.sun}<span>${s.polar === 'night' ? 'The sun doesn’t rise today' : 'The sun doesn’t set today'}</span></div>`;
+  const len = s.set - s.rise;
+  let change = '';
+  const prev = sunTimes(addDays(d, -1), at.lat, at.lng);
+  if (!prev.polar) {
+    const diff = Math.round((len - (prev.set - prev.rise)) / 60000);
+    if (Math.abs(diff) >= 1) change = `, ${Math.abs(diff)} min ${diff < 0 ? 'less' : 'more'} than yesterday`;
+  }
+  return `<div class="sun">${I.sun}<span>Sunrise <b>${clockIn(s.rise, t.timezone)}</b> · Sunset <b>${clockIn(s.set, t.timezone)}</b></span><span class="len">${hoursMins(len)} of daylight${change}</span></div>`;
+}
+
 function plannedStops(tripId, d) {
   return topItemsFor(tripId).filter(i => i.kind !== 'fixed' && i.day === d).sort((a, b) => seqOf(a) - seqOf(b) || a.title.localeCompare(b.title));
 }
@@ -605,6 +658,7 @@ const I = {
   someday: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>',
   gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
   edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+  sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
   moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>',
 };
@@ -938,6 +992,7 @@ function dayCard(t, d, idx, today) {
   return `<section class="day ${d === today ? 'today' : ''}" id="day-${d}">
     <div class="day-h"><div><div class="d">${esc(fmtDay(d))}</div><div class="n">${dayLabel(t, d)}${d === today ? ' · Today' : ''}${logged ? ` · ${logged} logged` : ''}</div></div><span class="sp"></span>
       <button class="linkbtn" data-mapday="${d}">Map</button>${logged || d <= today ? `<button class="linkbtn" data-logday="${d}">Log</button>` : ''}</div>
+    ${daylightRow(t, d)}
     ${events.map(evRow).join('')}
     <div class="plan-h"><span>Plan</span><span class="sp"></span>
       ${stops.length > 1 ? `<button class="linkbtn" data-reorder="${key}">${reorder ? 'Done' : 'Reorder'}</button>` : ''}
