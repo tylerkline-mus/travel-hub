@@ -461,13 +461,30 @@ const ACTIONS = {
     });
     let place = shared && shared.title ? { place_id: shared.place_id || '', title: shared.title, lat: lat, lng: lng,
       address: shared.address || '', city: shared.city || '', maps_url: shared.maps_url || '', category: shared.category || '' } : null;
+    // Places Google lists around you, closest first (the same name twice counts once)
+    let around = [];
     if (!item && !place) {
       const key = PropertiesService.getScriptProperties().getProperty('PLACES_KEY');
-      if (key) { try { place = placesNearby(lat, lng, 60, key)[0] || null; } catch (e) {} }
+      if (key) { try { around = placesNearby(lat, lng, 60, key); } catch (e) {} }
+      const seen = {};
+      around = around.filter(function (n) { const k = String(n.title).toLowerCase(); if (seen[k]) return false; seen[k] = 1; return true; });
     }
+    // The shortcut sends back the one you chose from its list
+    const PIN = '📍 ', JUST = PIN + 'Just this spot';
+    let picked = String(p.pick || '').trim(), justHere = false;
+    if (picked) {
+      if (picked === JUST.trim() || picked === JUST) justHere = true;
+      else {
+        const want = picked.replace(/^📍\s*/, '');
+        place = around.filter(function (n) { return n.title === want; })[0] || null;
+      }
+    }
+    // A close call (two or more places about equally near) and the shortcut can ask: send it the list instead of guessing
+    const closeCall = !item && !place && !picked && p.ask && around.length >= 2 && (around[1].dist - around[0].dist) < 25;
+    if (!item && !place && !justHere && !closeCall) place = around[0] || null;
     // nothing listed here: name the spot by its street, else neighbourhood, else town (as the app's "Just this spot")
     let spot = null;
-    if (!item && !place) spot = spotName(lat, lng);
+    if (!item && !place && !closeCall) spot = spotName(lat, lng);
     const title = item ? item.title : place ? place.title : spot ? spot.title : 'Somewhere';
 
     // a second tap at the same spot within half an hour doesn't log twice. Checked and written under one lock,
@@ -479,6 +496,10 @@ const ACTIONS = {
         ((item && last.item_id === item.id) || (place && last.place_id === place.place_id) ||
          (last.lat !== '' && metersBetween(lat, lng, +last.lat, +last.lng) < 40))) {
       return 'Already logged ' + last.title + '.';
+    }
+    if (closeCall) {
+      // one line per choice; every line starts with 📍 so the shortcut knows this is a list, not a result
+      return around.slice(0, 6).map(function (n) { return PIN + n.title; }).concat([JUST]).join('\n');
     }
 
     const log = ACTIONS.addLog({

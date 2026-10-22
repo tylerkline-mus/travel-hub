@@ -114,6 +114,11 @@ In the **Shortcuts** app, tap **+** and name it **I'm here**. Then (details go i
    - **Get Contents of URL**: same URL, POST, JSON, Text fields: `action` = `here`, `token` = your passphrase, `format` = `text`, `lat` = **Latitude**, `lng` = **Longitude**.
 5. After **End If**, add **Show Notification** with **If Result**. It says what was logged, e.g. *Logged Kaffibarinn (Iceland, Autumn 2026).*
 
+**Close calls (optional, recommended).** In a strip of shops your phone can't tell one storefront from the next, so the shortcut can ask instead of guessing:
+- In the **Otherwise** branch's Get Contents of URL, add a Text field `ask` = `yes`.
+- Replace the final **Show Notification** with: **If** *If Result* **begins with** `📍` → **Split Text** (If Result, New Lines) → **Choose from List** (Split Text, prompt "Where are you?") → **Get Contents of URL** (same URL, POST, JSON: `action` here, `token`, `format` text, `ask` yes, `lat` Latitude, `lng` Longitude, `pick` Chosen Item) → **Show Notification** (Contents of URL); **Otherwise** → **Show Notification** (If Result); **End If**.
+When one place is clearly closest it still logs in one tap; when two or more are about equally close you get a short list, with **Just this spot** at the bottom.
+
 To put it within reach: **ⓘ → Add to Home Screen**; or **Settings → Action Button → Shortcut**; or **Settings → Accessibility → Touch → Back Tap → Double Tap**. In Google Maps, it appears in the share sheet's list of apps and actions; long-press it there to move it near the front.
 
 It logs to whichever trip is happening today (a day either side counts, for travel days). A shared place that's already saved to the trip is logged as that place (and ticked off). A second log at the same spot within half an hour doesn't log twice. It needs signal; with none, open the app and use **I'm here** there, which saves offline.
