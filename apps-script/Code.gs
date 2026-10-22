@@ -427,7 +427,14 @@ const ACTIONS = {
       shared = resolveText(String(p.text));
       if (shared.lat !== undefined && shared.lat !== '') { lat = num(shared.lat); lng = num(shared.lng); }
     }
-    if (lat === '' || lng === '') throw new Error(shared ? 'Couldn’t find where that link points' : 'No location came through');
+    if (lat === '' || lng === '') {
+      if (!shared) throw new Error('No location came through');
+      // say why, so a failure can be traced from the notification alone
+      const why = shared.lookup_error ? 'lookup said: ' + shared.lookup_error
+        : shared.expanded && shared.expanded !== String(p.text).match(/https?:\/\/\S+/)[0] ? 'it led to ' + String(shared.expanded).slice(0, 160)
+        : 'the link didn’t open';
+      throw new Error('Couldn’t find where that link points (' + why + ')');
+    }
     // the trip happening today (a day either side counts, for travel days)
     let trip = null, day = '';
     readTable('Trips').forEach(function (t) {
@@ -621,6 +628,7 @@ function resolveText(text) {
     title: parsed.name || nonUrl[0] || parsed.query || 'Saved place',
     lat: parsed.lat, lng: parsed.lng,
     maps_url: url,
+    expanded: full,
   };
 
   const key = PropertiesService.getScriptProperties().getProperty('PLACES_KEY');
@@ -652,11 +660,13 @@ function expandUrl(url) {
     let loc = h['Location'] || h['location'];
     if (Array.isArray(loc)) loc = loc[0];
     if (!loc) {
-      const m = res.getContentText().match(/https:\/\/www\.google\.[a-z.]+\/maps[^"'\s<>]+/);
-      if (m) cur = m[0].replace(/\\u0026/g, '&').replace(/&amp;/g, '&');
+      // No redirect header: the address is in the page (a meta refresh, a link, or script)
+      const body = res.getContentText().replace(/\\u0026/g, '&').replace(/\\\//g, '/').replace(/&amp;/g, '&');
+      const m = body.match(/https?:\/\/(?:www\.)?(?:google\.[a-z.]+\/maps|maps\.google\.[a-z.]+)[^"'\s<>\\]*/);
+      if (m) cur = m[0];
       break;
     }
-    cur = loc;
+    cur = /^\//.test(loc) ? cur.replace(/^(https?:\/\/[^\/]+).*$/, '$1') + loc : loc;
   }
   return cur;
 }
