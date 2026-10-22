@@ -570,15 +570,29 @@ function toast(msg, opts = {}) {
    window, the delete is sent immediately rather than lost. */
 const pendingDeletes = [];
 function undoable(msg, removeLocal, commit) {
-  const snap = JSON.stringify({ trips: db.trips, items: db.items, log: db.log });
-  removeLocal(); saveLocal(); render();
+  // Remember only what this delete removes or changes, so Undo puts back just that
+  // (restoring a whole snapshot could bring back other things deleted or synced in the meantime)
+  const LISTS = ['trips', 'items', 'log', 'artifacts'];
+  const before = {};
+  LISTS.forEach(k => { before[k] = new Map((db[k] || []).map(x => [x.id, JSON.stringify(x)])); });
+  removeLocal();
+  const touched = {};
+  LISTS.forEach(k => {
+    const now = new Map((db[k] || []).map(x => [x.id, JSON.stringify(x)]));
+    touched[k] = [...before[k]].filter(([id, js]) => now.get(id) !== js).map(([, js]) => JSON.parse(js));
+  });
+  saveLocal(); render();
   const job = { done: false, run() { if (this.done) return; this.done = true; commit(); } };
   pendingDeletes.push(job);
   const timer = setTimeout(() => job.run(), 6000);
   toast(msg, { action: 'Undo', ms: 6000, onAction: () => {
     if (job.done) return toast('Too late — already saved');
     job.done = true; clearTimeout(timer);
-    Object.assign(db, JSON.parse(snap)); saveLocal(); render(); toast('Restored');
+    LISTS.forEach(k => touched[k].forEach(old => {
+      const i = db[k].findIndex(x => x.id === old.id);
+      if (i >= 0) db[k][i] = old; else db[k].push(old);
+    }));
+    saveLocal(); render(); toast('Restored');
   } });
 }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') pendingDeletes.forEach(j => j.run()); });

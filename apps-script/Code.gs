@@ -460,7 +460,9 @@ const ACTIONS = {
     if (!item && !place) spot = spotName(lat, lng);
     const title = item ? item.title : place ? place.title : spot ? spot.title : 'Somewhere';
 
-    // a second tap at the same spot within half an hour doesn't log twice
+    // a second tap at the same spot within half an hour doesn't log twice. Checked and written under one lock,
+    // so taps that arrive together (a double or triple tap) can't each slip past the check.
+    return withLock(function () {
     const today = readTable('Log').filter(function (l) { return l.trip_id === trip.id && l.day === day && !l.parent_id; });
     const last = today.sort(function (a, b) { return (+a.seq || 0) - (+b.seq || 0); }).slice(-1)[0];
     if (last && (Date.now() - new Date(last.logged_at).getTime()) < 30 * 60000 &&
@@ -478,6 +480,7 @@ const ACTIONS = {
       category: place ? place.category : '',
     });
     return 'Logged ' + log.title + ' (' + trip.name + ').';
+    });
   },
 
   /** Preview a link without saving (used by the capture sheet). */
@@ -1004,8 +1007,11 @@ function newId(prefix) {
   return prefix + '_' + Utilities.getUuid().replace(/-/g, '').slice(0, 10);
 }
 
+let LOCK_HELD = false;
 function withLock(fn) {
+  if (LOCK_HELD) return fn();   // already inside a locked step (e.g. here → addLog)
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
-  try { return fn(); } finally { lock.releaseLock(); }
+  LOCK_HELD = true;
+  try { return fn(); } finally { LOCK_HELD = false; lock.releaseLock(); }
 }
