@@ -21,7 +21,8 @@ const SHEETS = {
   Plan:  ['trip_id', 'day', 'item_id', 'order', 'note'],
   Log:   ['id', 'trip_id', 'item_id', 'place_id', 'title', 'lat', 'lng', 'logged_at', 'timezone',
           'origin', 'note', 'would_return', 'cost', 'currency', 'photo_url', 'created',
-          'parent_id', 'day', 'seq', 'time', 'mode', 'address', 'city', 'maps_url', 'updated', 'rating', 'category'],
+          'parent_id', 'day', 'seq', 'time', 'mode', 'address', 'city', 'maps_url', 'updated', 'rating', 'category',
+          'here_lat', 'here_lng'],   // where the phone actually was (so a wrong guess can be fixed from the app)
   Routes: ['key', 'polyline', 'duration', 'distance', 'created'],
   // Photos, sounds and souvenirs kept with a logged stop. The files live in Drive (Travel Hub / <trip>), private to you.
   Artifacts: ['id', 'log_id', 'trip_id', 'kind', 'title', 'note', 'file_id', 'mime', 'duration', 'seq', 'created', 'updated'],
@@ -292,7 +293,9 @@ const ACTIONS = {
         origin: origin, note: p.note || '', would_return: p.would_return || '',
         category: p.category || (item && item.category) || r.category || '',
         logged_at: p.logged_at || now, timezone: p.timezone || '', created: now, updated: now,
+        here_lat: p.here_lat != null ? String(p.here_lat) : '', here_lng: p.here_lng != null ? String(p.here_lng) : '',
       };
+      if (log.here_lat && headersOf(sheet('Log')).indexOf('here_lat') < 0) setup();   // old Sheet: add the new columns
       appendObj('Log', log);
       if (item && item.status !== 'done') updateRow('Items', item.id, { status: 'done', updated: now });
       return log;
@@ -483,6 +486,7 @@ const ACTIONS = {
       item_id: item ? item.id : undefined,
       place_id: place ? place.place_id : undefined, title: place ? place.title : (item ? undefined : title),
       lat: place ? place.lat : lat, lng: place ? place.lng : lng,
+      here_lat: shared ? undefined : lat, here_lng: shared ? undefined : lng,
       address: place ? place.address : '', city: place ? place.city : spot ? spot.city : '', maps_url: place ? place.maps_url : '',
       category: place ? place.category : '',
     });
