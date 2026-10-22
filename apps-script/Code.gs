@@ -741,8 +741,26 @@ function textSearch(query, lat, lng, key) {
   return (j.places || [])[0] || null;
 }
 
-/** Name a spot by its street, else its neighbourhood, else the town (OpenStreetMap). Null if the lookup fails. */
+/** Name a spot by its street, else its neighbourhood, else the town. Google's own reverse geocoder first
+    (built into Apps Script, no key), then OpenStreetMap. Null if both fail. */
 function spotName(lat, lng) {
+  try {
+    const g = Maps.newGeocoder().setLanguage('en').reverseGeocode(+lat, +lng);
+    if (g && g.status === 'OK' && g.results && g.results.length) {
+      const pick = function (types) {
+        for (let r = 0; r < g.results.length; r++) {
+          const c = (g.results[r].address_components || []).filter(function (x) {
+            return types.some(function (t) { return x.types.indexOf(t) >= 0; });
+          })[0];
+          if (c) return c.long_name;
+        }
+        return '';
+      };
+      const city = pick(['locality', 'postal_town', 'administrative_area_level_3']);
+      const title = pick(['route']) || pick(['neighborhood']) || pick(['sublocality', 'sublocality_level_1']) || city;
+      if (title) return { title: title, city: city };
+    }
+  } catch (e) {}
   try {
     const res = UrlFetchApp.fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=17&accept-language=en&lat=' +
       (+lat).toFixed(5) + '&lon=' + (+lng).toFixed(5), { muteHttpExceptions: true, headers: { 'User-Agent': 'TravelHub/1.0 (personal trip log)' } });
@@ -752,6 +770,11 @@ function spotName(lat, lng) {
     const title = a.road || a.pedestrian || a.footway || a.path || a.square || a.neighbourhood || a.quarter || a.suburb || city;
     return title ? { title: title, city: city } : null;
   } catch (e) { return null; }
+}
+
+/** Run this once from the editor to check spot naming: it logs what a tap at (lat, lng) would be called. */
+function testSpotName() {
+  Logger.log(JSON.stringify(spotName(38.2376, -85.5503)));
 }
 
 function placesNearby(lat, lng, radius, key) {
