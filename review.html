@@ -281,6 +281,8 @@ function deck() {
   // Places only: Tyler's ideas are notes to himself and Claude, not things to say yes or no to
   return its.filter(i => {
     if (i.kind !== 'place') return false;
+    // errands and logistics aren't things to say yes or no to (they still show in Our plan when they're on a day)
+    if (/bus stop|shuttle|station|parking|airport|convenience|supermarket|grocery/i.test(i.category || '')) return false;
     if (i.parent_id) { const p = itemById(i.parent_id); return !!(p && p.kind === 'idea' && p.mine); }   // Claude's answers to her own questions
     return true;
   }).sort((a, b) => (PRIO[a.priority || ''] ?? 2) - (PRIO[b.priority || ''] ?? 2) || (a.day ? 0 : 1) - (b.day ? 0 : 1) || String(a.title).localeCompare(String(b.title)));
