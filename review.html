@@ -278,11 +278,12 @@ const answerOf = id => mine[id] ?? (data.reactions || {})[id];
 const PRIO = { must: 0, want: 1, '': 2, maybe: 3 };
 function deck() {
   const its = data.items || [];
+  // Places only: Tyler's ideas are notes to himself and Claude, not things to say yes or no to
   return its.filter(i => {
-    if (i.kind === 'fixed') return false;
+    if (i.kind !== 'place') return false;
     if (i.parent_id) { const p = itemById(i.parent_id); return !!(p && p.kind === 'idea' && p.mine); }   // Claude's answers to her own questions
-    return !(i.kind === 'idea' && i.mine);   // her own questions aren't asked back to her
-  }).sort((a, b) => (PRIO[a.priority || ''] ?? 2) - (PRIO[b.priority || ''] ?? 2) || (a.day ? 0 : 1) - (b.day ? 0 : 1) || (a.kind === 'idea') - (b.kind === 'idea') || String(a.title).localeCompare(String(b.title)));
+    return true;
+  }).sort((a, b) => (PRIO[a.priority || ''] ?? 2) - (PRIO[b.priority || ''] ?? 2) || (a.day ? 0 : 1) - (b.day ? 0 : 1) || String(a.title).localeCompare(String(b.title)));
 }
 const unanswered = () => deck().filter(i => !answerOf(i.id));
 const later = () => deck().filter(i => answerOf(i.id) === 'later');
@@ -293,7 +294,8 @@ function startRound() {
 }
 function current() {
   if (!round) return null;
-  round.ids = round.ids.filter(id => itemById(id));
+  const inDeck = new Set(deck().map(i => i.id));
+  round.ids = round.ids.filter(id => inDeck.has(id));   // drops anything no longer shown (e.g. ideas from before)
   return round.ids.find(id => !round.done.includes(id)) || null;
 }
 function answer(id, a, fromSheet) {
@@ -424,7 +426,7 @@ function dayRows(d) {
     if (i.day === d) rows.push({ t: i.start_time, html: `${isStay(i) ? '<span class="sub">Check in · </span>' : ''}${esc(what)}${kids ? `<div class="sub">${kids} stops</div>` : ''}` });
     if (multi && i.end_day === d) rows.push({ t: i.end_time, html: `<span class="sub">${isStay(i) ? 'Check out · ' : isFlight(i) ? 'Lands · ' : 'Ends · '}</span>${esc(what)}` });
   });
-  its.filter(i => i.kind !== 'fixed' && i.day === d && !i.parent_id).forEach(i => {
+  its.filter(i => i.kind === 'place' && i.day === d && !i.parent_id).forEach(i => {
     const a = answerOf(i.id);
     rows.push({ t: i.start_time, id: i.id, html: `${esc(i.title)}${a === 'plan' ? '<span class="pill">You’re in</span>' : ''}<div class="sub">${esc(i.category || (i.kind === 'idea' ? 'Idea' : ''))}</div>` });
   });
@@ -460,7 +462,7 @@ function initMap() {
     pts.push([+i.lat, +i.lng]);
   };
   stays().forEach(s => pin(s, 'home'));
-  const its = (data.items || []).filter(i => i.kind !== 'fixed' && !i.parent_id);
+  const its = (data.items || []).filter(i => i.kind === 'place' && !i.parent_id);
   its.filter(i => i.day).forEach(i => pin(i, 'planned'));
   deck().filter(i => !i.day && answerOf(i.id) === 'nearby').forEach(i => pin(i, 'nearby'));
   deck().filter(i => !i.day && answerOf(i.id) === 'plan').forEach(i => pin(i, 'plan'));
