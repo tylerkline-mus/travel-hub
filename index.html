@@ -333,6 +333,7 @@ nav.tabs .add svg { width: 26px; height: 26px; }
 .share-new { display: flex; gap: 8px; margin-top: 10px; }
 .share-new input { flex: 1; }
 .linkbtn.danger { color: var(--warn); }
+.info .about { color: var(--ink); font-size: 14px; margin-bottom: 6px; }
 .item.inbox .mini + .mini { margin-left: 6px; }
 .sugs { list-style: none; margin: 8px 0 0; padding: 0; border-left: 2px solid color-mix(in srgb, var(--idea) 35%, var(--line)); }
 .sugs li { display: flex; gap: 8px; align-items: center; padding: 6px 0 6px 10px; cursor: pointer; }
@@ -881,6 +882,7 @@ async function pull() {
     syncState = 'ok'; saveLocal(); render();
     if (outbox.length) flush();
     lookUpSuggestions();
+    fillSummaries();
   } catch (e) {
     syncState = 'offline'; render();
     if (e.server) toast(e.message);
@@ -1156,6 +1158,29 @@ function lookUpSuggestions() {
   store.set('th_sug_looked', [...done].slice(-300));
   saveLocal(); render(); flush();
 }
+
+/** Fetch Google's one-line descriptions for places that don't have one (once per place; '-' means Google has none). */
+let summariesBusy = false;
+async function fillSummaries() {
+  if (!cfg || cfg.demo || !db.places || summariesBusy || outbox.length) return;
+  const trips = [...new Set(db.items.filter(i => i.kind === 'place' && i.place_id && !i.summary && i.trip_id).map(i => i.trip_id))];
+  if (!trips.length || Date.now() - store.get('th_sum_wait', 0) < 30 * 60000) return;
+  summariesBusy = true;
+  try {
+    for (const trip of trips) {
+      for (let k = 0; k < 8; k++) {
+        const r = await api('fillSummaries', { trip });
+        if (!r) break;
+        (r.updated || []).forEach(u => { const it = itemById(u.id); if (it) it.summary = u.summary; });
+        saveLocal();
+        if (!r.remaining || !(r.updated || []).length) break;
+      }
+    }
+    render();
+  } catch (e) { store.set('th_sum_wait', Date.now()); }   // old script, setup not run yet, or no signal: try again in half an hour
+  summariesBusy = false;
+}
+const aboutLine = i => i.blurb || (i.summary && i.summary !== '-' ? i.summary : '');
 
 /* ---------- Saved (list) ---------- */
 function itemCard(i, showDay, extraHtml) {
@@ -3696,7 +3721,8 @@ function openItem(id) {
     ${sugs.length ? `<h4>Suggestions</h4><div id="it-sugs">${suggestionList(sugs)}</div>` : ''}
     <div id="it-prio-wrap" ${kind === 'fixed' ? 'hidden' : ''}><div class="field" style="margin-bottom:6px"><label>Priority</label></div>
       <div class="seg" id="it-prio"><button data-p="" class="${!i.priority ? 'on' : ''}">—</button>${PRIOS.map(([k, l]) => `<button data-p="${k}" class="${i.priority === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
-    ${(i.address || hoursHtml || i.maps_url || i.website) ? `<div class="info">
+    ${(i.address || hoursHtml || i.maps_url || i.website || aboutLine(i)) ? `<div class="info">
+      ${aboutLine(i) ? `<div class="about">${esc(aboutLine(i))}</div>` : ''}
       ${i.address ? `<div>${esc(i.address)}</div>` : ''}
       ${hoursHtml}
       <div class="links">

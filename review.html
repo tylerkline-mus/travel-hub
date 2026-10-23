@@ -331,8 +331,17 @@ function render() {
   if (ui.tab === 'plan' && ui.planView === 'map') initMap();
 }
 
+/** "Frakkastígur" from "Frakkastígur 16, 101 Reykjavík, Iceland" (the street, without the number). */
+function streetOf(i) {
+  const first = String(i.address || '').split(',')[0].trim();
+  const street = first.split(/\s+/).filter(w => !/\d/.test(w)).join(' ').trim();
+  return street && /\p{L}/u.test(street) && street.toLowerCase() !== String(i.title || '').toLowerCase() ? street : '';
+}
+/** One line about the place: Claude's why (for a suggestion), else Claude's blurb, else Google's summary. */
+const aboutLine = i => i.note || i.blurb || (i.summary && i.summary !== '-' ? i.summary : '');
 function cardFacts(i) {
   const out = [];
+  if (i.kind === 'place' && streetOf(i)) out.push('On ' + streetOf(i));
   if (i.day) out.push('Planned for ' + fmtDay(i.day));
   if (i.kind !== 'idea') {
     const day = parseDate(i.day || tzNow(data.trip && data.trip.timezone));
@@ -348,7 +357,7 @@ function placeCard(i) {
   return `${parent ? `<span class="tag">For your question: ${esc(parent.title.length > 48 ? parent.title.slice(0, 46) + '…' : parent.title)}</span>` : ''}
     <div class="cat">${esc(kicker)}</div>
     <h2 class="${i.kind === 'idea' ? 'idea' : ''}">${esc(i.title)}</h2>
-    ${i.note ? `<p class="note">${esc(i.note.length > 260 ? i.note.slice(0, 258) + '…' : i.note)}</p>` : ''}
+    ${aboutLine(i) ? `<p class="note">${esc(aboutLine(i).length > 260 ? aboutLine(i).slice(0, 258) + '…' : aboutLine(i))}</p>` : ''}
     ${cardFacts(i).length ? `<div class="facts">${cardFacts(i).map(f => `<div>${esc(f)}</div>`).join('')}</div>` : ''}
     ${link ? `<a class="gmaps" href="${esc(link)}" target="_blank" rel="noopener">${i.kind === 'idea' ? 'Open the link' : 'See it on Google Maps'} ${ICON.out}</a>` : ''}`;
 }
@@ -526,10 +535,10 @@ function demoPayload() {
       P('f4', { kind: 'fixed', category: 'Event', title: 'Iceland Symphony: Shostakovich', day: d(6), start_time: '19:30', end_time: '21:00', lat: 64.1503, lng: -21.9327 }),
       P('f5', { kind: 'fixed', category: 'Tour', title: 'Golden Circle, Brúarfoss & Kerið', day: d(7), start_time: '09:00', end_time: '17:00' }),
       P('s1', { category: 'Bakery', title: 'Brauð & Co', priority: 'must', lat: 64.1441, lng: -21.9260, note: 'Cinnamon buns people line up for, in a painted building on Frakkastígur.', hours: every('6:30 AM', '6:00 PM'), place_id: 'demo' }),
-      P('s2', { category: 'Art gallery', title: 'Kirsuberjatréð', lat: 64.1492, lng: -21.9422, hours: every('10:00 AM', '6:00 PM') }),
+      P('s2', { category: 'Art gallery', title: 'Kirsuberjatréð', lat: 64.1492, lng: -21.9422, hours: every('10:00 AM', '6:00 PM'), address: 'Vesturgata 4, 101 Reykjavík, Iceland', blurb: 'A small shop run by Icelandic women designers: fish-leather bags, ceramics, jewelry.' }),
       P('s3', { category: 'Public bath', title: 'Sky Lagoon', city: 'Kópavogur', lat: 64.1165, lng: -21.9463, note: 'Oceanside lagoon with a seven-step ritual; book a time.' }),
       P('s4', { category: 'Hot dog stand', title: 'Bæjarins Beztu Pylsur', lat: 64.1482, lng: -21.9405, note: 'Order “one with everything.”', hours: every('10:00 AM', '1:00 AM') }),
-      P('s5', { category: 'Record store', title: 'Lucky Records', lat: 64.1428, lng: -21.9142 }),
+      P('s5', { category: 'Record store', title: 'Lucky Records', lat: 64.1428, lng: -21.9142, address: 'Rauðarárstígur 10, 105 Reykjavík, Iceland', summary: 'Sprawling record store with new and used vinyl, plus occasional live sets.' }),
       P('s6', { category: 'Food court', title: 'Grandi Mathöll', lat: 64.1543, lng: -21.9448, day: d(4) }),
       P('s7', { category: 'Swimming pool', title: 'Sundhöllin', lat: 64.1438, lng: -21.9204, hours: every('6:30 AM', '10:00 PM') }),
       P('i1', { kind: 'idea', title: 'Asian food when the craving hits', note: 'Five no-frills spots, all within a 15-minute walk of the Exeter.' }),

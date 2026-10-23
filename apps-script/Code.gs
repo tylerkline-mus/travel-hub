@@ -17,7 +17,9 @@ const SHEETS = {
           'lat', 'lng', 'place_id', 'maps_url', 'hours', 'website', 'day', 'start_time', 'end_time',
           'confirmation', 'status', 'source', 'notes', 'created', 'updated',
           'end_day', 'parent_id', 'seq', 'priority',
-          'from_code', 'to_code', 'from_name', 'to_name', 'from_lat', 'from_lng', 'to_lat', 'to_lng', 'types'],
+          'from_code', 'to_code', 'from_name', 'to_name', 'from_lat', 'from_lng', 'to_lat', 'to_lng', 'types',
+          'summary',   // Google's one-line description ('-' = Google has none), fetched once by fillSummaries
+          'blurb'],    // a one-line description Claude wrote (used when Google has none)
   Plan:  ['trip_id', 'day', 'item_id', 'order', 'note'],
   Log:   ['id', 'trip_id', 'item_id', 'place_id', 'title', 'lat', 'lng', 'logged_at', 'timezone',
           'origin', 'note', 'would_return', 'cost', 'currency', 'photo_url', 'created',
@@ -655,6 +657,32 @@ const ACTIONS = {
     return { updated: updated, remaining: todo.length - batch.length };
   },
 
+  /** Google's one-line description for places that don't have one yet. A few at a time; call until remaining is 0.
+   *  Asks Google for that one field only (it's a top-tier field, so it's kept separate from the everyday lookups). */
+  fillSummaries: function (p) {
+    const key = PropertiesService.getScriptProperties().getProperty('PLACES_KEY');
+    if (!key) return { updated: [], remaining: 0 };
+    // Without the column the answers couldn't be kept, and every sync would ask Google again
+    if (headersOf(sheet('Items')).indexOf('summary') === -1) throw new Error('Run setup to add the summary column');
+    const tripId = p.trip === 'someday' ? '' : String(p.trip || '');
+    const todo = readTable('Items').filter(function (i) {
+      return i.trip_id === tripId && i.kind === 'place' && i.place_id && !i.summary;
+    });
+    const batch = todo.slice(0, 15);
+    const updated = batch.map(function (i) {
+      let text = '-';
+      try {
+        const res = UrlFetchApp.fetch('https://places.googleapis.com/v1/places/' + encodeURIComponent(i.place_id), {
+          headers: { 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': 'editorialSummary' }, muteHttpExceptions: true });
+        if (res.getResponseCode() >= 400) return null;   // try again another time
+        const j = JSON.parse(res.getContentText());
+        if (j.editorialSummary && j.editorialSummary.text) text = j.editorialSummary.text;
+      } catch (e) { return null; }
+      return withLock(function () { return updateRow('Items', i.id, { summary: text }); });
+    }).filter(Boolean);
+    return { updated: updated, remaining: todo.length - updated.length };
+  },
+
   /* ---------------- Chapters + review links ---------------- */
 
   addChapter: function (p) {
@@ -800,7 +828,8 @@ function reviewScope(sh) {
 function reviewPayload(sh) {
   const S = reviewScope(sh);
   const keep = ['id', 'kind', 'category', 'title', 'city', 'address', 'lat', 'lng', 'place_id', 'maps_url', 'website', 'hours',
-                'day', 'end_day', 'start_time', 'end_time', 'priority', 'parent_id', 'seq', 'status', 'from_code', 'to_code', 'types'];
+                'day', 'end_day', 'start_time', 'end_time', 'priority', 'parent_id', 'seq', 'status', 'from_code', 'to_code', 'types',
+                'summary', 'blurb'];
   const items = S.items.map(function (i) {
     const o = {}; keep.forEach(function (k) { o[k] = i[k]; });
     o.note = sharedNote(i);
