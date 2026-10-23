@@ -110,11 +110,11 @@ function doPost(e) {
 
 function handle(p) {
   try {
-    // A review link: its own token, and only the few things a review link may do
-    if (p.share) {
+    // A review link: its own key (reviewKey, never `share`, which the app uses to make links), and only the few things a review link may do
+    if (p.reviewKey && !p.token) {
       const rfn = REVIEW_ACTIONS[p.action];
       if (!rfn) return json({ ok: false, error: 'Not available from a review link' });
-      const sh = shareByToken(p.share);
+      const sh = shareByToken(p.reviewKey);
       if (!sh) return json({ ok: false, error: 'This link has been turned off', gone: true });
       return json({ ok: true, data: rfn(p, sh) });
     }
