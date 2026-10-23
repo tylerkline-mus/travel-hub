@@ -26,6 +26,22 @@ const SHEETS = {
   Routes: ['key', 'polyline', 'duration', 'distance', 'created'],
   // Photos, sounds and souvenirs kept with a logged stop. The files live in Drive (Travel Hub / <trip>), private to you.
   Artifacts: ['id', 'log_id', 'trip_id', 'kind', 'title', 'note', 'file_id', 'mime', 'duration', 'seq', 'created', 'updated'],
+  // A chapter is a stretch of a trip (dates + places near where you stay then). It's a lens: items stay on the trip.
+  Chapters: ['id', 'trip_id', 'name', 'start', 'end', 'radius_km', 'created', 'updated'],
+  // Review links. token is the secret in the link; revoked = when it was turned off.
+  Shares: ['id', 'token', 'trip_id', 'chapter_id', 'who', 'created', 'revoked'],
+  // One answer per person per item: plan | nearby | pass | later
+  Reactions: ['id', 'share_id', 'item_id', 'answer', 'created', 'updated'],
+  // What someone with a review link sent in. Never written into Items until you keep it (asks are the exception: they become ideas).
+  Inbox: ['id', 'share_id', 'trip_id', 'kind', 'text', 'title', 'note', 'category', 'city', 'address', 'lat', 'lng',
+          'place_id', 'maps_url', 'website', 'image', 'types', 'hours', 'status', 'item_id', 'created', 'updated'],
+};
+
+// What a review link (someone you shared a chapter with) may do. Nothing here edits or deletes your rows.
+const REVIEW_ACTIONS = {
+  review: function (p, sh) { return reviewPayload(sh); },
+  react: function (p, sh) { return reviewReact(p, sh); },
+  suggest: function (p, sh) { return reviewSuggest(p, sh); },
 };
 
 // What a Google lookup is allowed to fill in on an existing item
@@ -94,6 +110,14 @@ function doPost(e) {
 
 function handle(p) {
   try {
+    // A review link: its own token, and only the few things a review link may do
+    if (p.share) {
+      const rfn = REVIEW_ACTIONS[p.action];
+      if (!rfn) return json({ ok: false, error: 'Not available from a review link' });
+      const sh = shareByToken(p.share);
+      if (!sh) return json({ ok: false, error: 'This link has been turned off', gone: true });
+      return json({ ok: true, data: rfn(p, sh) });
+    }
     const token = PropertiesService.getScriptProperties().getProperty('TOKEN');
     if (!token || String(p.token) !== token) return json({ ok: false, error: 'Wrong passphrase', got: receivedSummary(p) });
     const fn = ACTIONS[p.action];
@@ -162,6 +186,10 @@ const ACTIONS = {
       plan: readTable('Plan'),
       log: readTable('Log'),
       artifacts: hasTab('Artifacts') ? readTable('Artifacts') : [],
+      chapters: hasTab('Chapters') ? readTable('Chapters') : [],
+      shares: hasTab('Shares') ? readTable('Shares') : [],
+      reactions: hasTab('Reactions') ? readTable('Reactions') : [],
+      inbox: hasTab('Inbox') ? readTable('Inbox') : [],
       places: !!PropertiesService.getScriptProperties().getProperty('PLACES_KEY'),
     };
   },
@@ -626,7 +654,277 @@ const ACTIONS = {
     }).filter(Boolean);
     return { updated: updated, remaining: todo.length - batch.length };
   },
+
+  /* ---------------- Chapters + review links ---------------- */
+
+  addChapter: function (p) {
+    return withLock(function () {
+      const c = parsePatch(p.chapter);
+      if (c.id && findRow('Chapters', c.id)) return findRow('Chapters', c.id).obj;
+      const now = new Date().toISOString();
+      const ch = { id: c.id || newId('ch'), trip_id: c.trip_id || '', name: c.name || 'Chapter', start: c.start || '', end: c.end || '',
+                   radius_km: c.radius_km != null ? String(c.radius_km) : '', created: now, updated: now };
+      appendObj('Chapters', ch);
+      return ch;
+    });
+  },
+
+  updateChapter: function (p) {
+    return withLock(function () {
+      const patch = parsePatch(p.patch);
+      patch.updated = new Date().toISOString();
+      return updateRow('Chapters', p.id, patch);
+    });
+  },
+
+  /** Deleting a chapter turns off its review links. Items are never touched (a chapter is only a view). */
+  deleteChapter: function (p) {
+    return withLock(function () {
+      const now = new Date().toISOString();
+      readTable('Shares').filter(function (s) { return s.chapter_id === p.id && !s.revoked; })
+        .forEach(function (s) { updateRow('Shares', s.id, { revoked: now }); });
+      deleteRow('Chapters', p.id);
+      return { id: p.id };
+    });
+  },
+
+  addShare: function (p) {
+    return withLock(function () {
+      const s = parsePatch(p.share);
+      if (s.id && findRow('Shares', s.id)) return findRow('Shares', s.id).obj;
+      if (!s.token || String(s.token).length < 16) throw new Error('A review link needs a longer token');
+      const sh = { id: s.id || newId('sh'), token: String(s.token), trip_id: s.trip_id || '', chapter_id: s.chapter_id || '',
+                   who: s.who || '', created: new Date().toISOString(), revoked: '' };
+      appendObj('Shares', sh);
+      return sh;
+    });
+  },
+
+  revokeShare: function (p) {
+    return withLock(function () { return updateRow('Shares', p.id, { revoked: new Date().toISOString() }); });
+  },
+
+  /** Keep something from the review inbox: it becomes a place (or an idea for a non-Maps link) on the trip. */
+  keepInbox: function (p) {
+    return withLock(function () {
+      const row = findRow('Inbox', p.id);
+      if (!row) throw new Error('Not found: ' + p.id);
+      const b = row.obj;
+      if (b.item_id && findRow('Items', b.item_id)) return { inbox: b, item: findRow('Items', b.item_id).obj };
+      const share = findRow('Shares', b.share_id);
+      const who = share ? share.obj.who : '';
+      const now = new Date().toISOString();
+      const item = {
+        id: p.item_id || newId('it'), trip_id: b.trip_id, kind: b.kind === 'place' ? 'place' : 'idea',
+        category: b.category, title: b.title || b.text || 'Untitled', city: b.city, address: b.address,
+        lat: b.lat, lng: b.lng, place_id: b.place_id, maps_url: b.maps_url, website: b.website, types: b.types, hours: b.hours,
+        status: 'open', source: b.text,
+        notes: [b.kind === 'link' && b.note ? b.note : '', who ? 'From ' + who + (b.kind !== 'link' && b.note ? ': ' + b.note : '') : b.note].filter(String).join('\n\n'),
+        created: now, updated: now,
+      };
+      appendObj('Items', item);
+      const inbox = updateRow('Inbox', b.id, { status: 'kept', item_id: item.id, updated: now });
+      return { inbox: inbox, item: item };
+    });
+  },
+
+  dismissInbox: function (p) {
+    return withLock(function () { return updateRow('Inbox', p.id, { status: 'dismissed', updated: new Date().toISOString() }); });
+  },
 };
+
+/* ---------------------------------------------------------------
+ * Review links (a chapter shared with someone)
+ * ------------------------------------------------------------- */
+function shareByToken(token) {
+  if (!hasTab('Shares') || !token || String(token).length < 16) return null;
+  return readTable('Shares').filter(function (s) { return s.token === String(token) && !s.revoked; })[0] || null;
+}
+
+const isStayItem = function (i) { return i.kind === 'fixed' && /^(stay|hotel|lodging|airbnb|hostel)$/i.test(i.category || ''); };
+const foldText = function (s) { return String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim(); };
+
+/** The trip's stays with a night inside the chapter (checking in on its last day doesn't count: that's the next leg). */
+function chapterStays(items, ch) {
+  return items.filter(function (i) {
+    if (!isStayItem(i) || i.parent_id || !i.day) return false;
+    const out = i.end_day || i.day;
+    if (ch.start && ch.end && ch.start === ch.end) return i.day <= ch.end && out >= ch.start;
+    return (!ch.end || i.day < ch.end) && (!ch.start || out > ch.start);
+  });
+}
+
+/** Is an item part of a chapter? Dated things by date; undated places near where you stay then; undated notes and ideas always. */
+function inChapter(i, ch, byId, stays) {
+  if (i.parent_id && byId[i.parent_id]) return inChapter(byId[i.parent_id], ch, byId, stays);
+  if (i.day) return (!ch.end || i.day <= ch.end) && (!ch.start || (i.end_day || i.day) >= ch.start);
+  const r = (Number(ch.radius_km) || 25) * 1000;
+  const lat = Number(i.lat), lng = Number(i.lng);
+  const withCoords = stays.filter(function (s) { return s.lat !== '' && s.lng !== '' && !isNaN(Number(s.lat)); });
+  if (i.lat !== '' && i.lng !== '' && !isNaN(lat) && !isNaN(lng) && withCoords.length) {
+    return withCoords.some(function (s) { return metersBetween(lat, lng, Number(s.lat), Number(s.lng)) <= r; });
+  }
+  if (i.city) {
+    const cities = stays.map(function (s) { return foldText(s.city); }).filter(String);
+    return !cities.length || cities.indexOf(foldText(i.city)) !== -1;
+  }
+  return true;
+}
+
+/** Only what's meant for both of you: Claude's notes, never yours. */
+function sharedNote(i) {
+  const n = String(i.notes || '');
+  if (i.source === 'claude') return n.split(/\n\s*\n/)[0].trim();
+  if (/^from:/.test(i.source || '')) return n.trim();   // their own idea: they wrote it
+  const m = n.match(/(?:^|\n)Claude:\s*([\s\S]*)$/);
+  return m ? m[1].trim() : '';
+}
+
+function reviewScope(sh) {
+  const trip = readTable('Trips').filter(function (t) { return t.id === sh.trip_id; })[0];
+  if (!trip) throw new Error('This trip is no longer there');
+  const chapter = sh.chapter_id && hasTab('Chapters') ? readTable('Chapters').filter(function (c) { return c.id === sh.chapter_id; })[0] : null;
+  const ch = chapter || { name: trip.name, start: trip.start, end: trip.end, radius_km: '' };
+  const all = readTable('Items').filter(function (i) { return i.trip_id === trip.id; });
+  const byId = {}; all.forEach(function (i) { byId[i.id] = i; });
+  const stays = chapterStays(all, ch);
+  const items = all.filter(function (i) {
+    if (!inChapter(i, ch, byId, stays)) return false;
+    // Claude's suggestions under your ideas stay yours until you keep them; under their own asks they're shared
+    if (i.parent_id && byId[i.parent_id] && byId[i.parent_id].kind === 'idea') return /^from:/.test(byId[i.parent_id].source || '');
+    return true;
+  });
+  return { trip: trip, ch: ch, items: items, byId: byId, stays: stays };
+}
+
+function reviewPayload(sh) {
+  const S = reviewScope(sh);
+  const keep = ['id', 'kind', 'category', 'title', 'city', 'address', 'lat', 'lng', 'place_id', 'maps_url', 'website', 'hours',
+                'day', 'end_day', 'start_time', 'end_time', 'priority', 'parent_id', 'seq', 'status', 'from_code', 'to_code', 'types'];
+  const items = S.items.map(function (i) {
+    const o = {}; keep.forEach(function (k) { o[k] = i[k]; });
+    o.note = sharedNote(i);
+    o.mine = /^from:/.test(i.source || '');
+    return o;
+  });
+  const reactions = {};
+  if (hasTab('Reactions')) readTable('Reactions').forEach(function (r) { if (r.share_id === sh.id) reactions[r.item_id] = r.answer; });
+  const added = hasTab('Inbox') ? readTable('Inbox').filter(function (b) { return b.share_id === sh.id; }).map(function (b) {
+    const it = b.item_id ? S.byId[b.item_id] : null;
+    return { id: b.id, kind: b.kind, title: b.title, text: b.text, status: b.status, item_id: b.item_id, created: b.created,
+             answered: it && it.kind === 'idea' ? it.status === 'answered' : false,
+             reply: it && it.kind === 'idea' ? sharedNote(it).replace(/^[\s\S]*?(?:^|\n)Claude:\s*/, '') : '' };
+  }) : [];
+  return {
+    who: sh.who, trip: { name: S.trip.name, timezone: S.trip.timezone },
+    chapter: { name: S.ch.name, start: S.ch.start || S.trip.start, end: S.ch.end || S.trip.end },
+    items: items, reactions: reactions, added: added,
+  };
+}
+
+function reviewReact(p, sh) {
+  const answer = String(p.answer || '');
+  if (['plan', 'nearby', 'pass', 'later', ''].indexOf(answer) === -1) throw new Error('Unknown answer');
+  const S = reviewScope(sh);
+  if (!S.items.some(function (i) { return i.id === p.item_id; })) throw new Error('That isn’t part of this link');
+  return withLock(function () {
+    const now = new Date().toISOString();
+    const cur = readTable('Reactions').filter(function (r) { return r.share_id === sh.id && r.item_id === p.item_id; })[0];
+    if (cur) return updateRow('Reactions', cur.id, { answer: answer, updated: now });
+    const row = { id: newId('re'), share_id: sh.id, item_id: String(p.item_id), answer: answer, created: now, updated: now };
+    appendObj('Reactions', row);
+    return row;
+  });
+}
+
+/** A link or an idea from a review link. A place you already have counts as a boost; everything else waits in your inbox. */
+function reviewSuggest(p, sh) {
+  const text = String(p.text || '').trim().slice(0, 2000);
+  if (!text) throw new Error('Nothing to send');
+  const id = /^ib_[a-z0-9]{6,20}$/.test(String(p.id || '')) ? String(p.id) : newId('ib');
+  const prior = findRow('Inbox', id);
+  if (prior) return prior.obj;   // sent twice from the phone's queue
+  const now = new Date().toISOString();
+  const url = (text.match(/https?:\/\/[^\s<>"]+/) || [])[0];
+  const note = text.replace(/https?:\/\/\S+/g, '').trim();
+  const row = { id: id, share_id: sh.id, trip_id: sh.trip_id, text: text, note: url ? note : '', status: 'new', created: now, updated: now };
+
+  if (!url) {
+    // An idea: it goes straight onto the trip with Ask Claude on, marked as theirs
+    return withLock(function () {
+      const idea = { id: newId('it'), trip_id: sh.trip_id, kind: 'idea', title: text, status: 'ask',
+                     source: 'from:' + (sh.who || 'review'), notes: '', created: now, updated: now };
+      appendObj('Items', idea);
+      Object.assign(row, { kind: 'ask', title: text, status: 'asked', item_id: idea.id });
+      appendObj('Inbox', row);
+      return row;
+    });
+  }
+
+  if (isMapsUrl(url)) {
+    const r = resolveText(text);
+    ['title', 'category', 'city', 'address', 'lat', 'lng', 'place_id', 'maps_url', 'website', 'types', 'hours']
+      .forEach(function (k) { if (r[k] != null) row[k] = r[k]; });
+    row.kind = 'place';
+    if (r.title && note === r.title) row.note = '';
+    return withLock(function () {
+      const lat = Number(row.lat), lng = Number(row.lng);
+      const twin = readTable('Items').filter(function (i) {
+        if (i.trip_id !== sh.trip_id || i.parent_id) return false;
+        if (row.place_id && i.place_id === row.place_id) return true;
+        return row.lat !== undefined && row.lat !== '' && i.lat !== '' && !isNaN(lat) &&
+          metersBetween(lat, lng, Number(i.lat), Number(i.lng)) < 40 && foldText(i.title).slice(0, 4) === foldText(row.title).slice(0, 4);
+      })[0];
+      const sent = readTable('Inbox').filter(function (b) {
+        return b.share_id === sh.id && b.status !== 'dismissed' && ((row.place_id && b.place_id === row.place_id) || (twin && b.item_id === twin.id));
+      })[0];
+      if (sent) return sent;   // already sent this one
+      if (twin) { row.status = 'boost'; row.item_id = twin.id; row.title = twin.title; }
+      appendObj('Inbox', row);
+      return row;
+    });
+  }
+
+  const pv = linkPreview(url);
+  Object.assign(row, { kind: 'link', title: pv.title || note || url.replace(/^https?:\/\/(www\.)?/, '').split(/[\/?#]/)[0],
+                       website: url, image: pv.image || '', category: pv.site || '' });
+  row.note = [note, pv.description].filter(String).join('\n\n').slice(0, 600);
+  return withLock(function () { appendObj('Inbox', row); return row; });
+}
+
+/** Title, description and picture a page offers for link previews (Open Graph), else its <title>. */
+function linkPreview(url) {
+  const out = { title: '', description: '', image: '', site: '' };
+  try {
+    const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, followRedirects: true,
+      headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' } });
+    if (res.getResponseCode() >= 400) return out;
+    const html = res.getContentText().slice(0, 300000);
+    const metas = html.match(/<meta\b[^>]*>/gi) || [];
+    const meta = function (names) {
+      for (let k = 0; k < metas.length; k++) {
+        const tag = metas[k];
+        const nm = (tag.match(/\b(?:property|name)\s*=\s*["']([^"']+)["']/i) || [])[1];
+        if (nm && names.indexOf(nm.toLowerCase()) !== -1) {
+          const c = tag.match(/\bcontent\s*=\s*"([^"]*)"/i) || tag.match(/\bcontent\s*=\s*'([^']*)'/i);
+          if (c && c[1].trim()) return decodeEntities(c[1].trim());
+        }
+      }
+      return '';
+    };
+    out.title = meta(['og:title', 'twitter:title']) || decodeEntities(((html.match(/<title[^>]*>([^<]*)/i) || [])[1] || '').trim());
+    out.description = meta(['og:description', 'twitter:description', 'description']).slice(0, 400);
+    out.image = meta(['og:image', 'twitter:image']);
+    out.site = meta(['og:site_name']);
+  } catch (e) {}
+  return out;
+}
+
+function decodeEntities(s) {
+  return String(s).replace(/&#(\d+);/g, function (m, n) { return String.fromCharCode(+n); })
+    .replace(/&#x([0-9a-f]+);/gi, function (m, n) { return String.fromCharCode(parseInt(n, 16)); })
+    .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
+}
 
 /* ---------------------------------------------------------------
  * Google Maps link → place

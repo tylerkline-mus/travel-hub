@@ -2,10 +2,10 @@
 // Pages: network first, fall back to the saved copy.
 // Icons, fonts, map library: saved copy first.
 // Map tiles: every tile you look at is kept, so maps you've viewed work offline later.
-const CACHE = 'travelhub-v20';
+const CACHE = 'travelhub-v21';
 const TILES = 'travelhub-tiles';
 const MAX_TILES = 6000;            // roughly 100–150 MB at most; oldest are dropped first
-const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-192.png', './icon-512.png'];
+const SHELL = ['./', './index.html', './review.html', './manifest.webmanifest', './icon-180.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -44,14 +44,15 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // The app page itself: try the network so updates arrive, fall back offline.
+  // The app pages: try the network so updates arrive, fall back offline.
+  // Each page is kept under its own name (the review page must never stand in for the app, or the reverse).
   if (req.mode === 'navigate' || (url.origin === location.origin && url.pathname.endsWith('.html'))) {
+    const page = /review\.html$/.test(url.pathname) ? './review.html' : './index.html';
     e.respondWith(
       fetch(req).then(res => {
-        const copy = res.clone();
-        caches.open(CACHE).then(c => c.put('./index.html', copy));
+        if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(page, copy)); }
         return res;
-      }).catch(() => caches.match('./index.html'))
+      }).catch(() => caches.match(page))
     );
     return;
   }

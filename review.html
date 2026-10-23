@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Our trip</title>
+<meta name="theme-color" content="#f3faf8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1f1c" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Our trip">
+<meta name="robots" content="noindex">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" defer></script>
+<style>
+/* A lighter, sea-glass look, on purpose different from Tyler's app. */
+:root {
+  --bg: #f3faf8; --card: #ffffff; --ink: #24413c; --muted: #5e8a83; --line: #d6ebe6;
+  --sea: #7fcfbd; --sea-ink: #12352e; --sea-soft: #bfe6dc; --link: #2a7a6b;
+  --lilac: #e9ddf6; --lilac-ink: #4e3770; --sand: #f6efe2; --sand-ink: #6b5530;
+  --font: "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1f1c; --card: #172b27; --ink: #e3f3ee; --muted: #8db5ad; --line: #26433d;
+    --sea: #5fbfaa; --sea-ink: #082520; --sea-soft: #2b5a50; --link: #8fd9c8;
+    --lilac: #3a2f52; --lilac-ink: #ddd0f5; --sand: #3a3324; --sand-ink: #eadcbc;
+  }
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 16px; line-height: 1.45; }
+button, input, textarea { font: inherit; color: inherit; }
+a { color: var(--link); }
+.wrap { max-width: 520px; margin: 0 auto; padding: calc(18px + env(safe-area-inset-top)) 18px calc(96px + env(safe-area-inset-bottom)); }
+header .kicker { font-size: 13px; color: var(--muted); }
+header h1 { font-size: 24px; font-weight: 600; margin: 2px 0 0; letter-spacing: -.01em; }
+header .dates { font-size: 14px; color: var(--muted); margin-top: 2px; }
+.dots { display: flex; gap: 5px; margin: 18px 0 12px; }
+.dots span { flex: 1; height: 4px; border-radius: 2px; background: var(--line); }
+.dots span.done { background: var(--sea); }
+.dots span.now { background: var(--ink); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 22px; padding: 22px 18px; }
+.card .cat { font-size: 13px; color: var(--muted); }
+.card h2 { font-size: 26px; font-weight: 600; margin: 4px 0 8px; line-height: 1.15; letter-spacing: -.01em; }
+.card h2.idea { font-size: 21px; font-weight: 500; }
+.card .note { font-size: 15px; margin: 0 0 10px; }
+.card .facts { font-size: 14px; color: var(--muted); margin: 0 0 12px; }
+.card .facts div + div { margin-top: 2px; }
+.gmaps { display: inline-flex; align-items: center; gap: 5px; font-size: 14px; font-weight: 500; color: var(--link); text-decoration: none; }
+.gmaps svg { width: 14px; height: 14px; }
+.tag { display: inline-block; font-size: 12px; font-weight: 500; padding: 3px 9px; border-radius: 999px; background: var(--lilac); color: var(--lilac-ink); margin-bottom: 6px; }
+.answers { display: flex; flex-direction: column; gap: 9px; margin-top: 14px; }
+.answers button { border: 1px solid var(--line); background: var(--card); border-radius: 15px; padding: 14px; font-size: 16px; cursor: pointer; }
+.answers button.yes { background: var(--sea); border-color: var(--sea); color: var(--sea-ink); font-weight: 600; }
+.answers button.picked { outline: 2px solid var(--ink); outline-offset: 1px; }
+.answers button:active { transform: scale(.99); }
+.below { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; font-size: 14px; }
+.quiet { border: 0; background: none; color: var(--muted); padding: 8px 2px; cursor: pointer; font-size: 14px; }
+.big-btn { display: block; width: 100%; border: 0; background: var(--sea); color: var(--sea-ink); font-weight: 600; font-size: 16px; border-radius: 15px; padding: 14px; cursor: pointer; margin-top: 12px; }
+.big-btn.soft { background: var(--card); color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
+.rest { text-align: center; padding: 34px 10px 10px; }
+.rest h2 { font-size: 22px; font-weight: 600; margin: 0 0 6px; }
+.rest p { color: var(--muted); margin: 0 0 4px; }
+.fade-in { animation: fade .22s ease-out; }
+@keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* Add */
+.box { background: var(--card); border: 1px solid var(--line); border-radius: 22px; padding: 18px; margin-top: 14px; }
+.box h3 { font-size: 18px; font-weight: 600; margin: 0 0 2px; }
+.box p { font-size: 14px; color: var(--muted); margin: 0 0 10px; }
+textarea { width: 100%; min-height: 76px; border: 1px solid var(--line); background: var(--bg); border-radius: 13px; padding: 11px 12px; font-size: 16px; resize: vertical; }
+textarea:focus { outline: 2px solid var(--sea); border-color: transparent; }
+.err { color: #b4532a; font-size: 13px; margin-top: 6px; }
+.section { font-size: 14px; font-weight: 600; color: var(--muted); margin: 26px 2px 8px; }
+.added { list-style: none; margin: 0; padding: 0; }
+.added li { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; margin-bottom: 8px; }
+.added .t { font-weight: 500; }
+.added .s { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.added .s.good { color: var(--link); }
+.added .reply { font-size: 14px; margin-top: 6px; }
+
+/* Our plan */
+.seg { display: flex; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 3px; margin: 16px 0 6px; }
+.seg button { flex: 1; border: 0; background: none; padding: 8px; border-radius: 9px; cursor: pointer; font-size: 15px; color: var(--muted); }
+.seg button.on { background: var(--sea-soft); color: var(--ink); font-weight: 600; }
+.day { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 14px 16px; margin-top: 10px; }
+.day h3 { font-size: 16px; font-weight: 600; margin: 0 0 6px; }
+.day .row { display: flex; gap: 10px; font-size: 15px; padding: 5px 0; }
+.day .row .tm { width: 62px; flex: none; color: var(--muted); font-size: 14px; padding-top: 1px; }
+.day .row .what { flex: 1; min-width: 0; }
+.day .row .sub { font-size: 13px; color: var(--muted); }
+.day .free { font-size: 14px; color: var(--muted); }
+.day .row.tap { cursor: pointer; }
+.pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--sea-soft); color: var(--ink); margin-left: 6px; vertical-align: 1px; }
+.pill.sand { background: var(--sand); color: var(--sand-ink); }
+.plist { list-style: none; margin: 0; padding: 0; }
+.plist li { background: var(--card); border: 1px solid var(--line); border-radius: 15px; padding: 11px 14px; margin-bottom: 7px; cursor: pointer; }
+.plist .t { font-weight: 500; }
+.plist .s { font-size: 13px; color: var(--muted); }
+#rmap { height: calc(100vh - 350px); min-height: 300px; border-radius: 18px; border: 1px solid var(--line); margin-top: 10px; overflow: hidden; }
+.pin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+.pin.plan { background: #2fa58c; }
+.pin.nearby { background: #9fdccd; }
+.pin.planned { background: #24413c; }
+.pin.home { width: 22px; height: 22px; border-radius: 6px; background: #8a6fc4; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-top: 8px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+.leaflet-popup-content { font-family: var(--font); font-size: 14px; margin: 10px 12px; }
+.leaflet-popup-content b { font-weight: 600; }
+
+/* bottom tabs */
+nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: center; gap: 4px; padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-top: 1px solid var(--line); z-index: 1000; }
+nav.tabs button { flex: 1; max-width: 160px; border: 0; background: none; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0; font-size: 12px; color: var(--muted); cursor: pointer; border-radius: 12px; }
+nav.tabs button svg { width: 22px; height: 22px; }
+nav.tabs button.on { color: var(--ink); font-weight: 600; background: var(--sea-soft); }
+
+/* detail sheet */
+.scrim { position: fixed; inset: 0; background: rgba(10,25,22,.35); opacity: 0; transition: opacity .2s; z-index: 2000; }
+.scrim.open { opacity: 1; }
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; max-height: 88vh; overflow: auto; background: var(--bg); border-radius: 24px 24px 0 0; padding: 10px 16px calc(18px + env(safe-area-inset-bottom));
+  transform: translateY(100%); transition: transform .24s ease-out; z-index: 2001; max-width: 560px; margin: 0 auto; }
+.sheet.open { transform: none; }
+.sheet .grab { width: 40px; height: 5px; border-radius: 3px; background: var(--line); margin: 0 auto 12px; }
+.toast { position: fixed; left: 50%; bottom: calc(86px + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(20px); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 12px;
+  font-size: 14px; opacity: 0; transition: .2s; pointer-events: none; z-index: 3000; max-width: 88vw; }
+.toast.on { opacity: 1; transform: translateX(-50%); }
+.status { font-size: 12px; color: var(--muted); text-align: center; margin-top: 18px; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<nav class="tabs" id="tabs" hidden></nav>
+<div class="toast" id="toast"></div>
+<script>
+/* ============================================================
+ * Review view: what someone with a review link sees.
+ * Talks to the same Apps Script with its own token (share=…),
+ * which only allows review / react / suggest.
+ * ============================================================ */
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+};
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const rid = p => p + '_' + Array.from(crypto.getRandomValues(new Uint8Array(9)), x => 'abcdefghijkmnpqrstuvwxyz23456789'[x % 32]).join('');
+
+/* ---------- which link is this? (kept in the address too, so a home-screen icon keeps working) ---------- */
+let rc = store.get('rv_cfg', null);
+(() => {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (location.hash === '#demo') rc = { demo: true };
+  else if (h.get('s') && h.get('u')) rc = { s: h.get('s'), u: h.get('u') };
+  if (rc) store.set('rv_cfg', rc);
+})();
+const KEY = k => 'rv_' + k + '_' + (rc ? (rc.demo ? 'demo' : rc.s.slice(0, 8)) : 'none');
+
+let data = store.get(KEY('data'), null);         // what the script sent last
+let outbox = store.get(KEY('out'), []);           // answers + things sent, waiting for a connection
+let mine = store.get(KEY('mine'), {});            // answers given on this phone (shown at once)
+let round = store.get(KEY('round'), null);        // { ids: [...], done: [...] }
+let sent = store.get(KEY('sent'), []);            // things added from this phone, until the script lists them
+let ui = { tab: 'review', planView: 'list', gone: false, err: '', loading: !data, offline: false };
+const save = () => { store.set(KEY('data'), data); store.set(KEY('out'), outbox); store.set(KEY('mine'), mine); store.set(KEY('round'), round); store.set(KEY('sent'), sent); };
+
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('on'), 2400); }
+
+/* ---------- talking to the Sheet ---------- */
+async function api(action, payload = {}) {
+  if (rc.demo) return demoApi(action, payload);
+  const res = await fetch(rc.u, { method: 'POST', body: JSON.stringify({ action, share: rc.s, ...payload }) });
+  const j = JSON.parse(await res.text());
+  if (!j.ok) { const e = new Error(j.error || 'Something went wrong'); e.server = true; e.gone = !!j.gone; throw e; }
+  return j.data;
+}
+let flushing = false;
+async function flush() {
+  if (flushing) return; flushing = true;
+  while (outbox.length) {
+    const op = outbox[0];
+    try {
+      const r = await api(op.action, op.payload);
+      if (op.action === 'suggest' && r && data) { data.added = (data.added || []).filter(x => x.id !== r.id).concat(r); sent = sent.filter(x => x.id !== op.payload.id); }
+      outbox.shift(); save();
+    } catch (e) {
+      if (e.gone) { ui.gone = true; break; }
+      if (e.server) { outbox.shift(); save(); toast('Couldn’t send: ' + e.message); continue; }
+      ui.offline = true; break;   // no connection: try again later
+    }
+  }
+  if (!outbox.length) ui.offline = false;
+  flushing = false;
+}
+async function load() {
+  await flush();
+  try {
+    const d = await api('review');
+    data = d; ui.loading = false; ui.err = '';
+    // answers the Sheet now has don't need the local copy
+    Object.keys(mine).forEach(id => { if ((d.reactions || {})[id] === mine[id] && !outbox.some(o => o.payload.item_id === id)) delete mine[id]; });
+    save();
+  } catch (e) {
+    ui.loading = false;
+    if (e.gone) ui.gone = true; else if (!data) ui.err = e.server ? e.message : 'No connection right now.';
+  }
+  render();
+}
+window.addEventListener('online', () => load());
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') load(); });
+
+/* ---------- small helpers ---------- */
+const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const parseDate = s => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s || ''); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null; };
+const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const addDays = (s, n) => { const d = parseDate(s); d.setDate(d.getDate() + n); return ymd(d); };
+const fmtDay = s => { const d = parseDate(s); return d ? `${DOW[d.getDay()]}, ${MON[d.getMonth()]} ${d.getDate()}` : ''; };
+const fmtRange = (a, b) => { const x = parseDate(a), y = parseDate(b); if (!x) return ''; if (!y || a === b) return `${MON[x.getMonth()]} ${x.getDate()}`;
+  return x.getMonth() === y.getMonth() ? `${MON[x.getMonth()]} ${x.getDate()}–${y.getDate()}` : `${MON[x.getMonth()]} ${x.getDate()} – ${MON[y.getMonth()]} ${y.getDate()}`; };
+function fmtTime(t) { if (!t) return ''; let [h, m] = t.split(':').map(Number); const ap = h < 12 ? 'am' : 'pm'; h = h % 12 || 12; return `${h}${m ? ':' + String(m).padStart(2, '0') : ''} ${ap}`; }
+const num = v => v === '' || v == null || isNaN(+v) ? null : +v;
+const hasCoords = o => num(o.lat) !== null && num(o.lng) !== null;
+function meters(a, b) {
+  const R = 6371000, r = x => x * Math.PI / 180;
+  const dLat = r(+b.lat - +a.lat), dLng = r(+b.lng - +a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(+a.lat)) * Math.cos(r(+b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+function tzNow(tz) {
+  try {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz || undefined, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(x => [x.type, x.value]));
+    return `${p.year}-${p.month}-${p.day}`;
+  } catch (e) { return ymd(new Date()); }
+}
+function hoursOn(i, dow) {
+  let h; try { h = i.hours ? JSON.parse(i.hours) : null; } catch (e) { return null; }
+  const line = h && (h.weekday || []).find(l => l.startsWith(DOW[dow]));
+  if (!line) return null;
+  return line.slice(line.indexOf(':') + 1).trim().replace(/[  ]/g, ' ').replace(/:00/g, '');
+}
+const isStay = i => i.kind === 'fixed' && /^(stay|hotel|lodging|airbnb|hostel)$/i.test(i.category || '');
+const isFlight = i => /^flight$/i.test(i.category || '');
+const itemById = id => (data.items || []).find(i => i.id === id);
+const gmapsUrl = i => i.place_id
+  ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(i.title)}&query_place_id=${encodeURIComponent(i.place_id)}`
+  : i.maps_url || (hasCoords(i) ? `https://www.google.com/maps/search/?api=1&query=${i.lat},${i.lng}` : '');
+const ICON = {
+  out: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>',
+  cards: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="6" width="13" height="15" rx="3"/><path d="M8 3h9a3 3 0 0 1 3 3v11"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>',
+  plan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="16" rx="3"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>',
+};
+
+/* ---------- where we stay, and how far things are ---------- */
+function stays() { return (data.items || []).filter(i => isStay(i) && hasCoords(i) && !i.parent_id); }
+function homeFor(i) {
+  const s = stays(); if (!s.length) return null;
+  if (i.day) { const n = s.find(x => x.day <= i.day && i.day < (x.end_day || x.day)); if (n) return n; }
+  return s.reduce((best, x) => !best || (hasCoords(i) && meters(x, i) < meters(best, i)) ? x : best, null);
+}
+function howFar(i) {
+  const h = homeFor(i); if (!h || !hasCoords(i)) return '';
+  const m = meters(h, i) * 1.25;   // streets aren't straight
+  if (m < 150) return 'Right by ' + h.title.split(/[-–,(]/)[0].trim();
+  if (m < 2600) return Math.max(2, Math.round(m / 80)) + ' min walk';
+  return (m / 1000).toFixed(m < 10000 ? 1 : 0) + ' km away';
+}
+
+/* ---------- the cards she's asked about ---------- */
+const answerOf = id => mine[id] ?? (data.reactions || {})[id];
+const PRIO = { must: 0, want: 1, '': 2, maybe: 3 };
+function deck() {
+  const its = data.items || [];
+  return its.filter(i => {
+    if (i.kind === 'fixed') return false;
+    if (i.parent_id) { const p = itemById(i.parent_id); return !!(p && p.kind === 'idea' && p.mine); }   // Claude's answers to her own questions
+    return !(i.kind === 'idea' && i.mine);   // her own questions aren't asked back to her
+  }).sort((a, b) => (PRIO[a.priority || ''] ?? 2) - (PRIO[b.priority || ''] ?? 2) || (a.day ? 0 : 1) - (b.day ? 0 : 1) || (a.kind === 'idea') - (b.kind === 'idea') || String(a.title).localeCompare(String(b.title)));
+}
+const unanswered = () => deck().filter(i => !answerOf(i.id));
+const later = () => deck().filter(i => answerOf(i.id) === 'later');
+function startRound() {
+  const ids = unanswered().map(i => i.id);
+  later().forEach(i => { if (!ids.includes(i.id)) ids.push(i.id); });
+  round = { ids: ids.slice(0, 5), done: [] }; save();
+}
+function current() {
+  if (!round) return null;
+  round.ids = round.ids.filter(id => itemById(id));
+  return round.ids.find(id => !round.done.includes(id)) || null;
+}
+function answer(id, a, fromSheet) {
+  mine[id] = a;
+  outbox.push({ action: 'react', payload: { item_id: id, answer: a } });
+  if (!fromSheet && round && round.ids.includes(id) && !round.done.includes(id)) round.done.push(id);
+  save(); render(); flush();
+}
+
+/* ---------- rendering ---------- */
+function header() {
+  const c = data.chapter || {};
+  return `<header><div class="kicker">${esc(data.trip && data.trip.name || '')}</div><h1>${esc(c.name || 'Our trip')}</h1><div class="dates">${esc(fmtRange(c.start, c.end))}</div></header>`;
+}
+function tabs() {
+  const n = (data.added || []).filter(x => x.kind === 'ask' && x.answered).length;
+  return [['review', 'Review', ICON.cards], ['add', 'Add', ICON.plus], ['plan', 'Our plan', ICON.plan]]
+    .map(([k, l, ic]) => `<button class="${ui.tab === k ? 'on' : ''}" data-tab="${k}" aria-label="${l}">${ic}${l}</button>`).join('');
+}
+function render() {
+  const app = $('#app'), nav = $('#tabs');
+  if (map) { try { map.remove(); } catch (e) {} map = null; }
+  if (!rc) { nav.hidden = true; app.innerHTML = `<div class="rest"><h2>Open the link you were sent</h2><p>This page works from a link that includes the trip.</p></div>`; return; }
+  if (ui.gone) { nav.hidden = true; app.innerHTML = `<div class="rest"><h2>This link is turned off</h2><p>Ask for a new one if you still need it.</p></div>`; return; }
+  if (!data) { nav.hidden = true; app.innerHTML = ui.loading ? `<div class="rest"><p>Opening the trip…</p></div>` : `<div class="rest"><h2>Couldn’t open the trip</h2><p>${esc(ui.err)}</p><button class="big-btn" id="retry">Try again</button></div>`;
+    const r = $('#retry'); if (r) r.onclick = () => { ui.loading = true; render(); load(); }; return; }
+  nav.hidden = false; nav.innerHTML = tabs();
+  $$('[data-tab]', nav).forEach(b => b.onclick = () => { ui.tab = b.dataset.tab; render(); window.scrollTo(0, 0); });
+  let body = '';
+  if (ui.tab === 'add') body = addView(); else if (ui.tab === 'plan') body = planView(); else body = reviewView();
+  app.innerHTML = header() + body + (outbox.length && ui.offline ? `<div class="status">${outbox.length} waiting to send. It’ll go when you’re back online.</div>` : '');
+  bind();
+  if (ui.tab === 'plan' && ui.planView === 'map') initMap();
+}
+
+function cardFacts(i) {
+  const out = [];
+  if (i.day) out.push('Planned for ' + fmtDay(i.day));
+  if (i.kind !== 'idea') {
+    const day = parseDate(i.day || tzNow(data.trip && data.trip.timezone));
+    const h = day && hoursOn(i, day.getDay());
+    if (h) out.push(/closed/i.test(h) ? `Closed on ${DOW[day.getDay()]}s` : `${i.day ? 'Open' : 'Open today'} ${h}`);
+  }
+  return out;
+}
+function placeCard(i) {
+  const parent = i.parent_id && itemById(i.parent_id);
+  const kicker = [i.kind === 'idea' ? 'An idea' : i.category, howFar(i)].filter(Boolean).join(' · ');
+  const link = i.kind === 'idea' ? (i.website || '') : gmapsUrl(i);
+  return `${parent ? `<span class="tag">For your question: ${esc(parent.title.length > 48 ? parent.title.slice(0, 46) + '…' : parent.title)}</span>` : ''}
+    <div class="cat">${esc(kicker)}</div>
+    <h2 class="${i.kind === 'idea' ? 'idea' : ''}">${esc(i.title)}</h2>
+    ${i.note ? `<p class="note">${esc(i.note.length > 260 ? i.note.slice(0, 258) + '…' : i.note)}</p>` : ''}
+    ${cardFacts(i).length ? `<div class="facts">${cardFacts(i).map(f => `<div>${esc(f)}</div>`).join('')}</div>` : ''}
+    ${link ? `<a class="gmaps" href="${esc(link)}" target="_blank" rel="noopener">${i.kind === 'idea' ? 'Open the link' : 'See it on Google Maps'} ${ICON.out}</a>` : ''}`;
+}
+function answerButtons(id, picked) {
+  const b = (a, label, cls = '') => `<button class="${cls} ${picked === a ? 'picked' : ''}" data-answer="${a}" data-id="${esc(id)}">${label}</button>`;
+  return `<div class="answers">${b('plan', 'Let’s plan it', 'yes')}${b('nearby', 'If we’re nearby')}${b('pass', 'Not for me')}</div>`;
+}
+function reviewView() {
+  if (!round || (!current() && !round.ids.length)) startRound();
+  const id = current();
+  if (id) {
+    const i = itemById(id);
+    const dots = round.ids.map(x => `<span class="${round.done.includes(x) ? 'done' : x === id ? 'now' : ''}"></span>`).join('');
+    return `<div class="dots">${dots}</div>
+      <div class="card fade-in">${placeCard(i)}</div>
+      ${answerButtons(id)}
+      <div class="below"><button class="quiet" data-answer="later" data-id="${esc(id)}">Not sure yet</button><button class="quiet" data-tab-go="add">+ Add something</button></div>`;
+  }
+  const left = unanswered().length, unsure = later().length;
+  const yes = round.ids.filter(x => answerOf(x) === 'plan').length;
+  if (!round.ids.length) return `<div class="rest fade-in"><h2>You’re all caught up</h2><p>New places show up here when they’re added.</p>
+    <button class="big-btn soft" data-tab-go="plan">See our plan</button><button class="big-btn soft" data-tab-go="add">Add something</button></div>`;
+  return `<div class="rest fade-in"><h2>That’s it for now</h2>
+    <p>${yes ? `${yes} to plan from this round.` : 'Thanks for looking.'}</p>
+    ${left ? `<p>${left} more to look at whenever you like.</p><button class="big-btn" id="more">Show ${Math.min(5, left + unsure)} more</button>`
+      : unsure ? `<p>${unsure} you weren’t sure about.</p><button class="big-btn" id="more">Look at those again</button>` : `<p>That’s everything so far.</p>`}
+    <button class="big-btn soft" data-tab-go="plan">See our plan</button></div>`;
+}
+
+function addView() {
+  const added = (data.added || []).concat(sent.filter(x => !(data.added || []).some(a => a.id === x.id)))
+    .sort((a, b) => String(b.created || '').localeCompare(String(a.created || '')));
+  const status = x => {
+    if (x._pending) return ['Sending…', ''];
+    if (x.kind === 'ask') {
+      const kids = (data.items || []).filter(i => i.parent_id === x.item_id).length;
+      return x.answered ? [`Claude replied${kids ? ` · ${kids} idea${kids === 1 ? '' : 's'} added to Review` : ''}`, 'good'] : ['Waiting for Claude', ''];
+    }
+    return { boost: ['Already on the list, so this counts as a vote', 'good'], kept: ['Added to the trip', 'good'], dismissed: ['Not this time', ''], new: ['Sent to Tyler', ''] }[x.status] || ['Sent', ''];
+  };
+  return `
+    <div class="box"><h3>Share a link</h3><p>A Google Maps place, or any link: a class, a shop, an article. Add a note if you like.</p>
+      <textarea id="in-link" placeholder="Paste it here"></textarea><div class="err" id="err-link" hidden></div>
+      <button class="big-btn" id="send-link">Send</button></div>
+    <div class="box"><h3>Ask or suggest an idea</h3><p>Something you’d love to do or find. Claude will look for options and they’ll show up in Review.</p>
+      <textarea id="in-idea" placeholder="A cozy spot for a rainy afternoon"></textarea><div class="err" id="err-idea" hidden></div>
+      <button class="big-btn" id="send-idea">Send</button></div>
+    ${added.length ? `<div class="section">What you’ve added</div><ul class="added">${added.map(x => {
+      const [s, cls] = status(x);
+      return `<li><div class="t">${esc(x.title || x.text)}</div><div class="s ${cls}">${esc(s)}</div>${x.reply ? `<div class="reply">${esc(x.reply.length > 320 ? x.reply.slice(0, 318) + '…' : x.reply)}</div>` : ''}</li>`;
+    }).join('')}</ul>` : ''}`;
+}
+function sendSuggestion(text, kind) {
+  const id = rid('ib');
+  sent.push({ id, kind, title: text.replace(/https?:\/\/\S+/g, '').trim() || text.match(/https?:\/\/(?:www\.)?([^\/?#\s]+)/)?.[1] || text, text, created: new Date().toISOString(), _pending: true });
+  outbox.push({ action: 'suggest', payload: { id, text } });
+  save(); render(); toast(kind === 'ask' ? 'Sent to Claude' : 'Sent');
+  flush().then(render);
+}
+
+/* ---------- our plan ---------- */
+function chapterDays() {
+  const c = data.chapter || {}; const out = [];
+  if (!c.start) return out;
+  let d = c.start; const end = c.end || c.start;
+  while (d <= end && out.length < 60) { out.push(d); d = addDays(d, 1); }
+  return out;
+}
+function dayRows(d) {
+  const its = data.items || [], rows = [];
+  its.filter(i => i.kind === 'fixed' && !i.parent_id).forEach(i => {
+    const multi = i.end_day && i.end_day !== i.day;
+    const kids = its.filter(k => k.parent_id === i.id).length;
+    const what = isFlight(i) ? [i.title, [i.from_code, i.to_code].filter(Boolean).join(' → ')].filter(Boolean).join(' · ') : i.title;
+    if (i.day === d) rows.push({ t: i.start_time, html: `${isStay(i) ? '<span class="sub">Check in · </span>' : ''}${esc(what)}${kids ? `<div class="sub">${kids} stops</div>` : ''}` });
+    if (multi && i.end_day === d) rows.push({ t: i.end_time, html: `<span class="sub">${isStay(i) ? 'Check out · ' : isFlight(i) ? 'Lands · ' : 'Ends · '}</span>${esc(what)}` });
+  });
+  its.filter(i => i.kind !== 'fixed' && i.day === d && !i.parent_id).forEach(i => {
+    const a = answerOf(i.id);
+    rows.push({ t: i.start_time, id: i.id, html: `${esc(i.title)}${a === 'plan' ? '<span class="pill">You’re in</span>' : ''}<div class="sub">${esc(i.category || (i.kind === 'idea' ? 'Idea' : ''))}</div>` });
+  });
+  return rows.sort((a, b) => (a.t || '99').localeCompare(b.t || '99'));
+}
+function planView() {
+  const seg = `<div class="seg"><button class="${ui.planView === 'list' ? 'on' : ''}" data-pv="list">List</button><button class="${ui.planView === 'map' ? 'on' : ''}" data-pv="map">Map</button></div>`;
+  if (ui.planView === 'map') return seg + `<div id="rmap"></div><div class="legend"><span><i style="background:#8a6fc4;border-radius:3px"></i>Where we stay</span><span><i style="background:#2fa58c"></i>Let’s plan it</span><span><i style="background:#9fdccd"></i>If we’re nearby</span><span><i style="background:#24413c"></i>On a day</span></div>`;
+  const days = chapterDays().map(d => {
+    const rows = dayRows(d);
+    return `<div class="day"><h3>${esc(fmtDay(d))}</h3>${rows.length ? rows.map(r => `<div class="row ${r.id ? 'tap' : ''}" ${r.id ? `data-open="${esc(r.id)}"` : ''}><div class="tm">${esc(fmtTime(r.t))}</div><div class="what">${r.html}</div></div>`).join('') : '<div class="free">Free day</div>'}</div>`;
+  }).join('');
+  const list = (a, title) => {
+    const its = deck().filter(i => answerOf(i.id) === a && !i.day);
+    return its.length ? `<div class="section">${title}</div><ul class="plist">${its.map(i => `<li data-open="${esc(i.id)}"><div class="t">${esc(i.title)}</div><div class="s">${esc([i.category, howFar(i)].filter(Boolean).join(' · '))}</div></li>`).join('')}</ul>` : '';
+  };
+  return seg + days + list('plan', 'You said let’s plan it') + list('nearby', 'If we’re nearby');
+}
+let map = null;
+function initMap() {
+  const el = $('#rmap');
+  if (!el) return;
+  if (!window.L) { el.innerHTML = '<div class="rest"><p>The map is still loading…</p></div>'; setTimeout(() => { if (ui.tab === 'plan' && ui.planView === 'map') render(); }, 800); return; }
+  map = L.map(el, { zoomControl: false, attributionControl: true });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+  const pts = [];
+  const pin = (i, cls) => {
+    if (!hasCoords(i)) return;
+    const link = gmapsUrl(i);
+    L.marker([+i.lat, +i.lng], { icon: L.divIcon({ className: '', html: `<div class="pin ${cls}"></div>`, iconSize: cls === 'home' ? [22, 22] : [16, 16], iconAnchor: cls === 'home' ? [11, 11] : [8, 8] }) })
+      .bindPopup(`<b>${esc(i.title)}</b>${i.category ? `<br>${esc(i.category)}` : ''}${i.day ? `<br>${esc(fmtDay(i.day))}` : ''}${link ? `<br><a href="${esc(link)}" target="_blank" rel="noopener">See it on Google Maps</a>` : ''}`)
+      .addTo(map);
+    pts.push([+i.lat, +i.lng]);
+  };
+  stays().forEach(s => pin(s, 'home'));
+  const its = (data.items || []).filter(i => i.kind !== 'fixed' && !i.parent_id);
+  its.filter(i => i.day).forEach(i => pin(i, 'planned'));
+  deck().filter(i => !i.day && answerOf(i.id) === 'nearby').forEach(i => pin(i, 'nearby'));
+  deck().filter(i => !i.day && answerOf(i.id) === 'plan').forEach(i => pin(i, 'plan'));
+  if (pts.length > 1) map.fitBounds(pts, { padding: [36, 36], maxZoom: 15 });
+  else if (pts.length) map.setView(pts[0], 14);
+  else map.setView([64.1466, -21.9426], 12);
+  if (pts.length < 2) toast('Places you say yes to show up on the map');
+}
+
+/* ---------- detail sheet (from Our plan) ---------- */
+function openDetail(id) {
+  const i = itemById(id); if (!i) return;
+  closeSheet(true);
+  const scrim = document.createElement('div'); scrim.className = 'scrim';
+  const sh = document.createElement('div'); sh.className = 'sheet';
+  sh.innerHTML = `<div class="grab"></div><div class="card">${placeCard(i)}</div>${i.kind === 'fixed' ? '' : answerButtons(i.id, answerOf(i.id))}<button class="quiet" style="width:100%;margin-top:6px" id="close">Close</button>`;
+  document.body.append(scrim, sh);
+  requestAnimationFrame(() => { scrim.classList.add('open'); sh.classList.add('open'); });
+  scrim.onclick = () => closeSheet(); $('#close', sh).onclick = () => closeSheet();
+  $$('[data-answer]', sh).forEach(b => b.onclick = () => { answer(b.dataset.id, b.dataset.answer, true); closeSheet(); toast('Got it'); });
+}
+function closeSheet(instant) { $$('.scrim, .sheet').forEach(el => { if (instant) return el.remove(); el.classList.remove('open'); setTimeout(() => el.remove(), 250); }); }
+
+function bind() {
+  $$('#app [data-answer]').forEach(b => b.onclick = () => answer(b.dataset.id, b.dataset.answer));
+  $$('[data-tab-go]').forEach(b => b.onclick = () => { ui.tab = b.dataset.tabGo; render(); window.scrollTo(0, 0); });
+  const more = $('#more'); if (more) more.onclick = () => { startRound(); render(); window.scrollTo(0, 0); };
+  $$('[data-pv]').forEach(b => b.onclick = () => { ui.planView = b.dataset.pv; render(); });
+  $$('[data-open]').forEach(el => el.onclick = () => openDetail(el.dataset.open));
+  const sl = $('#send-link');
+  if (sl) sl.onclick = () => {
+    const v = $('#in-link').value.trim(), err = $('#err-link');
+    if (!v) { err.textContent = 'Paste a link first.'; err.hidden = false; return; }
+    // No link in it? It's an idea, so treat it like one rather than making her move it.
+    sendSuggestion(v, /https?:\/\/\S+/.test(v) ? 'link' : 'ask');
+  };
+  const si = $('#send-idea');
+  if (si) si.onclick = () => {
+    const v = $('#in-idea').value.trim(), err = $('#err-idea');
+    if (!v) { err.textContent = 'Write your idea first.'; err.hidden = false; return; }
+    sendSuggestion(v, /https?:\/\/\S+/.test(v) ? 'link' : 'ask');
+  };
+  ['link', 'idea'].forEach(k => { const t = $('#in-' + k); if (t) t.oninput = () => { $('#err-' + k).hidden = true; }; });
+}
+
+/* ---------- sample (review.html#demo) ---------- */
+function demoPayload() {
+  const t = tzNow('Atlantic/Reykjavik'), d = n => addDays(t, n);
+  const P = (id, o) => Object.assign({ id, kind: 'place', city: 'Reykjavík', status: 'open', note: '', hours: '' }, o);
+  const every = (o, c) => JSON.stringify({ weekday: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(w => `${w}: ${o} – ${c}`) });
+  return {
+    who: 'Susanna', trip: { name: 'Iceland, Autumn (sample)', timezone: 'Atlantic/Reykjavik' },
+    chapter: { name: 'Reykjavík together', start: d(2), end: d(8) },
+    reactions: { s3: 'plan' },
+    items: [
+      P('f1', { kind: 'fixed', category: 'Flight', title: 'UA912', from_code: 'ORD', to_code: 'KEF', day: d(2), start_time: '22:45', end_day: d(3), end_time: '10:00', city: '' }),
+      P('f2', { kind: 'fixed', category: 'Stay', title: 'Exeter Hotel', day: d(3), start_time: '15:00', end_day: d(8), end_time: '11:00', lat: 64.1424, lng: -21.9288 }),
+      P('f3', { kind: 'fixed', category: 'Tour', title: 'South Coast & Katla Ice Cave', day: d(5), start_time: '08:00', end_time: '20:00' }),
+      P('f3a', { parent_id: 'f3', title: 'Seljalandsfoss', lat: 63.6156, lng: -19.9886 }),
+      P('f3b', { parent_id: 'f3', title: 'Skógafoss', lat: 63.5321, lng: -19.5114 }),
+      P('f4', { kind: 'fixed', category: 'Event', title: 'Iceland Symphony: Shostakovich', day: d(6), start_time: '19:30', end_time: '21:00', lat: 64.1503, lng: -21.9327 }),
+      P('f5', { kind: 'fixed', category: 'Tour', title: 'Golden Circle, Brúarfoss & Kerið', day: d(7), start_time: '09:00', end_time: '17:00' }),
+      P('s1', { category: 'Bakery', title: 'Brauð & Co', priority: 'must', lat: 64.1441, lng: -21.9260, note: 'Cinnamon buns people line up for, in a painted building on Frakkastígur.', hours: every('6:30 AM', '6:00 PM'), place_id: 'demo' }),
+      P('s2', { category: 'Art gallery', title: 'Kirsuberjatréð', lat: 64.1492, lng: -21.9422, hours: every('10:00 AM', '6:00 PM') }),
+      P('s3', { category: 'Public bath', title: 'Sky Lagoon', city: 'Kópavogur', lat: 64.1165, lng: -21.9463, note: 'Oceanside lagoon with a seven-step ritual; book a time.' }),
+      P('s4', { category: 'Hot dog stand', title: 'Bæjarins Beztu Pylsur', lat: 64.1482, lng: -21.9405, note: 'Order “one with everything.”', hours: every('10:00 AM', '1:00 AM') }),
+      P('s5', { category: 'Record store', title: 'Lucky Records', lat: 64.1428, lng: -21.9142 }),
+      P('s6', { category: 'Food court', title: 'Grandi Mathöll', lat: 64.1543, lng: -21.9448, day: d(4) }),
+      P('s7', { category: 'Swimming pool', title: 'Sundhöllin', lat: 64.1438, lng: -21.9204, hours: every('6:30 AM', '10:00 PM') }),
+      P('i1', { kind: 'idea', title: 'Asian food when the craving hits', note: 'Five no-frills spots, all within a 15-minute walk of the Exeter.' }),
+      P('a1', { kind: 'idea', title: 'Is there a bread baking class we could take?', mine: true, status: 'answered', note: 'Two small classes run on weekends.' }),
+      P('a1s', { parent_id: 'a1', category: 'Cooking class', title: 'Sourdough morning (sample)', lat: 64.1460, lng: -21.9330, note: 'Three hours, small group, take your loaf home.' }),
+    ],
+    added: [
+      { id: 'ib_x1', kind: 'ask', title: 'Is there a bread baking class we could take?', status: 'asked', item_id: 'a1', answered: true, reply: 'Two small classes run on weekends; the sourdough morning fits your free Thursday.', created: d(-1) + 'T10:00:00Z' },
+      { id: 'ib_x2', kind: 'place', title: 'Brauð & Co', status: 'boost', item_id: 's1', created: d(-1) + 'T09:00:00Z' },
+    ],
+  };
+}
+let demo = null;
+function demoApi(action, p) {
+  return new Promise(res => setTimeout(() => {
+    demo = demo || demoPayload();
+    if (action === 'review') res(JSON.parse(JSON.stringify(demo)));
+    else if (action === 'react') { demo.reactions[p.item_id] = p.answer; res({ item_id: p.item_id, answer: p.answer }); }
+    else if (action === 'suggest') {
+      const url = /https?:\/\/\S+/.test(p.text);
+      const row = { id: p.id, text: p.text, kind: url ? (/google\.|goo\.gl/.test(p.text) ? 'place' : 'link') : 'ask', title: url ? (p.text.replace(/https?:\/\/\S+/g, '').trim() || 'A link you sent') : p.text, status: url ? 'new' : 'asked', created: new Date().toISOString() };
+      demo.added.push(row); res(row);
+    } else res(null);
+  }, 300));
+}
+
+/* ---------- start ---------- */
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+render();
+if (rc) load();
+</script>
+</body>
+</html>

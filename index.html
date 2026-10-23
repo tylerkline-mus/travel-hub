@@ -32,6 +32,7 @@
   --idea: #66773a;
   --found: #8a4fa8;
   --tour: #1f7a6d;
+  --her: #6a58a8;
   --warn: #b0661c;
   --shadow: 0 1px 2px rgba(40,30,15,.06), 0 4px 14px rgba(40,30,15,.06);
   --radius: 14px;
@@ -41,7 +42,7 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --paper: #171513; --card: #221f1b; --ink: #f1ebe0; --muted: #a39887; --line: #35302a;
-    --accent: #e0774b; --fixed: #8fb0d8; --place: #e0774b; --idea: #a9bd72; --found: #c49ad6; --tour: #5cc2b1; --warn: #e3a35a;
+    --her: #b9a8ec; --accent: #e0774b; --fixed: #8fb0d8; --place: #e0774b; --idea: #a9bd72; --found: #c49ad6; --tour: #5cc2b1; --warn: #e3a35a;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.25);
   }
 }
@@ -241,7 +242,7 @@ nav.tabs .add svg { width: 26px; height: 26px; }
 .sheet h4 { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 18px 2px 8px; }
 .field { margin-bottom: 14px; }
 .field label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 2px 6px; letter-spacing: .02em; }
-.field input, .field select, .field textarea { width: 100%; border: 1px solid var(--line); background: var(--card);
+.field input, .field select, .field textarea, .share-new input { width: 100%; border: 1px solid var(--line); background: var(--card);
   border-radius: 10px; padding: 11px 12px; font-size: 16px; outline: none; min-height: 46px; }
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); }
 .field textarea { resize: vertical; min-height: 64px; }
@@ -315,6 +316,24 @@ nav.tabs .add svg { width: 26px; height: 26px; }
 .badge.ask { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
 .badge.answered { background: color-mix(in srgb, var(--ink) 7%, transparent); color: var(--muted); }
 .badge.sugg { background: color-mix(in srgb, var(--idea) 16%, transparent); color: var(--idea); }
+.badge.her { background: color-mix(in srgb, var(--her) 14%, transparent); color: var(--her); text-transform: none; letter-spacing: 0; font-size: 11px; font-weight: 600; }
+.badge.her.pass { background: color-mix(in srgb, var(--ink) 7%, transparent); color: var(--muted); }
+.banner.her { border-color: color-mix(in srgb, var(--her) 35%, transparent); background: color-mix(in srgb, var(--her) 8%, var(--card)); }
+.item.inbox { align-items: flex-start; }
+.item.inbox .body .linkbtn { padding: 4px 0 0; font-size: 13px; }
+.item.inbox .mini { align-self: center; }
+.row.chapters { margin-top: 8px; }
+.chap { font: inherit; font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--ink); cursor: pointer; white-space: nowrap; }
+.chap.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.chap.ghost { color: var(--muted); border-style: dashed; }
+.chap .shared-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--her); margin-left: 3px; vertical-align: 1px; }
+.chap-note { font-size: 12px; color: var(--muted); margin: 6px 2px 0; }
+.share-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.share-row .who { flex: 1; font-weight: 600; min-width: 90px; }
+.share-new { display: flex; gap: 8px; margin-top: 10px; }
+.share-new input { flex: 1; }
+.linkbtn.danger { color: var(--warn); }
+.item.inbox .mini + .mini { margin-left: 6px; }
 .sugs { list-style: none; margin: 8px 0 0; padding: 0; border-left: 2px solid color-mix(in srgb, var(--idea) 35%, var(--line)); }
 .sugs li { display: flex; gap: 8px; align-items: center; padding: 6px 0 6px 10px; cursor: pointer; }
 .sugs li + li { border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
@@ -393,14 +412,14 @@ const store = {
   del(k) { try { localStorage.removeItem(k); } catch (e) {} },
 };
 
-const EMPTY_DB = () => ({ trips: [], items: [], plan: [], log: [], artifacts: [], places: false });
+const EMPTY_DB = () => ({ trips: [], items: [], plan: [], log: [], artifacts: [], chapters: [], shares: [], reactions: [], inbox: [], places: false });
 let cfg = store.get('th_cfg', null);          // { url, token, sheetUrl, demo }
 let db = Object.assign(EMPTY_DB(), store.get('th_cache', {}));
 let outbox = store.get('th_outbox', []);
 let parked = store.get('th_parked', []);       // artifact saves waiting for the script to be updated
 let routeCache = store.get('th_routes', {});
 let syncState = 'ok';                          // ok | pending | offline
-let ui = { q: '', openNow: false, nearMe: false, pos: null, filter: 'all', reorder: null, mapDay: 'all', mapLayer: 'plan', logDay: {}, mapView: null, noRoutes: false };
+let ui = { chapter: store.get('th_chapter', {}), q: '', openNow: false, nearMe: false, pos: null, filter: 'all', reorder: null, mapDay: 'all', mapLayer: 'plan', logDay: {}, mapView: null, noRoutes: false };
 
 const KIND = { fixed: 'Fixed', place: 'Place', idea: 'Idea' };
 const KIND_COLOR = { fixed: 'var(--fixed)', place: 'var(--place)', idea: 'var(--idea)' };
@@ -483,6 +502,93 @@ function tripDays(t) {
   while (d <= last && out.length < 120) { out.push(d); d = addDays(d, 1); }
   return out;
 }
+/* ----- chapters: a stretch of a trip (dates + places near where you stay then). Only a lens; items stay on the trip. ----- */
+const chaptersOf = tripId => db.chapters.filter(c => c.trip_id === tripId).sort((a, b) => String(a.start).localeCompare(String(b.start)));
+const fold = x => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+function activeChapter(t) { const id = ui.chapter[t.id]; return id ? db.chapters.find(c => c.id === id && c.trip_id === t.id) || null : null; }
+function setActiveChapter(t, id) { if (id) ui.chapter[t.id] = id; else delete ui.chapter[t.id]; store.set('th_chapter', ui.chapter); }
+/** Stays with a night inside the chapter (checking in on its last day is the next leg). Same rule as the script. */
+function chapterStays(ch) {
+  return db.items.filter(i => i.trip_id === ch.trip_id && i.kind === 'fixed' && isStay(i) && !i.parent_id && i.day && (() => {
+    const out = i.end_day || i.day;
+    if (ch.start && ch.end && ch.start === ch.end) return i.day <= ch.end && out >= ch.start;
+    return (!ch.end || i.day < ch.end) && (!ch.start || out > ch.start);
+  })());
+}
+function inChapter(i, ch, stays = chapterStays(ch)) {
+  if (i.parent_id) { const par = itemById(i.parent_id); if (par) return inChapter(par, ch, stays); }
+  if (i.day) return (!ch.end || i.day <= ch.end) && (!ch.start || (i.end_day || i.day) >= ch.start);
+  const r = (Number(ch.radius_km) || 25) * 1000;
+  const anchors = stays.filter(hasCoords);
+  if (hasCoords(i) && anchors.length) return anchors.some(st => meters(st, i) <= r);
+  if (i.city) { const cs = stays.map(st => fold(st.city)).filter(Boolean); return !cs.length || cs.includes(fold(i.city)); }
+  return true;
+}
+/** The trip's top-level items, narrowed to the chapter you're looking at (if any). */
+function scopedTop(t) {
+  const ch = activeChapter(t), its = topItemsFor(t.id);
+  if (!ch) return its;
+  const stays = chapterStays(ch);
+  return its.filter(i => inChapter(i, ch, stays));
+}
+function scopedDays(t) {
+  const ch = activeChapter(t), days = tripDays(t);
+  return ch ? days.filter(d => (!ch.start || d >= ch.start) && (!ch.end || d <= ch.end)) : days;
+}
+/* ----- what people you shared a chapter with said ----- */
+const shareById = id => db.shares.find(x => x.id === id);
+const ANSWER_LABEL = { plan: 'plan it', nearby: 'if nearby', pass: 'pass' };
+function theirTake(i) {
+  const bits = [];
+  db.reactions.filter(r => r.item_id === i.id && ANSWER_LABEL[r.answer]).forEach(r => {
+    const sh = shareById(r.share_id); if (sh) bits.push(`<span class="badge her ${r.answer}">${esc(sh.who || 'Them')}: ${ANSWER_LABEL[r.answer]}</span>`);
+  });
+  const boosts = {};
+  db.inbox.filter(b => b.status === 'boost' && b.item_id === i.id).forEach(b => { const sh = shareById(b.share_id); if (sh) boosts[sh.who] = (boosts[sh.who] || 0) + 1; });
+  Object.keys(boosts).forEach(w => bits.push(`<span class="badge her plan">+1 ${esc(w)}</span>`));
+  if (/^from:/.test(i.source || '')) bits.push(`<span class="badge her">From ${esc(i.source.slice(5))}</span>`);
+  return bits.join('');
+}
+const newInbox = tripId => db.inbox.filter(b => b.trip_id === tripId && b.status === 'new');
+function inboxBlock(t) {
+  const rows = newInbox(t.id);
+  if (!rows.length) return '';
+  const who = [...new Set(rows.map(b => (shareById(b.share_id) || {}).who).filter(Boolean))].join(' and ') || 'your review link';
+  return `<div class="section-title">From ${esc(who)} <span class="count">${rows.length}</span></div>` + rows.map(b => {
+    const host = b.website && !b.place_id ? (b.website.match(/^https?:\/\/(?:www\.)?([^\/?#]+)/) || [])[1] : '';
+    const meta = [b.kind === 'place' ? placeLine(b) : host, b.note].filter(Boolean).join(' · ');
+    return `<div class="item inbox" style="--c:var(--her)">
+      <span class="mark"></span>
+      <div class="body"><div class="title">${esc(b.title || b.text)}</div>${meta ? `<div class="meta">${esc(meta)}</div>` : ''}
+        ${b.website || b.maps_url ? `<a class="linkbtn" href="${esc(b.maps_url || b.website)}" target="_blank" rel="noopener">Open link</a>` : ''}</div>
+      <button class="mini keep" data-inkeep="${esc(b.id)}">Keep</button><button class="mini x" data-indrop="${esc(b.id)}" aria-label="Dismiss ${esc(b.title)}">✕</button>
+    </div>`;
+  }).join('');
+}
+function keepInbox(id) {
+  const b = db.inbox.find(x => x.id === id); if (!b) return;
+  const itemId = uid('it'), sh = shareById(b.share_id), now = new Date().toISOString();
+  queue('keepInbox', { id, item_id: itemId }, () => {
+    db.items.push({ id: itemId, trip_id: b.trip_id, kind: b.kind === 'place' ? 'place' : 'idea', category: b.category, title: b.title || b.text,
+      city: b.city, address: b.address, lat: b.lat, lng: b.lng, place_id: b.place_id, maps_url: b.maps_url, website: b.website, types: b.types, hours: b.hours,
+      status: 'open', source: b.text, notes: sh ? 'From ' + sh.who : '', created: now, updated: now });
+    Object.assign(b, { status: 'kept', item_id: itemId });
+  });
+  toast('Kept: ' + (b.title || 'it'));
+}
+function dismissInbox(id) {
+  const b = db.inbox.find(x => x.id === id); if (!b) return;
+  undoable('Dismissed ' + (b.title || 'it'), () => { b.status = 'dismissed'; }, () => queue('dismissInbox', { id }));
+}
+function reviewLink(sh) {
+  if (cfg && cfg.demo) return new URL('review.html#demo', location.href).href;
+  return new URL('review.html', location.href).href.split('#')[0] + '#s=' + encodeURIComponent(sh.token) + '&u=' + encodeURIComponent(cfg.url);
+}
+function newToken() {
+  const a = new Uint8Array(18); crypto.getRandomValues(a);
+  return Array.from(a, x => 'abcdefghijkmnpqrstuvwxyz23456789'[x % 32]).join('');
+}
+
 function dayLabel(t, d) {
   if (!t.start || d < t.start || (t.end && d > t.end)) return 'Travel day';
   return 'Day ' + (Math.round((parseDate(d) - parseDate(t.start)) / 86400000) + 1);
@@ -694,6 +800,10 @@ function reconcile(action, data) {
     swap('items', data);
   } else if (action === 'attach' && Array.isArray(data)) data.forEach(o => swap('items', o));
   else if (action === 'addTrip' || action === 'updateTrip') swap('trips', data);
+  else if (action === 'addChapter' || action === 'updateChapter') swap('chapters', data);
+  else if (action === 'addShare' || action === 'revokeShare') swap('shares', data);
+  else if (action === 'dismissInbox') swap('inbox', data);
+  else if (action === 'keepInbox') { if (data.item) swap('items', data.item); if (data.inbox) swap('inbox', data.inbox); }
   else if (action === 'upload' || action === 'updateArtifact') swap('artifacts', data);
   else if (action === 'addLog' || action === 'updateLog') {
     swap('log', data);
@@ -896,7 +1006,7 @@ function tripsView() {
       <h2>${esc(t.name)}</h2>
       ${t.destination ? `<div class="dest">${esc(t.destination)}</div>` : ''}
       <div class="row"><span class="dates">${esc(fmtRange(t.start, t.end))}</span><span class="chip ${st.cls}">${st.label}</span></div>
-      <div class="tally"><span style="--c:var(--fixed)">${n('fixed')} fixed</span><span style="--c:var(--place)">${n('place')} places</span><span style="--c:var(--idea)">${n('idea')} ideas</span>${logged ? `<span style="--c:var(--found)">${logged} logged</span>` : ''}</div>
+      <div class="tally"><span style="--c:var(--fixed)">${n('fixed')} fixed</span><span style="--c:var(--place)">${n('place')} places</span><span style="--c:var(--idea)">${n('idea')} ideas</span>${logged ? `<span style="--c:var(--found)">${logged} logged</span>` : ''}${newInbox(t.id).length ? `<span style="--c:var(--her)">${newInbox(t.id).length} new from your review link</span>` : ''}</div>
     </div>`;
   };
   return `<header class="top"><h1>Trips</h1>${syncBadge()}<button class="iconbtn" data-act="settings" aria-label="Settings">${I.gear}</button></header>
@@ -919,17 +1029,29 @@ function tripView(id, sub) {
   const tabbar = `<div class="subtabs">${tabs.map(([k, l]) => `<button class="${sub === k ? 'on' : ''}" data-go="${base}/${k}">${l}</button>`).join('')}</div>`;
   if (sub === 'recap') return recapView(t);
   if (sub === 'map') {
-    return head + `<div style="padding:0 16px">${tabbar}</div><div id="mapwrap">${mapChips(t)}<div id="map"></div>${mapLayerToggle(t)}<div class="map-note" id="map-note" hidden></div></div>`;
+    return head + `<div style="padding:0 16px">${chaptersOf(t.id).length ? chapterRow(t) : ''}${tabbar}</div><div id="mapwrap">${mapChips(t)}<div id="map"></div>${mapLayerToggle(t)}<div class="map-note" id="map-note" hidden></div></div>`;
   }
   const meta = `<div class="trip-head"><div class="row">
       <span class="chip">${esc(fmtRange(t.start, t.end))}</span><span class="chip ${st.cls}">${st.label}</span>
       ${t.timezone ? `<span class="chip">${esc(t.timezone.split('/').pop().replace(/_/g, ' '))} time</span>` : ''}
-    </div></div>`;
+    </div>${chapterRow(t)}</div>`;
   let body = '';
   if (sub === 'saved') body = savedContent(t);
   else if (sub === 'log') body = logContent(t);
   else body = daysContent(t);
   return head + `<main>${meta}${tabbar}${body}</main>`;
+}
+
+function chapterRow(t) {
+  const chs = chaptersOf(t.id), on = activeChapter(t);
+  return `<div class="row chapters">
+    ${chs.length ? `<button class="chap ${on ? '' : 'on'}" data-chapter-pick="">Whole trip</button>` : ''}
+    ${chs.map(c => {
+      const shared = db.shares.some(x => x.chapter_id === c.id && !x.revoked);
+      return `<button class="chap ${on && on.id === c.id ? 'on' : ''}" data-chapter-pick="${esc(c.id)}">${esc(c.name)}${shared ? ' <span class="shared-dot" title="Shared"></span>' : ''}</button>`;
+    }).join('')}
+    ${on ? `<button class="chap ghost" data-chapter-edit="${esc(on.id)}">Edit · Share</button>` : `<button class="chap ghost" data-chapter-new="${esc(t.id)}">+ Chapter</button>`}
+  </div>${on ? `<div class="chap-note">${esc(fmtRange(on.start, on.end))} · places within ${esc(on.radius_km || 25)} km of where you stay</div>` : ''}`;
 }
 
 function matchesBanner(t) {
@@ -939,11 +1061,12 @@ function matchesBanner(t) {
 
 /* ---------- Days ---------- */
 function daysContent(t) {
-  const days = tripDays(t);
+  const days = scopedDays(t);
   if (!days.length) return matchesBanner(t) + `<div class="empty"><div class="big">Add dates to see your days</div>Then stays, bookings and planned stops line up day by day.<br><br><button class="btn small" data-act="editTrip" data-id="${esc(t.id)}">Add dates</button></div>`;
   const today = tzNow(t.timezone).day;
-  const unscheduled = topItemsFor(t.id).filter(i => i.kind !== 'fixed' && !i.day).length;
-  return matchesBanner(t) + days.map((d, k) => dayCard(t, d, k, today)).join('') +
+  const unscheduled = scopedTop(t).filter(i => i.kind !== 'fixed' && !i.day).length;
+  const fresh = newInbox(t.id).length;
+  return matchesBanner(t) + (fresh ? `<div class="banner her"><div><b>${fresh} new</b> from your review link.</div><button class="btn small" data-go="#/trip/${encodeURIComponent(t.id)}/saved">See them</button></div>` : '') + days.map((d, k) => dayCard(t, d, k, today)).join('') +
     (unscheduled ? `<div class="empty" style="padding:24px 10px">${unscheduled} saved ${unscheduled === 1 ? 'place has' : 'places have'} no day yet.<br><button class="linkbtn" data-go="#/trip/${encodeURIComponent(t.id)}/saved">See them in Saved</button></div>` : '<div style="height:12px"></div>');
 }
 
@@ -1043,7 +1166,7 @@ function itemCard(i, showDay, extraHtml) {
   const kids = isTour(i) ? childrenOf(i.id).length : 0;
   const meta = i._pending ? 'Looking up…' : [placeLine(i) || (i.kind === 'idea' ? (i.notes || 'Idea') : i.address || ''), kids ? kids + ' stops' : ''].filter(Boolean).join(' · ');
   const sugs = i.kind === 'idea' ? suggestionsOf(i.id) : [];
-  const ask = i.kind !== 'idea' ? '' : i.status === 'ask' ? '<span class="badge ask">Asked Claude</span>' : i.status === 'answered' ? '<span class="badge answered">Answered</span>' : '';
+  const ask = (i.kind !== 'idea' ? '' : i.status === 'ask' ? '<span class="badge ask">Asked Claude</span>' : i.status === 'answered' ? '<span class="badge answered">Answered</span>' : '') + theirTake(i);
   return `<div class="item kind-${esc(i.kind)} ${i.status === 'done' ? 'done' : ''} ${i._pending ? 'pending' : ''}" style="--c:${c}" data-item="${esc(i.id)}">
     <span class="mark"></span>
     <div class="body"><div class="title">${prioBadge(i)}${esc(i.title)}</div><div class="meta">${ask}${isFlight(i) && flightCodesExtra(i) ? `<span class="route-codes">${esc(flightCodesExtra(i))}</span>${meta ? ' · ' : ''}` : ''}${esc(meta)}${extraHtml ? (meta ? ' · ' : '') + extraHtml : ''}</div>${sugs.length ? suggestionList(sugs) : ''}</div>
@@ -1093,7 +1216,7 @@ function openNow(i, tz) {
 }
 
 function savedContent(t) {
-  const its = topItemsFor(t.id);
+  const its = scopedTop(t);
   const f = ui.filter;
   const counts = { fixed: 0, place: 0, idea: 0 };
   its.forEach(i => counts[i.kind] = (counts[i.kind] || 0) + 1);
@@ -1109,12 +1232,13 @@ function savedContent(t) {
     <div class="filters" id="sv-kinds" ${ui.q || ui.openNow || ui.nearMe ? 'hidden' : ''}>
       ${['all', 'fixed', 'place', 'idea'].map(k => `<button class="${f === k ? 'on' : ''}" data-filter="${k}">${k === 'all' ? `All ${its.length}` : `${KIND[k]}${k === 'fixed' ? '' : 's'} ${counts[k] || 0}`}</button>`).join('')}
     </div>
+    ${ui.q || ui.openNow || ui.nearMe ? '' : inboxBlock(t)}
     <div id="sv-results">${savedResults(t)}</div>
     ${stale && !(cfg && cfg.demo) ? `<div style="text-align:center;margin-top:18px"><button class="linkbtn" data-act="refreshAll">Update ${stale} older place${stale === 1 ? '' : 's'} with Google’s place types</button></div>` : ''}`;
 }
 
 function savedResults(t) {
-  const its = topItemsFor(t.id);
+  const its = scopedTop(t);
   const searching = !!(ui.q || ui.openNow || ui.nearMe);
   if (searching) {
     let list = its.filter(i => i.kind !== 'fixed' && (!ui.q || matchesQuery(i, ui.q)));
@@ -3105,7 +3229,7 @@ function somedayView() {
  * Map
  * ============================================================ */
 function mapChips(t) {
-  const days = tripDays(t);
+  const days = scopedDays(t);
   const opt = [['all', 'All'], ['unplanned', 'No day yet'], ...days.map(d => [d, fmtShortDay(d)])];
   return `<div class="map-chips">${opt.map(([k, l]) => `<button class="${ui.mapDay === k ? 'on' : ''}" data-mapchip="${k}">${esc(l)}</button>`).join('')}</div>`;
 }
@@ -3115,7 +3239,7 @@ function mapLayerToggle(t) {
   return `<div class="map-layer"><button class="${ui.mapLayer === 'plan' ? 'on' : ''}" data-maplayer="plan">Plan</button><button class="${ui.mapLayer === 'lived' ? 'on' : ''}" data-maplayer="lived">Lived${logsFor(t.id, d).length ? '' : ' (0)'}</button></div>`;
 }
 function mapSignature(tripId) {
-  return JSON.stringify([ui.mapDay, ui.mapLayer, db.items.filter(i => i.trip_id === tripId).map(i => [i.id, i.lat, i.day, i.end_day, i.seq, i.parent_id, i.status, i.priority, i.from_lat, i.to_lat]), db.log.filter(l => l.trip_id === tripId).map(l => [l.id, l.lat, l.day, l.seq, l.mode, l.parent_id, l.rating])]);
+  return JSON.stringify([ui.mapDay, ui.mapLayer, ui.chapter[tripId] || '', db.items.filter(i => i.trip_id === tripId).map(i => [i.id, i.lat, i.day, i.end_day, i.seq, i.parent_id, i.status, i.priority, i.from_lat, i.to_lat]), db.log.filter(l => l.trip_id === tripId).map(l => [l.id, l.lat, l.day, l.seq, l.mode, l.parent_id, l.rating])]);
 }
 function sizeMap() {
   const el = $('#map'); if (!el) return;
@@ -3244,7 +3368,8 @@ function drawMap(t, layer) {
   const located = itemsFor(t.id).filter(i => hasCoords(i) && !isFlight(i));
   const tripLng = located.length ? located.reduce((n, i) => n + +i.lng, 0) / located.length : 0;
 
-  const items = itemsFor(t.id);
+  const chOn = activeChapter(t), chStays = chOn ? chapterStays(chOn) : null;
+  const items = chOn ? itemsFor(t.id).filter(i => inChapter(i, chOn, chStays)) : itemsFor(t.id);
   const d = ui.mapDay;
   if (d === 'all' || d === 'unplanned') {
     if (d === 'all') drawFlights(items.filter(i => isFlight(i) && !i.parent_id), drawMap._flightPts);
@@ -3342,6 +3467,11 @@ function bindCommon() {
   $$('[data-go]').forEach(el => el.onclick = e => { e.stopPropagation(); location.hash = el.dataset.go; });
   $$('[data-item]').forEach(el => el.onclick = e => { if (e.target.closest('.moves, [data-reorder], [data-keep], [data-dismiss]')) return; e.stopPropagation(); openItem(el.dataset.item); });
   bindSuggestionButtons(document);
+  $$('[data-inkeep]').forEach(el => el.onclick = e => { e.stopPropagation(); keepInbox(el.dataset.inkeep); });
+  $$('[data-indrop]').forEach(el => el.onclick = e => { e.stopPropagation(); dismissInbox(el.dataset.indrop); });
+  $$('[data-chapter-pick]').forEach(el => el.onclick = () => { setActiveChapter(tripById(r.id), el.dataset.chapterPick); render(); });
+  $$('[data-chapter-new]').forEach(el => el.onclick = () => openChapter(el.dataset.chapterNew));
+  $$('[data-chapter-edit]').forEach(el => el.onclick = () => openChapter(r.id, el.dataset.chapterEdit));
   $$('[data-log]').forEach(el => el.onclick = e => { if (e.target.closest('.moves')) return; e.stopPropagation(); openLogEntry(el.dataset.log); });
   $$('[data-filter]').forEach(el => el.onclick = () => { ui.filter = el.dataset.filter; render(); });
   $$('[data-reorder]').forEach(el => el.onclick = e => { e.stopPropagation(); ui.reorder = ui.reorder === el.dataset.reorder ? null : el.dataset.reorder; render(); });
@@ -4258,6 +4388,82 @@ function openReview(tripId, d) {
 }
 
 /* ---------- Trip form ---------- */
+/* ---------- Chapters + review links ---------- */
+function openChapter(tripId, id) {
+  const t = tripById(tripId), ch = id ? db.chapters.find(c => c.id === id) : null;
+  const shares = ch ? db.shares.filter(x => x.chapter_id === ch.id && !x.revoked) : [];
+  const counts = c => {
+    if (!c) return '';
+    const stays = chapterStays(c), its = topItemsFor(tripId).filter(i => inChapter(i, c, stays));
+    const n = k => its.filter(i => i.kind === k).length;
+    return `${n('place')} places, ${n('idea')} ideas and ${n('fixed')} bookings`;
+  };
+  openSheet(`
+    <h3>${ch ? esc(ch.name) : 'New chapter'}</h3>
+    <p class="hint" style="margin-top:-4px">A stretch of ${esc(t.name)}. It shows bookings on these dates, and saved places near where you’re staying then. Nothing moves; it’s a view.</p>
+    <div class="field"><label>Name</label><input id="ch-name" value="${esc(ch ? ch.name : '')}" placeholder="Reykjavík together"></div>
+    <div class="two">
+      <div class="field"><label>From</label><input type="date" id="ch-start" value="${esc(ch ? ch.start : t.start || '')}"></div>
+      <div class="field"><label>To</label><input type="date" id="ch-end" value="${esc(ch ? ch.end : '')}"></div>
+    </div>
+    <div class="field"><label>Places within (km of where you stay)</label><input type="number" inputmode="numeric" min="1" max="500" id="ch-r" value="${esc(ch && ch.radius_km || 25)}"></div>
+    ${ch ? `<p class="hint" id="ch-count">${counts(ch)}</p>` : ''}
+    <div class="btnrow">${ch ? `<button class="btn danger" id="ch-del">Delete</button>` : ''}<button class="btn" id="ch-save">${ch ? 'Save' : 'Create chapter'}</button></div>
+    ${ch ? `<div class="section-title" style="margin-top:22px">Review link</div>
+      <p class="hint" style="margin-top:-2px">Someone with the link sees this chapter in a simple review view: they say what they’d like, send links, and ask Claude for ideas. They can’t change your plans; what they send waits for you here.</p>
+      ${shares.map(x => `<div class="share-row"><div class="who">${esc(x.who || 'Review link')}</div>
+        <button class="btn small" data-sh-share="${esc(x.id)}">Send link</button>
+        <button class="btn small ghost" data-sh-open="${esc(x.id)}">Preview</button>
+        <button class="linkbtn danger" data-sh-off="${esc(x.id)}">Turn off</button></div>`).join('')}
+      <div class="share-new"><input id="sh-who" placeholder="Who’s it for? (their name)"><button class="btn small" id="sh-make">Make a link</button></div>` : ''}
+  `, sh => {
+    $('#ch-save', sh).onclick = () => {
+      const data = { name: $('#ch-name', sh).value.trim(), start: $('#ch-start', sh).value, end: $('#ch-end', sh).value, radius_km: String(Math.max(1, Number($('#ch-r', sh).value) || 25)) };
+      if (!data.name) { $('#ch-name', sh).focus(); return; }
+      if (!data.start || !data.end) { toast('Pick both dates'); return; }
+      if (data.end < data.start) { toast('The end is before the start'); return; }
+      if (ch) { queue('updateChapter', { id: ch.id, patch: data }, () => Object.assign(ch, data)); closeSheet(); }
+      else {
+        const c = { id: uid('ch'), trip_id: tripId, ...data };
+        queue('addChapter', { chapter: c }, () => db.chapters.push(c));
+        setActiveChapter(t, c.id); closeSheet(); render();
+        setTimeout(() => openChapter(tripId, c.id), 300);
+      }
+    };
+    const del = $('#ch-del', sh);
+    if (del) del.onclick = () => {
+      if (!confirm('Delete “' + ch.name + '”? Your places and bookings stay as they are' + (shares.length ? ', and its review link stops working.' : '.'))) return;
+      const now = new Date().toISOString();
+      queue('deleteChapter', { id: ch.id }, () => {
+        db.chapters = db.chapters.filter(c => c.id !== ch.id);
+        db.shares.forEach(x => { if (x.chapter_id === ch.id && !x.revoked) x.revoked = now; });
+      });
+      setActiveChapter(t, ''); closeSheet(); render();
+    };
+    const make = $('#sh-make', sh);
+    if (make) make.onclick = () => {
+      const who = $('#sh-who', sh).value.trim();
+      if (!who) { $('#sh-who', sh).focus(); return; }
+      const x = { id: uid('sh'), token: newToken(), trip_id: tripId, chapter_id: ch.id, who, revoked: '' };
+      queue('addShare', { share: x }, () => db.shares.push(x));
+      closeSheet(); setTimeout(() => openChapter(tripId, ch.id), 280);
+    };
+    $$('[data-sh-share]', sh).forEach(b => b.onclick = async () => {
+      const x = shareById(b.dataset.shShare), url = reviewLink(x);
+      const text = `Here’s ${ch.name}. Have a look and tell me what sounds good.`;
+      try { if (navigator.share) { await navigator.share({ title: ch.name, text, url }); return; } } catch (e) { if (e && e.name === 'AbortError') return; }
+      try { await navigator.clipboard.writeText(url); toast('Link copied'); } catch (e) { prompt('Copy this link:', url); }
+    });
+    $$('[data-sh-open]', sh).forEach(b => b.onclick = () => window.open(reviewLink(shareById(b.dataset.shOpen)), '_blank'));
+    $$('[data-sh-off]', sh).forEach(b => b.onclick = () => {
+      const x = shareById(b.dataset.shOff);
+      if (!confirm('Turn off ' + (x.who ? x.who + '’s' : 'this') + ' link? It will stop working right away.')) return;
+      queue('revokeShare', { id: x.id }, () => { x.revoked = new Date().toISOString(); });
+      closeSheet(); setTimeout(() => openChapter(tripId, ch.id), 280);
+    });
+  });
+}
+
 function openTripForm(id) {
   const t = id ? tripById(id) : null;
   let zones = [];
@@ -4446,6 +4652,7 @@ function demoData() {
       P('g1', { parent_id: 'i1', source: 'claude', priority: 'maybe', category: 'Bar', title: 'Snack Mimi (sample)', city: 'Taito City', notes: '8 seats, karaoke, 5 min walk from the hotel', hours: every('8:00 PM', '1:00 AM'), lat: 35.7021, lng: 139.7921 }),
       P('g2', { parent_id: 'i1', source: 'claude', priority: 'maybe', category: 'Bar', title: 'Kuramae Nightcap (sample)', city: 'Taito City', notes: 'Quiet whisky counter, owner is friendly to first-timers', hours: every('7:00 PM', '12:00 AM'), lat: 35.7050, lng: 139.7940 }),
       P('i2', { kind: 'idea', title: 'Onsen on a rainy day', status: 'ask' }),
+      P('i3', { kind: 'idea', title: 'Somewhere to buy nice paper and pens?', status: 'ask', source: 'from:Susanna' }),
       // a past trip (logged) and one still to come, so "Look back" has a stretch to draw
       ...[
         { id: 'rf1', kind: 'fixed', category: 'Flight', title: 'FI 642', from_code: 'BNA', to_code: 'KEF', from_name: 'Nashville International Airport', to_name: 'Keflavík International Airport', from_lat: 36.1263, from_lng: -86.6774, to_lat: 63.985, to_lng: -22.6056, day: d(-150) },
@@ -4495,6 +4702,19 @@ function demoData() {
         [d(-147), 'Bæjarins Beztu Pylsur', 64.1482, -21.9406, { origin: 'found', mode: 'walk', category: 'Hot dog stand', time: '19:00' }],
       ].map(([day, title, lat, lng, o], k) => Object.assign({ id: 'rl' + k, trip_id: 'tr_demo3', day, seq: String(k), title, lat, lng, city: 'Reykjavík' }, o)),
     ],
+    chapters: [{ id: 'ch_demo1', trip_id: 'tr_demo1', name: 'Tokyo together', start: d(-1), end: d(3), radius_km: '25' }],
+    shares: [{ id: 'sh_demo1', token: 'demo-token-not-real', trip_id: 'tr_demo1', chapter_id: 'ch_demo1', who: 'Susanna', revoked: '' }],
+    reactions: [
+      { id: 're_d1', share_id: 'sh_demo1', item_id: 'p6', answer: 'plan' },
+      { id: 're_d2', share_id: 'sh_demo1', item_id: 'p7', answer: 'nearby' },
+      { id: 're_d3', share_id: 'sh_demo1', item_id: 'p8', answer: 'pass' },
+    ],
+    inbox: [
+      { id: 'ib_d1', share_id: 'sh_demo1', trip_id: 'tr_demo1', kind: 'place', status: 'boost', item_id: 'p10', title: 'Bricolage Bread & Co.' },
+      { id: 'ib_d2', share_id: 'sh_demo1', trip_id: 'tr_demo1', kind: 'place', status: 'new', title: 'Itoya (sample)', category: 'Stationery store', city: 'Chūō City', lat: 35.6735, lng: 139.7666, note: 'Mika says the top floor is the best', maps_url: 'https://maps.google.com/?q=Itoya+Ginza' },
+      { id: 'ib_d3', share_id: 'sh_demo1', trip_id: 'tr_demo1', kind: 'link', status: 'new', title: 'Make your own wagashi: a sweets class (sample)', website: 'https://example.com/wagashi-class', note: 'A two-hour class in a family-run shop.' },
+      { id: 'ib_d4', share_id: 'sh_demo1', trip_id: 'tr_demo1', kind: 'ask', status: 'asked', item_id: 'i3', title: 'Somewhere to buy nice paper and pens?' },
+    ],
     artifacts: [
       { id: 'ar_demo1', log_id: 'rl1', trip_id: 'tr_demo3', kind: 'photo', file_id: 'demo', mime: 'image/jpeg', seq: '0' },
       { id: 'ar_demo2', log_id: 'rl4', trip_id: 'tr_demo3', kind: 'souvenir', title: 'a Sibelius 5 programme', seq: '0' },
@@ -4522,6 +4742,12 @@ function demoApi(action, p) {
     } else if (action === 'updateItem') { const it = itemById(p.id); if (it) { delete it._pending; delete it._link; } resolve(it); }
     else if (action === 'updateLog') resolve(db.log.find(x => x.id === p.id));
     else if (action === 'addTrip') resolve(p.trip);
+    else if (action === 'addChapter') resolve(p.chapter);
+    else if (action === 'updateChapter') resolve(db.chapters.find(c => c.id === p.id));
+    else if (action === 'addShare') resolve(p.share);
+    else if (action === 'revokeShare') resolve(shareById(p.id));
+    else if (action === 'keepInbox') resolve({ item: itemById(p.item_id), inbox: db.inbox.find(b => b.id === p.id) });
+    else if (action === 'dismissInbox') resolve(db.inbox.find(b => b.id === p.id));
     else if (action === 'updateTrip') resolve(tripById(p.id));
     else if (action === 'attach') resolve(db.items.filter(i => p.ids.includes(i.id)));
     else if (action === 'routes') resolve(p.legs.map(() => null));

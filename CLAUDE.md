@@ -6,6 +6,7 @@ Read this before changing anything. Keep it current when the structure changes.
 ## Architecture
 
 - `index.html` — the entire app (vanilla JS, no build step). Leaflet 1.9.4 from cdnjs for maps, OpenStreetMap tiles (CARTO now needs a key — don't switch back).
+- `review.html` — the review page someone opens from a chapter's review link (separate file, own sea-glass look, Figtree; see "Chapters and review links").
 - `sw.js` — service worker: app shell network-first, assets cache-first, OSM tiles cached as viewed (offline maps). Bump `CACHE` when shell files change.
 - `apps-script/Code.gs` — Google Apps Script backend bound to the Sheet, deployed as a web app (Execute as me, Anyone). The app POSTs `{action, token, ...}` as text/plain JSON; the Shortcut uses GET params. Script Properties: `TOKEN` (passphrase), `PLACES_KEY` (Google key: Places API (New) + Routes API).
 - Writes are optimistic: applied locally, queued in an outbox (localStorage), flushed to the script. Deletes go through `undoable()` (6 s undo; Undo puts back only the rows that delete removed or changed, never a whole snapshot — a snapshot once brought back a stop already deleted in the Sheet).
@@ -21,6 +22,10 @@ Read this before changing anything. Keep it current when the structure changes.
 - **Items**: id, trip_id ('' = Someday), kind (fixed | place | idea), category, title, city, region, country, address, lat, lng, place_id, maps_url, hours (JSON), website, day, start_time, end_time, confirmation, status (open | done | skipped), source, notes, created, updated, end_day, parent_id (tour stop → its tour), seq (order within a day / tour), priority (must | want | maybe), from_code, to_code, from_name, to_name, from_lat, from_lng, to_lat, to_lng, types (comma list)
 - **Log**: id, trip_id, item_id, place_id, title, lat, lng, logged_at, timezone, origin (planned | found), note, would_return (legacy), cost, currency, photo_url, created, parent_id, day, seq, time, mode (walk | transit | train | car | tour | bike), address, city, maps_url, updated, rating (loved | liked | meh), category, here_lat, here_lng (where the phone was when logged; shortcut + in-app I'm here)
 - **Routes**: key, polyline, duration, distance, created
+- **Chapters**: id, trip_id, name, start, end, radius_km
+- **Shares**: id, token, trip_id, chapter_id, who, created, revoked
+- **Reactions**: id, share_id, item_id, answer (plan | nearby | pass | later), created, updated
+- **Inbox**: id, share_id, trip_id, kind (place | link | ask), text, title, note, category, city, address, lat, lng, place_id, maps_url, website, image, types, hours, status (new | boost | kept | dismissed | asked), item_id, created, updated
 - **Plan**: unused (legacy)
 
 **Reading the Sheet cheaply** (usage matters — Tyler is on Pro): the `hours` column is ~2 KB per row and dominates the Sheet. Never read whole tabs. Read only the columns needed, e.g. Items `A:H` + `P:V` + `Y:AB` (id…address, day…notes, end_day…priority) — check the header row first since columns can shift.
@@ -96,6 +101,16 @@ Sample mode runs fully offline. Test with Playwright at 390×844 @2x: route `cdn
   - Carousel: Map (no credits) → each trip's own poster (its saved prefs, this look/size, cut to the dates) → Calendar, Sheet (off by default) → Numbers with credits. Slides can be unticked (`p.skip`). Images are made ahead (`queueBlobs`) so iOS still sees the tap when the share sheet opens with several files (`shareFiles`).
 - Credits (`RANGE_CREDITS`, `rangeCredits`): Longest trip, Furthest from home, Loved the most, Most time in, Went back to (across trips: "on two trips"), Favorite discovery (pickable), Most often, First and last; off by default: Fullest day, Latest night.
 - Sample mode has a logged past trip (Reykjavík, with flights) and a planned future one (Chicago) for this.
+
+## Chapters and review links (built Oct 2026)
+
+- **Chapter** = a stretch of a trip: dates + "places within N km (default 25) of where you stay". A lens only; items never move. Membership (`inChapter`, same rule in the app and `Code.gs`): dated items by date overlap; children follow their parent; undated places by distance to the chapter's stays (stays with a *night* inside the chapter: checking in on the last day is the next leg, `chapterStays`); no coords → city match; undated ideas with no place → in. Trip header shows chapter chips (`chapterRow`); picking one narrows Days, Saved and Map (`scopedTop`, `scopedDays`, `ui.chapter` in localStorage `th_chapter`). Edit · Share opens `openChapter`.
+- **Review link** (Shares): `review.html#s=<token>&u=<script url>`, made in the chapter sheet (Send link uses the share sheet, Preview opens it, Turn off sets `revoked`). The token is 18 random chars made on the phone. Deleting a chapter turns its links off.
+- **Script door**: a request with `share` (not `token`) only reaches `REVIEW_ACTIONS` (`review`, `react`, `suggest`); everything else answers "Not available from a review link". A revoked/unknown token → `{gone:true}`. `review` sends only the chapter's items, with `note` = Claude's words only (`sharedNote`: a `claude` suggestion's first paragraph, or the `Claude:` paragraph of an idea); Tyler's own notes and confirmation numbers never go out. Claude's suggestions under Tyler's ideas stay his until kept; under *their* asks they're shared.
+- **What they can do** (never edits or deletes a row of yours): `react` upserts one Reactions row per person per item; `suggest` with no link → an idea on the trip with `status: ask` and `source: from:<who>` (the "check my asks" skill answers these like any ask; keep the source as is) + an Inbox row (`asked`); a Maps link matching a saved place (place_id, or < 40 m with the same first letters) → Inbox `boost` with `item_id`, no new item; any other Maps place → Inbox `new`; any other link → Inbox `new` with an Open Graph preview (`linkPreview`). Ids are made on their phone (`ib_…`) so a resend is a no-op.
+- **Tyler's side**: badges on cards (`theirTake`: "Susanna: plan it / if nearby / pass", "+1 Susanna", "From Susanna"), a "From <who>" inbox on Saved (`inboxBlock`, Keep → `keepInbox` makes the item, ✕ → `dismissInbox`, undoable), a banner on Days and a count on the trip card.
+- **review.html**: Review = five cards at a time (`round` in localStorage), one answer each (Let's plan it / If we're nearby / Not for me; Not sure yet = `later`, comes back at the end), then "That's it for now" + Show N more. Add = Share a link / Ask or suggest an idea (text with no link in the link box is sent as an idea) + What you've added with statuses. Our plan = List (chapter days with bookings, check-in/out, tours, dated items) / Map (stays, yes, if-nearby, dated). Places open in Google Maps via `query_place_id`. Offline: answers and sends queue in localStorage and go when back online. Keys are per link (`rv_*_<token prefix>`). The link stays in the address so a home-screen icon keeps it (no manifest on purpose: iOS would drop the #). `review.html#demo` is a self-contained sample.
+- `sw.js` caches each page under its own name (it used to save every page as index.html).
 
 ## Original design notes for Ask Claude
 
