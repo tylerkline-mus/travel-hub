@@ -844,6 +844,8 @@ async function flush() {
         parked.push(op); outbox.shift(); saveLocal();
         toast('Photos and sounds are kept on your phone until the script is updated');
       }
+      // The Sheet was busy (another save or a Google lookup held it): keep the change and try again, never drop it
+      else if (e.server && /lock|timed? ?out|too many|try again|service|busy|exceeded/i.test(e.message)) { syncState = 'offline'; lastSyncError = 'Your Sheet was busy'; scheduleRetry(); break; }
       else if (e.server) { toast('Couldn’t save: ' + e.message); outbox.shift(); saveLocal(); }
       else { syncState = 'offline'; lastSyncError = e.detail || e.message; scheduleRetry(); break; }
     }

@@ -549,18 +549,19 @@ const ACTIONS = {
   resolve: function (p) { return resolveText(String(p.text || '')); },
 
   updateItem: function (p) {
+    const patch = parsePatch(p.patch);
+    // A pasted Maps link sets where this is (a tour's pickup, an event's venue) without renaming it.
+    // Looked up before taking the Sheet's lock, so other saves don't wait on Google.
+    if (patch._link) {
+      const r = resolveText(String(patch._link));
+      LOCATION_FIELDS.forEach(function (k) { if (r[k] != null && r[k] !== '') patch[k] = r[k]; });
+      if (!r.place_id && r.maps_url) patch.maps_url = r.maps_url;
+    }
+    delete patch._link;
     return withLock(function () {
-      const patch = parsePatch(p.patch);
       patch.updated = new Date().toISOString();
       const cur = findRow('Items', p.id);
       if (cur && ('from_code' in patch || 'to_code' in patch)) fillAirports(Object.assign({}, cur.obj, patch), patch, cur.obj);
-      // A pasted Maps link sets where this is (a tour's pickup, an event's venue) without renaming it
-      if (patch._link) {
-        const r = resolveText(String(patch._link));
-        LOCATION_FIELDS.forEach(function (k) { if (r[k] != null && r[k] !== '') patch[k] = r[k]; });
-        if (!r.place_id && r.maps_url) patch.maps_url = r.maps_url;
-      }
-      delete patch._link;
       return updateRow('Items', p.id, patch);
     });
   },
@@ -628,11 +629,13 @@ const ACTIONS = {
 
   /** Re-run the Google lookup for an item (e.g. to refresh hours). */
   refreshItem: function (p) {
+    // Ask Google first, without holding the Sheet: a lookup takes seconds, and other saves shouldn't wait on it
+    const row = findRow('Items', p.id);
+    if (!row) throw new Error('Not found: ' + p.id);
+    const src = row.obj.maps_url || row.obj.source || row.obj.title;
+    const r = resolveText(src);
     return withLock(function () {
-      const row = findRow('Items', p.id);
-      if (!row) throw new Error('Not found: ' + p.id);
-      const src = row.obj.maps_url || row.obj.source || row.obj.title;
-      const r = resolveText(src);
+      if (!findRow('Items', p.id)) throw new Error('Not found: ' + p.id);
       const patch = { updated: new Date().toISOString() };
       LOCATION_FIELDS.forEach(function (k) { if (r[k] != null && r[k] !== '') patch[k] = r[k]; });
       return updateRow('Items', p.id, patch);
