@@ -164,6 +164,10 @@ main { padding: 6px 16px 24px; max-width: 720px; margin: 0 auto; }
 .log-head .s { font-size: 13px; color: var(--muted); }
 .log-actions { display: flex; gap: 10px; margin: 12px 0 6px; }
 .log-actions .btn { flex: 1; }
+.wander-row { display: flex; align-items: center; gap: 10px; margin: 4px 0; padding: 8px 14px; border: 1px dashed var(--line); border-radius: 12px;
+  color: var(--muted); font-size: 14px; cursor: pointer; }
+.wander-row .squig { font-size: 18px; line-height: 1; color: var(--found); }
+.wander-row .moves { margin-left: auto; }
 .entry { display: flex; gap: 12px; align-items: flex-start; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; cursor: pointer; }
 .entry .body { flex: 1; min-width: 0; }
 .badge { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; margin-right: 6px; vertical-align: 1px; }
@@ -453,6 +457,18 @@ const addDays = (s, n) => { const d = parseDate(s); d.setDate(d.getDate() + n); 
 const num = v => (v === '' || v == null || isNaN(+v)) ? null : +v;
 const hasCoords = o => num(o.lat) !== null && num(o.lng) !== null;
 const seqOf = o => (o.seq === '' || o.seq == null) ? 9999 : +o.seq;
+/* "Out wandering": a log entry with no place, only a time. It ends the stop before it, and the poster draws the stretch
+   after it as a loose wander instead of a straight walk. Saved as an ordinary log row (category Wandering), so no script change. */
+const WANDER_CAT = 'Wandering';
+const isWander = l => l && l.category === WANDER_CAT && !(l.lat !== '' && l.lat != null && !isNaN(+l.lat));
+/** How long a stop can believably have lasted, by what kind of place it is. A longer gap to the next logged stop means you were out and about. */
+function lingerCap(cat) {
+  const c = String(cat || '').toLowerCase();
+  if (/bakery|hot dog|snack|ice cream|convenience|supermarket|grocery|kiosk|pharmacy|gift|store|shop|market/.test(c)) return 45;
+  if (/museum|gallery|church|cathedral|park|pool|bath|lagoon|spa|beach|garden|hiking|landmark|aquarium|zoo/.test(c)) return 180;
+  if (/restaurant|bistro|food court|diner/.test(c)) return 150;
+  return 120;   // cafés, bars, everything else
+}
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -1005,7 +1021,7 @@ function tripsView() {
     const st = tripStatus(t);
     const its = topItemsFor(t.id);
     const n = k => its.filter(i => i.kind === k).length;
-    const logged = db.log.filter(l => l.trip_id === t.id).length;
+    const logged = db.log.filter(l => l.trip_id === t.id && !isWander(l)).length;
     return `<div class="trip-card" style="--hue:${hue(t.id)}" data-go="#/trip/${encodeURIComponent(t.id)}">
       <h2>${esc(t.name)}</h2>
       ${t.destination ? `<div class="dest">${esc(t.destination)}</div>` : ''}
@@ -1115,7 +1131,7 @@ function dayCard(t, d, idx, today) {
   const night = stayForNight(t.id, d);
   const key = 'day:' + d;
   const reorder = ui.reorder === key;
-  const logged = logsFor(t.id, d).length;
+  const logged = logsFor(t.id, d).filter(l => !isWander(l)).length;
   return `<section class="day ${d === today ? 'today' : ''}" id="day-${d}">
     <div class="day-h"><div><div class="d">${esc(fmtDay(d))}</div><div class="n">${dayLabel(t, d)}${d === today ? ' · Today' : ''}${logged ? ` · ${logged} logged` : ''}</div></div><span class="sp"></span>
       <button class="linkbtn" data-mapday="${d}">Map</button>${logged || d <= today ? `<button class="linkbtn" data-logday="${d}">Log</button>` : ''}</div>
@@ -1331,16 +1347,22 @@ function logContent(t) {
   const d = currentLogDay(t);
   const idx = tripDays(t).indexOf(d);
   const tops = topLogs(t.id, d);
-  const all = logsFor(t.id, d);
+  const all = logsFor(t.id, d).filter(l => !isWander(l));
   const found = all.filter(l => l.origin === 'found').length;
   const toReview = plannedStops(t.id, d).filter(s => s.status !== 'done' && s.status !== 'skipped').length;
   const key = 'log:' + d;
   const reorder = ui.reorder === key;
 
   const chips = days.length ? `<div class="filters">${days.map(x => `<button class="${x === d ? 'on' : ''} ${logsFor(t.id, x).length ? 'has' : ''}" data-logday="${x}">${esc(fmtShortDay(x))}</button>`).join('')}</div>` : '';
-  let list = '';
+  let list = '', n = 0;
   tops.forEach((l, k) => {
-    if (k > 0) list += `<div class="leg"><button data-mode="${esc(l.id)}">${esc(MODE_LABEL[l.mode] || 'How did you get here?')}</button></div>`;
+    if (isWander(l)) {
+      list += `<div class="wander-row ${l._pending ? 'pending' : ''}" data-log="${esc(l.id)}"><span class="squig" aria-hidden="true">〰</span><span>Out wandering${l.time ? ' · from ' + esc(fmtTime(l.time)) : ''}</span>
+        ${reorder ? `<div class="moves"><button data-move="up" data-list="${key}" data-id="${esc(l.id)}" ${k === 0 ? 'disabled' : ''}>↑</button><button data-move="down" data-list="${key}" data-id="${esc(l.id)}" ${k === tops.length - 1 ? 'disabled' : ''}>↓</button></div>` : ''}</div>`;
+      return;
+    }
+    n++;
+    if (n > 1 && !isWander(tops[k - 1])) list += `<div class="leg"><button data-mode="${esc(l.id)}">${esc(MODE_LABEL[l.mode] || 'How did you get here?')}</button></div>`;
     const kids = logKids(l.id);
     const kept = artifactsOf(l.id), ph = kept.find(a => a.kind === 'photo');
     const nSnd = kept.filter(a => a.kind === 'sound').length, nSouv = kept.filter(a => a.kind === 'souvenir').length;
@@ -1349,7 +1371,7 @@ function logContent(t) {
     const meta = [l.time ? fmtTime(l.time) : '', keptLine, l.city, l.note].filter(Boolean).join(' · ');
     const rb = rateBadge(l);
     list += `<div class="entry ${l._pending ? 'pending' : ''}" data-log="${esc(l.id)}">
-      <span class="num" style="--c:${l.origin === 'found' ? 'var(--found)' : 'var(--place)'}">${k + 1}</span>
+      <span class="num" style="--c:${l.origin === 'found' ? 'var(--found)' : 'var(--place)'}">${n}</span>
       <div class="body"><div class="title">${esc(l.title)}</div>
         <div class="meta">${l.origin ? `<span class="badge ${esc(l.origin)}">${l.origin === 'found' ? 'Found' : 'Planned'}</span>` : ''}${rb}${esc(meta)}</div>
         ${kids.length ? `<ul class="kids">${kids.map((c, j) => `<li data-log="${esc(c.id)}"><span class="num" style="--c:var(--tour)">${j + 1}</span>${esc(c.title)}</li>`).join('')}</ul>` : ''}
@@ -1364,8 +1386,9 @@ function logContent(t) {
     <div class="log-head"><div class="d">${esc(fmtDay(d))}</div><div class="s">${dayLabel(t, d)} · ${all.length} stop${all.length === 1 ? '' : 's'}${found ? ` · ${found} found` : ''}</div></div>
     <div class="log-actions">
       <button class="btn" data-act="here">I’m here</button>
-      <button class="btn ghost" data-act="review">Review plan${toReview ? ` (${toReview})` : ''}</button>
+      <button class="btn ghost" data-act="wander">Out wandering</button>
     </div>
+    <div style="text-align:center;margin:-2px 0 6px"><button class="linkbtn" data-act="review">Review plan${toReview ? ` (${toReview})` : ''}</button></div>
     ${list}
     <div style="display:flex;gap:6px;justify-content:center;margin-top:10px">
       ${tops.length > 1 ? `<button class="linkbtn" data-reorder="${key}">${reorder ? 'Done reordering' : 'Reorder'}</button>` : ''}
@@ -1427,12 +1450,22 @@ function recapData(t, frame) {
     if (home && hasCoords(home)) allPts.push(pt(home));
     let seq = [];
     if (lived) {
-      seq = flatLogs(t.id, d).filter(hasCoords).map(l => {
+      // a wander ends the stop before it (wanderAt) and makes the leg after it a wander (wandered)
+      let prev = null, pendW = null;
+      flatLogs(t.id, d).forEach(l => {
+        if (isWander(l)) {
+          if (prev && !prev.wanderAt) prev.wanderAt = l.time || '';
+          pendW = pendW || l;
+          return;
+        }
+        if (!hasCoords(l)) return;
         const it = l.item_id ? itemById(l.item_id) : null;
-        return pt(l, { mode: l.parent_id ? 'tour' : l.mode, tour: !!l.parent_id, mark: l.rating === 'loved', found: l.origin === 'found', wasMaybe: !!(it && it.priority === 'maybe'),
+        const s = pt(l, { mode: l.parent_id ? 'tour' : l.mode, tour: !!l.parent_id, mark: l.rating === 'loved', found: l.origin === 'found', wasMaybe: !!(it && it.priority === 'maybe'),
           wasMust: !!(it && it.priority === 'must'), meh: l.rating === 'meh', note: l.note || '', time: l.time || '', top: !l.parent_id, id: l.id,
           city: l.city || (it && it.city) || '', region: (it && it.region) || '', country: (it && it.country) || '',
-          category: l.category || (it && it.category) || '', key: l.item_id || l.place_id || `${l.title}|${(+l.lat).toFixed(3)},${(+l.lng).toFixed(3)}` });
+          category: l.category || (it && it.category) || '', key: l.item_id || l.place_id || `${l.title}|${(+l.lat).toFixed(3)},${(+l.lng).toFixed(3)}`,
+          wandered: !!pendW, wanderFrom: pendW ? pendW.time || '' : '' });
+        pendW = null; seq.push(s); prev = s;
       });
     } else {
       fixedEvents(t.id, d).forEach(e => {
@@ -1468,9 +1501,11 @@ function recapData(t, frame) {
     else m = meters(a, b) * 1.2;
     moved += m; if (mode === 'walk') walked += m;
   }));
+  let wandered = 0;
+  stops.forEach(s => { if (s.wandered && s.wanderFrom && s.time) { const m = minsOf(s.time) - minsOf(s.wanderFrom); if (m > 0 && m < 12 * 60) wandered += m; } });
   const busiest = perDay.reduce((x, y) => (y.n > (x ? x.n : 0) ? y : x), null);
   const inDays = perDay.filter(x => x.in).map(x => x.day);
-  return { lived, days, tracks, stops, homes: [...homes.values()], unvisited, perDay, walked, moved, busiest, allPts, sliced: !ft.all,
+  return { lived, days, tracks, stops, homes: [...homes.values()], unvisited, perDay, walked, moved, busiest, allPts, sliced: !ft.all, wandered,
     from: inDays[0], to: inDays[inDays.length - 1],
     found: stops.filter(s => s.found).length, marked: stops.filter(s => s.mark),
     maybeLoved: stops.filter(s => s.mark && s.wasMaybe && lived) };
@@ -1538,7 +1573,7 @@ const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 /* ---- Credits: names, not numbers. Each one is only offered when the data behind it is solid. ---- */
 const CREDITS = [
   ['fav', 'Favorite discovery', true], ['back', 'Went back to', true], ['often', 'Most often', true],
-  ['ends', 'First and last', true], ['linger', 'Lingered longest', true], ['offscript', 'Off script', true],
+  ['ends', 'First and last', true], ['linger', 'Lingered longest', true], ['wander', 'Wandered', true], ['offscript', 'Off script', true],
   ['walk', 'Longest walk', true], ['hood', 'Home away from home', true], ['brought', 'Brought home', true],
   ['early', 'Earliest morning', false], ['late', 'Latest night', false], ['letdown', 'Didn’t live up to it', false],
 ];
@@ -1578,15 +1613,21 @@ function recapCredits(t, data, prefs, extras) {
     if (top && top[1] > 1) out.often = { value: `${pluralCat(top[0])}, ${top[1]}` };
     // First and last
     if (tops.length > 1) out.ends = { value: `${tops[0].title} → ${tops[tops.length - 1].title}` };
-    // Lingered longest: the gap between two live-logged times on the same day
+    // Lingered longest: from a stop to the next logged thing, ended early by "Out wandering". Without a wander,
+    // a gap longer than the place could believably hold you (lingerCap) means you were out and about, so it doesn't count.
+    // Where you slept doesn't count either.
     let best = null;
     data.days.forEach(d => {
       const timed = tops.filter(s => s.day === d && s.time);
       timed.forEach((s, k) => { const n = timed[k + 1]; if (!n) return;
-        const gap = minsOf(n.time) - minsOf(s.time);
-        if (gap > 20 && gap < 8 * 60 && (!best || gap > best.gap)) best = { gap, s }; });
+        if (/^(stay|hotel|lodging|hostel|airbnb)$/i.test(s.category || '')) return;
+        const explicit = !!s.wanderAt;
+        const gap = (explicit ? minsOf(s.wanderAt) : minsOf(n.time)) - minsOf(s.time);
+        if (gap > 20 && gap <= (explicit ? 8 * 60 : lingerCap(s.category)) && (!best || gap > best.gap)) best = { gap, s }; });
     });
     if (best) out.linger = { value: `${best.s.title}, ${fmtSpan(best.gap)}` };
+    // Wandered: time between stops you chose not to log anywhere
+    if (data.wandered >= 45) out.wander = { value: `${fmtSpan(data.wandered)}, off the map` };
     // Off script: the day with the most unplanned stops
     const off = data.days.map(d => ({ d, n: S.filter(s => s.day === d && s.found).length })).sort((a, b) => b.n - a.n)[0];
     if (off && off.n > 1) out.offscript = { value: `${dayName(off.d)}, ${numWord(off.n)} unplanned stops` };
@@ -2081,6 +2122,7 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
       if (!k) return;
       const a = tr.pts[k - 1];
       const mode = b.mode || guessMode(a, b);
+      if (b.wandered) return wanderLeg(ctx, P(a), P(b), lw, ti * 13 + k);
       const pl = routeCache[routeKey({ from: [a.lat, a.lng], to: [b.lat, b.lng], mode })];
       ctx.setLineDash(mode === 'tour' || mode === 'car' ? [1, lw * 3.2] : mode === 'train' || mode === 'transit' ? [lw * 4, lw * 2.4] : []);
       ctx.globalAlpha = .9;
@@ -2369,7 +2411,7 @@ function initRecap(tripId) {
   const legs = [];
   data.tracks.forEach(tr => tr.pts.forEach((b, k) => { if (!k) return; const a = tr.pts[k - 1];
     const leg = { from: [a.lat, a.lng], to: [b.lat, b.lng], mode: b.mode || guessMode(a, b) };
-    if (!routeCache[routeKey(leg)] && leg.mode !== 'train' && leg.mode !== 'tour' && meters(a, b) < 30000) legs.push(leg); }));
+    if (!b.wandered && !routeCache[routeKey(leg)] && leg.mode !== 'train' && leg.mode !== 'tour' && meters(a, b) < 30000) legs.push(leg); }));
   if (legs.length) getRoutes(legs.slice(0, 120)).then(() => { if ($('#poster') === canvas) { data = recapData(t, p.frame); redraw(); } });
 
   const sh = $('#rc-shade'); if (sh) sh.onchange = () => { p.shade = sh.checked; savePosterPrefs(t.id, p); redraw(); };
@@ -2623,11 +2665,24 @@ function drawWorldShifted(ctx, B, rect, world, L, lwBase = 1, shade = true) {
   ctx.setLineDash([]); ctx.restore();
 }
 /** A trip's day-by-day lines: the real path where cached, otherwise a gentle bow. */
+/** A loose, dotted meander from A to B: time spent wandering, not a route. Seeded so it's the same every redraw. */
+function wanderLeg(ctx, A, B, lw, seed) {
+  const dx = B.x - A.x, dy = B.y - A.y, len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len;
+  const amp = Math.min(len * 0.16, 46), waves = Math.max(1.5, Math.min(4, len / 90)), ph = (seed % 7) * 0.9;
+  ctx.setLineDash([1, lw * 2.6]); ctx.globalAlpha = .55; ctx.beginPath();
+  for (let j = 0; j <= 48; j++) {
+    const u = j / 48, env = Math.sin(Math.PI * u), off = Math.sin(u * Math.PI * 2 * waves + ph) * amp * env;
+    const x = A.x + dx * u + nx * off, y = A.y + dy * u + ny * off;
+    j ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.stroke(); ctx.globalAlpha = .9;
+}
 function drawTracks(ctx, tracks, P, L, lw, real) {
   ctx.strokeStyle = L.ink; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   tracks.forEach((tr, ti) => tr.pts.forEach((b, k) => {
     if (!k) return;
     const a = tr.pts[k - 1], mode = b.mode || guessMode(a, b);
+    if (b.wandered) return wanderLeg(ctx, P(a), P(b), lw, ti * 13 + k);
     const pl = real ? routeCache[routeKey({ from: [a.lat, a.lng], to: [b.lat, b.lng], mode })] : null;
     ctx.setLineDash(mode === 'tour' || mode === 'car' ? [1, lw * 3.2] : mode === 'train' || mode === 'transit' ? [lw * 4, lw * 2.4] : []);
     ctx.globalAlpha = .9; ctx.beginPath();
@@ -3522,6 +3577,7 @@ function bindCommon() {
     else if (a === 'pullSomeday') openPull(el.dataset.id);
     else if (a === 'here') openHere(r.id, currentLogDay(tripById(r.id)));
     else if (a === 'review') openReview(r.id, currentLogDay(tripById(r.id)));
+    else if (a === 'wander') logWander(tripById(r.id), currentLogDay(tripById(r.id)));
     else if (a === 'refreshAll') refreshAll(r.id, el);
   });
 }
@@ -4313,8 +4369,47 @@ function swapLogPlace(l, { item, place }) {
   closeSheet(); toast('Changed to ' + patch.title);
 }
 
+/** One tap: "I've left, I'm just wandering." On a past day it asks for the time instead. */
+function logWander(t, d) {
+  const now = tzNow(t.timezone), today = d === now.day;
+  if (!today) return openWander(null, t, d);
+  const tops = topLogs(t.id, d);
+  if (tops.length && isWander(tops[tops.length - 1])) { toast('Already wandering since ' + fmtTime(tops[tops.length - 1].time)); return; }
+  saveWander(t, d, now.time, true);
+  toast('Out wandering from ' + fmtTime(now.time) + '. Tap I’m here when you stop somewhere.');
+}
+function saveWander(t, d, time, live) {
+  const tops = topLogs(t.id, d);
+  // live: after everything logged so far. Backfilled: after the last stop logged before this time.
+  const before = tops.filter(x => x.time && x.time <= time);
+  const seq = !tops.length ? 0 : live ? Math.max(...tops.map(seqOf).filter(x => x < 9999), -1) + 1 : before.length ? seqOf(before[before.length - 1]) + 0.5 : tops.some(x => x.time) ? seqOf(tops[0]) - 0.5 : seqOf(tops[tops.length - 1]) + 1;
+  const l = { id: uid('lg'), trip_id: t.id, day: d, seq: String(seq), time, title: 'Out wandering', category: WANDER_CAT, origin: 'found',
+              lat: '', lng: '', logged_at: new Date().toISOString(), timezone: t.timezone || '', _pending: true };
+  queue('addLog', { id: l.id, trip: t.id, day: d, seq: l.seq, time, title: l.title, category: WANDER_CAT, logged_at: l.logged_at, timezone: l.timezone },
+    () => db.log.push(l));
+}
+function openWander(l, t, d) {
+  openSheet(`
+    <h3>Out wandering</h3>
+    <p class="hint" style="margin-top:-4px">Time between stops that you didn’t log anywhere. Nothing about where you were is kept. It ends the stop before it, and on the poster it’s drawn as a loose wander.</p>
+    <div class="field"><label>From</label><input type="time" id="w-time" value="${esc(l ? l.time : tzNow(t.timezone).time)}"></div>
+    <div class="btnrow">${l ? `<button class="btn danger" id="w-del">Remove</button>` : ''}<button class="btn" id="w-save">${l ? 'Save' : 'Add'}</button></div>
+  `, sh => {
+    $('#w-save', sh).onclick = () => {
+      const time = $('#w-time', sh).value;
+      if (!time) { $('#w-time', sh).focus(); return; }
+      if (l) queue('updateLog', { id: l.id, patch: { time } }, () => { l.time = time; });
+      else saveWander(t, d, time);
+      closeSheet();
+    };
+    const del = $('#w-del', sh);
+    if (del) del.onclick = () => { closeSheet(); undoable('Removed the wander', () => { db.log = db.log.filter(x => x.id !== l.id); }, () => queue('deleteLog', { id: l.id })); };
+  });
+}
+
 function openLogEntry(id) {
   const l = db.log.find(x => x.id === id); if (!l) return;
+  if (isWander(l)) return openWander(l, tripById(l.trip_id), l.day);
   const t = tripById(l.trip_id);
   const item = l.item_id ? itemById(l.item_id) : null;
   openSheet(`
@@ -4729,6 +4824,8 @@ function demoData() {
         [d(-147), 'Grótta Lighthouse', 64.1647, -22.0222, { rating: 'loved', origin: 'found', mode: 'walk', category: 'Lighthouse', time: '16:20' }],
         [d(-147), 'Bæjarins Beztu Pylsur', 64.1482, -21.9406, { origin: 'found', mode: 'walk', category: 'Hot dog stand', time: '19:00' }],
       ].map(([day, title, lat, lng, o], k) => Object.assign({ id: 'rl' + k, trip_id: 'tr_demo3', day, seq: String(k), title, lat, lng, city: 'Reykjavík' }, o)),
+      // an afternoon wandered without logging anything: ends the hot dog stop, drawn as a loose line to the pool
+      { id: 'rlw', trip_id: 'tr_demo3', day: d(-150), seq: '1.5', time: '13:40', title: 'Out wandering', category: 'Wandering', origin: 'found', lat: '', lng: '' },
     ],
     chapters: [{ id: 'ch_demo1', trip_id: 'tr_demo1', name: 'Tokyo together', start: d(-1), end: d(3), radius_km: '25' }],
     shares: [{ id: 'sh_demo1', token: 'demo-token-not-real', trip_id: 'tr_demo1', chapter_id: 'ch_demo1', who: 'Susanna', revoked: '' }],

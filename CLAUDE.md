@@ -61,6 +61,13 @@ Sample mode runs fully offline. Test with Playwright at 390×844 @2x: route `cdn
 
 - **Not here?** (Oct 2026): a top-level stop's sheet has "Not here? Pick the right place" (`pickRightPlace` / `swapLogPlace`): saved trip places within 150 m, then the script's `nearby` around `here_lat/here_lng` (else the stop's own coords; 60 → 150 → 400 m until ≥5). Picking rewrites the stop's place fields via `updateLog` (saved place → `item_id`, origin planned, item done; the old planned item goes back to open if nothing else logs it). Exists because indoor GPS is off by 20–50 m and strip-mall storefronts are ~10 m apart.
 
+## Out wandering (built Oct 2026, on the trip)
+
+- Why: Tyler doesn't log pharmacy runs or aimless walks, so the gap after a stop read as hours *at* that stop (Lingered longest) and the poster drew a straight walk; he'd been logging "back at the hotel" as a reset.
+- **Out wandering** button beside I'm here (`logWander`; on a past day it opens `openWander` to type the time). Saved as a normal Log row: `category: 'Wandering'`, title "Out wandering", no lat/lng, so no script change (`isWander`). Live: seq = after everything logged; backfilled: after the last stop before that time (fractional seq). Shown in the Log as a dashed row (not numbered, no leg button); tap to change the time or remove. Excluded from stop counts.
+- Poster (`recapData`): a wander ends the stop before it (`wanderAt`) and marks the next leg `wandered`, drawn by `wanderLeg` as a loose dotted meander (no Routes lookup for it). `data.wandered` = minutes from each wander to the next timed stop.
+- **Lingered longest** now: ends at a wander if there is one (up to 8 h); otherwise only counts if the gap fits the place (`lingerCap`: 45 min shops/bakeries/hot dogs, 2 h cafés/bars, 2½ h restaurants, 3 h museums/pools/churches/parks). Stays never count. New credit **Wandered** (on by default, from 45 min): "about 3½ hours, off the map".
+
 ## Daylight (built Oct 2026)
 
 - Each day card in Days shows sunrise, sunset and hours of daylight (+ change vs yesterday) under its heading (`daylightRow`). Computed on the phone (`sunTimes`, sunrise equation with −0.833° refraction; checked against Louisville, Tokyo — within ~1–2 min), so it works offline. Place = where you wake up (`stayForMorning`), else tonight's stay, else the day's first planned stop with coords (`dayPlace`); no place → no row. Times in the trip's timezone (`clockIn`). Polar night/day handled.
