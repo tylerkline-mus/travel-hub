@@ -68,6 +68,11 @@ Sample mode runs fully offline. Test with Playwright at 390×844 @2x: route `cdn
 - Poster (`recapData`): a wander ends the stop before it (`wanderAt`) and marks the next leg `wandered`, drawn by `wanderLeg` as a loose dotted meander (no Routes lookup for it). `data.wandered` = minutes from each wander to the next timed stop.
 - **Lingered longest** now: ends at a wander if there is one (up to 8 h); otherwise only counts if the gap fits the place (`lingerCap`: 45 min shops/bakeries/hot dogs, 2 h cafés/bars, 2½ h restaurants, 3 h museums/pools/churches/parks). Stays never count. New credit **Wandered** (on by default, from 45 min): "about 3½ hours, off the map".
 
+## Adding a stop after the fact (Oct 2026, on the trip)
+
+- I'm here on today has a **I'm here now / Earlier today** switch (`earlier`). Earlier: hides the location bits (`#h-live`: where you are, Around you, Just this spot), clears the auto-pick, and needs a time. Saving ignores the phone's current position (`pos = earlier ? null : livePos`), so a typed name isn't pinned where you're standing and `here_lat` stays empty. On a past day the sheet is already in this mode (time optional there).
+- Order: a stop with a time added after the fact goes after the latest-timed stop before it (`seqForTime`, midpoint seq, so seqs can be fractional strings like "1.5"; Reorder renumbers). Live stops and live wanders go after everything (max seq + 1), not at `tops.length`, so fractional seqs never collide.
+
 ## Daylight (built Oct 2026)
 
 - Each day card in Days shows sunrise, sunset and hours of daylight (+ change vs yesterday) under its heading (`daylightRow`). Computed on the phone (`sunTimes`, sunrise equation with −0.833° refraction; checked against Louisville, Tokyo — within ~1–2 min), so it works offline. Place = where you wake up (`stayForMorning`), else tonight's stay, else the day's first planned stop with coords (`dayPlace`); no place → no row. Times in the trip's timezone (`clockIn`). Polar night/day handled.

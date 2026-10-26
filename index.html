@@ -462,6 +462,15 @@ const seqOf = o => (o.seq === '' || o.seq == null) ? 9999 : +o.seq;
 const WANDER_CAT = 'Wandering';
 const isWander = l => l && l.category === WANDER_CAT && !(l.lat !== '' && l.lat != null && !isNaN(+l.lat));
 /** How long a stop can believably have lasted, by what kind of place it is. A longer gap to the next logged stop means you were out and about. */
+/** The seq for a stop added later with a time: right after the latest-timed stop before it, before whatever followed. */
+function seqForTime(tops, time) {
+  const all = tops.map(seqOf).filter(x => x < 9999).sort((a, b) => a - b);
+  if (!all.length) return 0;
+  const before = tops.filter(x => x.time && x.time <= time && seqOf(x) < 9999).sort((a, b) => a.time.localeCompare(b.time) || seqOf(a) - seqOf(b));
+  if (!before.length) return all[0] - 1;
+  const lo = seqOf(before[before.length - 1]), hi = all.find(x => x > lo);
+  return hi === undefined ? lo + 1 : (lo + hi) / 2;
+}
 function lingerCap(cat) {
   const c = String(cat || '').toLowerCase();
   if (/bakery|hot dog|snack|ice cream|convenience|supermarket|grocery|kiosk|pharmacy|gift|store|shop|market/.test(c)) return 45;
@@ -4167,18 +4176,21 @@ function openHere(tripId, d) {
   const tours = topLogs(tripId, d).filter(l => { const it = l.item_id && itemById(l.item_id); return it && isTour(it); });
   const prev = topLogs(tripId, d).slice(-1)[0];
   let picked = null, pos = null, near = null, nearList = [], pin = null;
+  let livePos = null;
+  let earlier = !isToday;   // a stop you're adding after the fact: no "where you are now", and the time puts it in order
 
   const pickRow = i => `<div class="pick" data-pick="${esc(i.id)}"><span class="num ${i.kind === 'idea' ? 'hollow' : ''}" style="--c:${i.kind === 'fixed' ? 'var(--fixed)' : 'var(--place)'}">•</span><div class="body"><div class="title">${esc(i.title)}</div><div class="meta" data-dist="${esc(i.id)}">${esc(placeLine(i))}</div></div></div>`;
   openSheet(`
-    <h3>${isToday ? 'Where are you?' : 'Add a stop · ' + esc(fmtDay(d, false))}</h3>
+    <h3 id="h-title">${isToday ? 'Where are you?' : 'Add a stop · ' + esc(fmtDay(d, false))}</h3>
+    ${isToday ? `<div class="seg" id="h-when"><button class="on" data-w="now">I’m here now</button><button data-w="earlier">Earlier today</button></div>` : ''}
     ${dayPlan.length ? `<h4 style="margin-top:0">From the plan</h4><div id="h-plan">${dayPlan.map(pickRow).join('')}</div>` : ''}
     ${others.length ? `<details style="margin:6px 0 12px"><summary style="font-size:14px;color:var(--muted);cursor:pointer;padding:6px 2px">Other saved places (${others.length})</summary><div id="h-others" style="margin-top:8px">${others.map(pickRow).join('')}</div></details>` : ''}
-    ${navigator.geolocation && isToday ? `<div class="hint here-status" id="h-where">Finding you…</div><div id="h-around"></div><div id="h-pin"></div>` : ''}
+    ${navigator.geolocation && isToday ? `<div id="h-live"><div class="hint here-status" id="h-where">Finding you…</div><div id="h-around"></div><div id="h-pin"></div></div>` : ''}
     <h4>${dayPlan.length || others.length ? 'Or somewhere new' : 'Somewhere'}</h4>
     <div class="field"><textarea id="h-text" placeholder="Paste a Google Maps link, or type a name"></textarea></div>
     ${navigator.clipboard && navigator.clipboard.readText ? `<button class="linkbtn" id="h-paste" style="margin:-8px 0 10px">Paste a link</button>` : ''}
     <div class="two">
-      <div class="field"><label>Time (optional)</label><div class="inline"><input type="time" id="h-time"><button class="btn ghost small" id="h-now">Now</button></div></div>
+      <div class="field"><label id="h-time-label">${isToday ? 'Time (optional)' : 'Time'}</label><div class="inline"><input type="time" id="h-time"><button class="btn ghost small" id="h-now">Now</button></div></div>
       <div class="field"><label>Got here by</label><select id="h-mode">${MODES.map(([k, l]) => `<option value="${k}" ${k === (prev && prev.mode) ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     </div>
     ${tours.length ? `<div class="field"><label>Part of</label><select id="h-parent"><option value="">— (on my own)</option>${tours.map(l => `<option value="${esc(l.id)}">${esc(l.title)}</option>`).join('')}</select></div>` : ''}
@@ -4209,6 +4221,17 @@ function openHere(tripId, d) {
     bindPicks();
     ta.oninput = () => { if (ta.value.trim()) { picked = null; $$('[data-pick]', sh).forEach(x => x.classList.remove('on')); } };
     $('#h-now', sh).onclick = () => { $('#h-time', sh).value = tzNow(t.timezone).time; };
+    // Now / Earlier today
+    $$('[data-w]', sh).forEach(b => b.onclick = () => {
+      earlier = b.dataset.w === 'earlier';
+      $$('[data-w]', sh).forEach(x => x.classList.toggle('on', x === b));
+      const live = $('#h-live', sh); if (live) live.hidden = earlier;
+      $('#h-title', sh).textContent = earlier ? 'Add an earlier stop' : 'Where are you?';
+      $('#h-time-label', sh).textContent = earlier ? 'What time were you there?' : 'Time (optional)';
+      $('#h-now', sh).hidden = earlier;
+      clearPicks();   // what you're standing next to now isn't where you were then
+      if (earlier) { $('#h-time', sh).value = ''; $('#h-time', sh).focus(); }
+    });
     // Where am I? Ask once, then sort the list, preselect what you're standing at, and show what's around you.
     const clearPicks = () => { picked = null; near = null; pin = null; $$('[data-pick], [data-near], [data-pin]', sh).forEach(x => x.classList.remove('on')); };
     // "Just this spot": a pin where you're standing, named by its street (or neighbourhood). Rename it later from the Log.
@@ -4239,7 +4262,7 @@ function openHere(tripId, d) {
       });
     };
     if (where) navigator.geolocation.getCurrentPosition(p => {
-      pos = { lat: p.coords.latitude, lng: p.coords.longitude };
+      pos = livePos = { lat: p.coords.latitude, lng: p.coords.longitude };
       let best = null;
       ['#h-plan', '#h-others'].forEach(sel => {
         const box = $(sel, sh); if (!box) return;
@@ -4249,7 +4272,7 @@ function openHere(tripId, d) {
         const limit = sel === '#h-plan' ? 150 : 75;   // a planned stop can be a bit further off than a saved one
         if (rows[0] && rows[0].d < limit && (!best || rows[0].d < best.d)) best = { ...rows[0], sel };
       });
-      if (best && !picked && !near && !ta.value.trim()) {
+      if (best && !picked && !near && !ta.value.trim() && !earlier) {
         if (best.sel === '#h-others') { const det = $('details', sh); if (det) det.open = true; }
         best.el.click();
         where.textContent = `You’re at ${best.it.title}, by the look of it.`;
@@ -4281,10 +4304,15 @@ function openHere(tripId, d) {
       const parentSel = $('#h-parent', sh);
       const parent_id = parentSel ? parentSel.value : '';
       const it = picked ? itemById(picked) : null;
-      const seq = parent_id ? logKids(parent_id).length : topLogs(tripId, d).length;
-      const mode = $('#h-mode', sh).value;
-      // Logged on the spot? Then the time is real: fill it in unless you typed one.
       let time = $('#h-time', sh).value;
+      if (earlier && isToday && !time) { $('#h-time', sh).focus(); toast('Add the time you were there, so it lands in the right place'); return; }
+      const tops = topLogs(tripId, d);
+      const seq = parent_id ? logKids(parent_id).length
+        : time && earlier ? seqForTime(tops, time)
+        : tops.length ? Math.max(...tops.map(seqOf).filter(x => x < 9999), tops.length - 1) + 1 : 0;
+      const mode = $('#h-mode', sh).value;
+      const pos = earlier ? null : livePos;   // where you are now only counts if you're logging where you are now
+      // Logged on the spot? Then the time is real: fill it in unless you typed one.
       const spot = it && hasCoords(it) ? it : near ? near : pin ? pin : (!it && !isMapsUrl(text) ? pos : null);
       if (!time && isToday && pos && spot && meters(pos, spot) < 300) time = tzNow(t.timezone).time;
       const payload = { id: uid('lg'), trip: tripId, day: d, seq, time, mode: seq || parent_id ? mode : '',
@@ -4381,8 +4409,7 @@ function logWander(t, d) {
 function saveWander(t, d, time, live) {
   const tops = topLogs(t.id, d);
   // live: after everything logged so far. Backfilled: after the last stop logged before this time.
-  const before = tops.filter(x => x.time && x.time <= time);
-  const seq = !tops.length ? 0 : live ? Math.max(...tops.map(seqOf).filter(x => x < 9999), -1) + 1 : before.length ? seqOf(before[before.length - 1]) + 0.5 : tops.some(x => x.time) ? seqOf(tops[0]) - 0.5 : seqOf(tops[tops.length - 1]) + 1;
+  const seq = !tops.length ? 0 : live ? Math.max(...tops.map(seqOf).filter(x => x < 9999), -1) + 1 : seqForTime(tops, time);
   const l = { id: uid('lg'), trip_id: t.id, day: d, seq: String(seq), time, title: 'Out wandering', category: WANDER_CAT, origin: 'found',
               lat: '', lng: '', logged_at: new Date().toISOString(), timezone: t.timezone || '', _pending: true };
   queue('addLog', { id: l.id, trip: t.id, day: d, seq: l.seq, time, title: l.title, category: WANDER_CAT, logged_at: l.logged_at, timezone: l.timezone },
