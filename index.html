@@ -241,6 +241,16 @@ nav.tabs svg { width: 22px; height: 22px; }
 nav.tabs .add { width: 56px; height: 56px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); padding: 0;
   justify-content: center; box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 40%, transparent); margin-top: -22px; }
 nav.tabs .add svg { width: 26px; height: 26px; }
+/* while a trip is on: logging buttons live in the bottom bar, on every screen */
+body.live-dock { padding-bottom: calc(146px + env(safe-area-inset-bottom)); }
+nav.tabs.live { flex-wrap: wrap; row-gap: 6px; padding-top: 10px; }
+nav.tabs .quick { flex-basis: 100%; display: flex; gap: 8px; }
+nav.tabs .quick button { flex: 1; flex-direction: row; justify-content: center; font-size: 14px; font-weight: 600; padding: 11px 4px;
+  border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--ink); white-space: nowrap; }
+nav.tabs .quick button.go { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+nav.tabs.live .add { width: 44px; height: 44px; margin-top: 0; box-shadow: none; }
+nav.tabs.live .add svg { width: 22px; height: 22px; }
+nav.tabs.live > button { padding-top: 2px; padding-bottom: 2px; }
 
 /* ---------- sheets ---------- */
 .scrim { position: fixed; inset: 0; background: rgba(20,15,10,.38); z-index: 1000; opacity: 0; transition: opacity .2s; }
@@ -1050,8 +1060,21 @@ function render() {
   }
 }
 
+/** The trip happening today (the one on screen if it is), so logging is one tap from anywhere. */
+function liveTrip() {
+  const r = route(), on = t => t && tripDays(t).includes(tzNow(t.timezone).day);
+  const cur = r.name === 'trip' ? tripById(r.id) : null;
+  return on(cur) ? cur : db.trips.find(on) || null;
+}
 function navView(active) {
-  return `<nav class="tabs">
+  const lt = cfg ? liveTrip() : null, st = lt ? stayForDay(lt.id, tzNow(lt.timezone).day) : null;
+  document.body.classList.toggle('live-dock', !!lt);
+  const quick = lt ? `<div class="quick">
+      <button class="go" data-act="qhere">I’m here</button>
+      <button data-act="qwander">Wandering</button>
+      ${st ? `<button data-act="qhome">${esc(homeLabel(st).replace('Back at the ', 'Back at '))}</button>` : ''}
+    </div>` : '';
+  return `<nav class="tabs${lt ? ' live' : ''}">${quick}
     <button class="${active === 'trips' || active === 'trip' ? 'on' : ''}" data-go="#/">${I.trips}Trips</button>
     <button class="add" data-act="capture" aria-label="Add">${I.plus}</button>
     <button class="${active === 'someday' ? 'on' : ''}" data-go="#/someday">${I.someday}Someday</button>
@@ -1403,7 +1426,7 @@ function logContent(t) {
   const key = 'log:' + d;
   const reorder = ui.reorder === key;
 
-  const homeStay = stayForDay(t.id, d);
+  const homeStay = stayForDay(t.id, d), docked = d === tzNow(t.timezone).day && liveTrip() === t;
   const chips = days.length ? `<div class="filters">${days.map(x => `<button class="${x === d ? 'on' : ''} ${logsFor(t.id, x).length ? 'has' : ''}" data-logday="${x}">${esc(fmtShortDay(x))}</button>`).join('')}</div>` : '';
   let list = '', n = 0;
   tops.forEach((l, k) => {
@@ -1435,11 +1458,11 @@ function logContent(t) {
 
   return `${chips}
     <div class="log-head"><div class="d">${esc(fmtDay(d))}</div><div class="s">${dayLabel(t, d)} · ${all.length} stop${all.length === 1 ? '' : 's'}${found ? ` · ${found} found` : ''}</div></div>
-    <div class="log-actions">
-      <button class="btn" data-act="here">I’m here</button>
+    ${docked ? '' : `<div class="log-actions">
+      <button class="btn" data-act="here">${d === tzNow(t.timezone).day ? 'I’m here' : 'Add a stop'}</button>
       <button class="btn ghost" data-act="wander">Out wandering</button>
-    </div>
-    ${homeStay ? `<div class="log-actions" style="margin-top:0"><button class="btn ghost" data-act="home">${esc(homeLabel(homeStay))}</button></div>` : ''}
+    </div>`}
+    ${homeStay && !docked ? `<div class="log-actions" style="margin-top:0"><button class="btn ghost" data-act="home">${esc(homeLabel(homeStay))}</button></div>` : ''}
     <div style="text-align:center;margin:-2px 0 6px"><button class="linkbtn" data-act="review">Review plan${toReview ? ` (${toReview})` : ''}</button></div>
     ${list}
     <div style="display:flex;gap:6px;justify-content:center;margin-top:10px">
@@ -3668,6 +3691,14 @@ function bindCommon() {
     else if (a === 'review') openReview(r.id, currentLogDay(tripById(r.id)));
     else if (a === 'wander') logWander(tripById(r.id), currentLogDay(tripById(r.id)));
     else if (a === 'home') logHome(tripById(r.id), currentLogDay(tripById(r.id)));
+    else if (a === 'qhere' || a === 'qwander' || a === 'qhome') {
+      const lt = liveTrip(); if (!lt) return;
+      const today = tzNow(lt.timezone).day;
+      if (a === 'qhere') openHere(lt.id, today);
+      else if (a === 'qwander') logWander(lt, today);
+      else logHome(lt, today);
+      if (a !== 'qhere') render();
+    }
     else if (a === 'timeorder') putInTimeOrder(tripById(r.id), currentLogDay(tripById(r.id)));
     else if (a === 'refreshAll') refreshAll(r.id, el);
   });
