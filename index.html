@@ -242,6 +242,12 @@ nav.tabs .add svg { width: 26px; height: 26px; }
   transform: translateY(100%); transition: transform .25s cubic-bezier(.2,.8,.2,1); max-width: 720px; margin: 0 auto; }
 .sheet.open { transform: none; }
 .grab { width: 38px; height: 5px; border-radius: 3px; background: var(--line); margin: 4px auto 12px; }
+.sheet-top { position: sticky; top: 0; height: 0; z-index: 5; }
+.sheet-x { position: absolute; right: -6px; top: 2px; width: 36px; height: 36px; border-radius: 50%; border: 0;
+  background: var(--card); color: var(--muted); font-size: 20px; line-height: 36px; padding: 0; display: grid; place-items: center;
+  box-shadow: 0 1px 4px rgba(0,0,0,.12); cursor: pointer; }
+.sheet-x:active { transform: scale(.94); }
+.sheet h3 { padding-right: 40px; }
 .sheet h3 { font-family: var(--serif); font-size: 21px; font-weight: 600; margin: 0 0 14px; }
 .sheet h4 { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 18px 2px 8px; }
 .field { margin-bottom: 14px; }
@@ -3615,9 +3621,10 @@ async function refreshAll(tripId, btn) {
 function openSheet(html, onMount) {
   closeSheet(true);
   const scrim = document.createElement('div'); scrim.className = 'scrim';
-  const sh = document.createElement('div'); sh.className = 'sheet'; sh.innerHTML = '<div class="grab"></div>' + html;
+  const sh = document.createElement('div'); sh.className = 'sheet'; sh.innerHTML = '<div class="sheet-top"><button type="button" class="sheet-x" aria-label="Close">✕</button></div><div class="grab"></div>' + html;
   document.body.append(scrim, sh);
   scrim.onclick = () => closeSheet();
+  sh.querySelector('.sheet-x').onclick = () => closeSheet();
   requestAnimationFrame(() => { scrim.classList.add('open'); sh.classList.add('open'); });
   if (onMount) onMount(sh);
   return sh;
