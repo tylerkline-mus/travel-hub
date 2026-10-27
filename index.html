@@ -2276,14 +2276,18 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
   y += (titleLines.length - 1) * titleSize + 26;
 
   // ---- the score: one stroke per day, its length the number of stops ----
-  const N = data.perDay.length, top = y + 6, base = y + stripH - 26;
+  // a slice shows only its own days (first to last day inside the frame)
+  const score = data.sliced && data.from ? data.perDay.filter(d => d.day >= data.from && d.day <= data.to) : data.perDay;
+  const N = score.length, top = y + 6, base = y + stripH - 26;
   if (N) {
-    const step = CW / N, maxN = Math.max(1, ...data.perDay.map(d => d.n)), sw = Math.max(2, Math.min(7, step * 0.42));
+    const step = CW / N, maxN = Math.max(1, ...score.map(d => d.n)), sw = Math.max(2, Math.min(N <= 14 ? 10 : 7, step * 0.42));
+    // a short strip runs edge to edge, so the first and last dates sit under their strokes
+    const edge = N > 1 && N <= 14, xOf = i => edge ? M + sw / 2 + (CW - sw) * i / (N - 1) : M + step * i + step / 2;
     ctx.strokeStyle = L.faint; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(M, base + 0.5); ctx.lineTo(M + CW, base + 0.5); ctx.stroke();
     const hOf = n => 6 + (base - top - 6) * (n / maxN);
     ctx.fillStyle = L.ink;
-    data.perDay.forEach((d, i) => {
-      const x = M + step * i + step / 2;
+    score.forEach((d, i) => {
+      const x = xOf(i);
       ctx.globalAlpha = d.in === false ? 0.2 : 1;
       if (d.n) { const h = hOf(d.n), hl = d.marks ? (h - 6) * d.marks / d.n + (d.marks === d.n ? 6 : 0) : 0; ctx.fillRect(x - sw / 2, base - h + hl, sw, h - hl); }
       else { ctx.beginPath(); ctx.arc(x, base - 3, 1.8, 0, Math.PI * 2); ctx.fill(); }
@@ -2291,16 +2295,16 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     ctx.globalAlpha = 1;
     ctx.save(); if (L.overprint) { ctx.globalCompositeOperation = 'multiply'; ctx.translate(2.2, -1.6); }
     ctx.fillStyle = L.accent;
-    data.perDay.forEach((d, i) => { if (!d.marks) return; const x = M + step * i + step / 2, h = hOf(d.n);
+    score.forEach((d, i) => { if (!d.marks) return; const x = xOf(i), h = hOf(d.n);
       const hl = (h - 6) * d.marks / d.n + (d.marks === d.n ? 6 : 0); ctx.fillRect(x - sw / 2, base - h, sw, hl); });
     ctx.restore();
     // dates: the first day of each month, and the last day at the right
     ctx.fillStyle = L.ink; ctx.font = `400 24px ${PF}`;
-    const lastD = parseDate(data.perDay[N - 1].day), endLabel = MON[lastD.getMonth()] + ' ' + lastD.getDate();
+    const lastD = parseDate(score[N - 1].day), endLabel = MON[lastD.getMonth()] + ' ' + lastD.getDate();
     const endW = ctx.measureText(endLabel).width;
     let lastM = -1, lastX = -999;
-    data.perDay.forEach((d, i) => {
-      const dt = parseDate(d.day), x = M + step * i;
+    score.forEach((d, i) => {
+      const dt = parseDate(d.day), x = edge ? xOf(i) - sw / 2 : M + step * i;
       if (dt.getMonth() !== lastM && x - lastX > 80 && x < W - M - endW - 90) { ctx.fillText(MON[dt.getMonth()] + ' ' + dt.getDate(), x, base + 29); lastX = x; }
       lastM = dt.getMonth();
     });
