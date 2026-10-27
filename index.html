@@ -2779,6 +2779,17 @@ function drawWorldShifted(ctx, B, rect, world, L, lwBase = 1, shade = true) {
 /** A loose, dotted meander from A to B: time spent wandering, not a route. Seeded so it's the same every redraw. */
 const hexAlpha = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; };
 function wanderLeg(ctx, A, B, lw, seed) {
+  // out and back to the same place (a wander from the hotel that ends at the hotel): a loose loop off to one side
+  if (Math.hypot(B.x - A.x, B.y - A.y) < 24) {
+    const r = 70, ang = (seed % 8) * Math.PI / 4, cx = A.x + Math.cos(ang) * r, cy = A.y + Math.sin(ang) * r, ph = (seed % 5) * 1.3;
+    ctx.setLineDash([1, lw * 2.6]); ctx.globalAlpha = .55; ctx.beginPath();
+    for (let j = 0; j <= 72; j++) {
+      const u = j / 72, a = ang + Math.PI + u * Math.PI * 2, rr = r * (1 + 0.28 * Math.sin(u * Math.PI * 6 + ph) * Math.sin(Math.PI * u));
+      const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
+      j ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.stroke(); ctx.globalAlpha = .9; return;
+  }
   const dx = B.x - A.x, dy = B.y - A.y, len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len;
   const amp = Math.min(len * 0.16, 46), waves = Math.max(1.5, Math.min(4, len / 90)), ph = (seed % 7) * 0.9;
   ctx.setLineDash([1, lw * 2.6]); ctx.globalAlpha = .55; ctx.beginPath();
