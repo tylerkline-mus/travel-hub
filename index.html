@@ -492,6 +492,10 @@ function lingerCap(cat) {
   if (/restaurant|bistro|food court|diner/.test(c)) return 150;
   return 120;   // cafés, bars, everything else
 }
+/** Stays, errands and getting around: still part of the line on a poster, but never named on it or counted as a highlight.
+ *  A place you marked loved is never a chore. Same idea as the review page's errand filter, by category. */
+const CHORE_RX = /^(stay|hotel|lodging|hostel|airbnb|guesthouse|motel)$|airport|terminal|transportation|transit|station|bus stop|shuttle|parking|car rental|convenience|supermarket|grocery|pharmacy|drugstore|post office|government|bank|atm|laundr|wandering/i;
+const isChore = s => !s.mark && (CHORE_RX.test(s.category || '') || /^(somewhere|dropped pin|saved place)$/i.test(s.title || ''));
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DOW_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -1631,7 +1635,8 @@ const dayName = d => { const x = parseDate(d); return `${DOW_LONG[x.getDay()]}, 
 /** Every credit the data can honestly support, with its value. */
 function recapCredits(t, data, prefs, extras) {
   const out = {};
-  const S = data.stops, tops = S.filter(s => s.top !== false);
+  // credits are about the trip, not the errands: stays, airports, supermarkets and the like are left out
+  const S = data.stops.filter(s => !isChore(s)), tops = S.filter(s => s.top !== false);
   if (data.lived) {
     // Favorite discovery: a loved place found along the way (one with a note first), or the one Tyler picked
     // Went back to: the same place on more than one visit
@@ -1641,15 +1646,15 @@ function recapCredits(t, data, prefs, extras) {
     const finds = [...new Map(S.filter(s => s.found).map(s => [s.key, s])).values()];
     const favs = finds.filter(s => s.mark).sort((a, b) => (!!b.note - !!a.note) || ((back && a.key === back.key) - (back && b.key === back.key)));
     const fav = (prefs.fav && finds.find(s => s.key === prefs.fav)) || favs[0];
-    if (fav) out.fav = { value: fav.title, choices: finds, chosen: fav.key };
-    if (back) out.back = { value: `${back.title}, ${back.n === 2 ? 'twice' : numWord(back.n) + ' times'}` };
+    if (fav) out.fav = { value: fav.title, choices: finds, chosen: fav.key, titles: [fav.title] };
+    if (back) out.back = { value: `${back.title}, ${back.n === 2 ? 'twice' : numWord(back.n) + ' times'}`, titles: [back.title] };
     // Most often: the kind of place
     const cats = {};
     S.forEach(s => { if (s.category && !/^(stay|flight|tour|place)$/i.test(s.category)) cats[s.category.toLowerCase()] = (cats[s.category.toLowerCase()] || 0) + 1; });
     const top = Object.entries(cats).sort((a, b) => b[1] - a[1])[0];
-    if (top && top[1] > 1) out.often = { value: `${pluralCat(top[0])}, ${top[1]}` };
+    if (top && top[1] > 2) out.often = { value: `${pluralCat(top[0])}, ${top[1]}` };
     // First and last
-    if (tops.length > 1) out.ends = { value: `${tops[0].title} → ${tops[tops.length - 1].title}` };
+    if (tops.length > 1) out.ends = { value: `${tops[0].title} → ${tops[tops.length - 1].title}`, titles: [tops[0].title, tops[tops.length - 1].title] };
     // Lingered longest: from a stop to the next logged thing, ended early by "Out wandering". Without a wander,
     // a gap longer than the place could believably hold you (lingerCap) means you were out and about, so it doesn't count.
     // Where you slept doesn't count either.
@@ -1660,14 +1665,14 @@ function recapCredits(t, data, prefs, extras) {
         if (/^(stay|hotel|lodging|hostel|airbnb)$/i.test(s.category || '')) return;
         const explicit = !!s.wanderAt;
         const gap = (explicit ? minsOf(s.wanderAt) : minsOf(n.time)) - minsOf(s.time);
-        if (gap > 20 && gap <= (explicit ? 8 * 60 : lingerCap(s.category)) && (!best || gap > best.gap)) best = { gap, s }; });
+        if (gap >= 60 && gap <= (explicit ? 8 * 60 : lingerCap(s.category)) && (!best || gap > best.gap)) best = { gap, s }; });
     });
-    if (best) out.linger = { value: `${best.s.title}, ${fmtSpan(best.gap)}` };
+    if (best) out.linger = { value: `${best.s.title}, ${fmtSpan(best.gap)}`, titles: [best.s.title] };
     // Wandered: time between stops you chose not to log anywhere
-    if (data.wandered >= 45) out.wander = { value: `${fmtSpan(data.wandered)}, off the map` };
+    if (data.wandered >= 90) out.wander = { value: `${fmtSpan(data.wandered)}, off the map` };
     // Off script: the day with the most unplanned stops
     const off = data.days.map(d => ({ d, n: S.filter(s => s.day === d && s.found).length })).sort((a, b) => b.n - a.n)[0];
-    if (off && off.n > 1) out.offscript = { value: `${dayName(off.d)}, ${numWord(off.n)} unplanned stops` };
+    if (off && off.n > 2) out.offscript = { value: `${dayName(off.d)}, ${numWord(off.n)} unplanned stops`, day: off.d, strength: off.n / 3 };
     // Longest walk: only legs you marked as walks, measured along the real path when known
     let walk = null;
     data.tracks.forEach(tr => { let m = 0;
@@ -1675,8 +1680,13 @@ function recapCredits(t, data, prefs, extras) {
         const pl = routeCache[routeKey({ from: [a.lat, a.lng], to: [b.lat, b.lng], mode: 'walk' })];
         if (pl) { const p = decodePolyline(pl); for (let j = 1; j < p.length; j++) m += meters({ lat: p[j - 1][0], lng: p[j - 1][1] }, { lat: p[j][0], lng: p[j][1] }); }
         else m += meters(a, b) * 1.25; });
-      if (m > 1500 && (!walk || m > walk.m)) walk = { m, d: tr.day }; });
-    if (walk) out.walk = { value: `${dayName(walk.d)}, about ${walk.m >= 10000 ? Math.round(walk.m / 1000) : (walk.m / 1000).toFixed(1)} km` };
+      if (m > 2000 && (!walk || m > walk.m)) walk = { m, d: tr.day }; });
+    if (walk) out.walk = { value: `${dayName(walk.d)}, about ${walk.m >= 10000 ? Math.round(walk.m / 1000) : (walk.m / 1000).toFixed(1)} km`, day: walk.d, strength: walk.m / 2000 };
+    // two credits about the same day say less than one: keep the stronger, unless both were switched on by hand
+    if (out.offscript && out.walk && out.offscript.day === out.walk.day) {
+      const weak = out.walk.strength >= out.offscript.strength ? 'offscript' : 'walk';
+      if (!(prefs.credits && prefs.credits[weak] === true)) delete out[weak];
+    }
     // Earliest morning / latest night: live-logged times only (after midnight counts as late)
     const timedAll = tops.filter(s => s.time);
     const early = timedAll.filter(s => minsOf(s.time) >= 240).sort((a, b) => minsOf(a.time) - minsOf(b.time))[0];
@@ -1688,7 +1698,7 @@ function recapCredits(t, data, prefs, extras) {
     const letdown = S.find(s => s.wasMust && s.meh);
     if (letdown) out.letdown = { value: letdown.title };
     // Brought home: souvenirs kept with these stops
-    const ids = new Set(S.map(s => s.id));
+    const ids = new Set(data.stops.map(s => s.id));
     const souv = [...new Set((db.artifacts || []).filter(a => a.kind === 'souvenir' && a.title && ids.has(a.log_id)).map(a => a.title.trim()))];
     if (souv.length) out.brought = { value: souv.length <= 3 ? souv.join(souv.length === 3 ? ', ' : ' and ').replace(/, ([^,]*)$/, ' and $1')
       : `${souv.slice(0, 2).join(', ')} and ${numWord(souv.length - 2)} more` };
@@ -2155,11 +2165,21 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
 
     // routes: the real path where cached, otherwise a gentle hand-drawn bow
     ctx.strokeStyle = L.ink; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    // a leg to somewhere outside the drawing fades out as it leaves, instead of being cut off at the edge
+    const inDrawing = q => q.x >= mapRect.x && q.x <= mapRect.x + mapRect.w && q.y >= mapRect.y && q.y <= mapRect.y + mapRect.h;
     data.tracks.forEach((tr, ti) => tr.pts.forEach((b, k) => {
       if (!k) return;
       const a = tr.pts[k - 1];
       const mode = b.mode || guessMode(a, b);
-      if (b.wandered) return wanderLeg(ctx, P(a), P(b), lw, ti * 13 + k);
+      const A0 = P(a), B0 = P(b), inA = inDrawing(A0), inB = inDrawing(B0);
+      if (!inA && !inB) return;
+      if (inA !== inB) {
+        const I = inA ? A0 : B0, O = inA ? B0 : A0, d = Math.hypot(O.x - I.x, O.y - I.y) || 1, f = Math.min(1, 240 / d);
+        const g = ctx.createLinearGradient(I.x, I.y, I.x + (O.x - I.x) * f, I.y + (O.y - I.y) * f);
+        g.addColorStop(0, L.ink); g.addColorStop(0.3, L.ink); g.addColorStop(1, hexAlpha(L.ink, 0));
+        ctx.strokeStyle = g;
+      } else ctx.strokeStyle = L.ink;
+      if (b.wandered) return wanderLeg(ctx, A0, B0, lw, ti * 13 + k);
       const pl = routeCache[routeKey({ from: [a.lat, a.lng], to: [b.lat, b.lng], mode })];
       ctx.setLineDash(mode === 'tour' || mode === 'car' ? [1, lw * 3.2] : mode === 'train' || mode === 'transit' ? [lw * 4, lw * 2.4] : []);
       ctx.globalAlpha = .9;
@@ -2174,7 +2194,7 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
       }
       ctx.stroke();
     }));
-    ctx.setLineDash([]); ctx.globalAlpha = 1;
+    ctx.setLineDash([]); ctx.globalAlpha = 1; ctx.strokeStyle = L.ink;
 
     // stays: small squares
     data.homes.forEach(h => { const q = P(h); ctx.fillStyle = L.paper; ctx.strokeStyle = L.ink; ctx.lineWidth = 2.4;
@@ -2215,7 +2235,9 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     const free = r => r.x > 8 && r.x + r.w < W - 8 && r.y > mapRect.y - 10 && r.y + r.h < mapRect.y + mapRect.h &&
       !taken.some(o => r.x < o.x + o.w && r.x + r.w > o.x && r.y < o.y + o.h && r.y + r.h > o.y);
     const seen = new Set();
-    const labelled = [...marks, ...data.stops.filter(s => !s.mark && s.note), ...data.stops.filter(s => !s.mark && !s.note && s.top !== false), ...data.stops.filter(s => !s.mark && !s.note && s.top === false)];
+    // loved places first, then any place a credit names (so it can be found), then notes, then the rest; errands go unnamed
+    const named = new Set(shown.flatMap(c => c.titles || [])), lab = data.stops.filter(s => !s.mark && !isChore(s));
+    const labelled = [...marks, ...lab.filter(s => named.has(s.title)), ...lab.filter(s => s.note), ...lab.filter(s => !s.note && s.top !== false), ...lab.filter(s => !s.note && s.top === false)];
     const big = `italic 400 ${story ? 33 : 30}px ${PF}`, small = `italic 400 ${story ? 27 : 25}px ${PF}`;
     labelled.forEach(s => {
       if (!s.title || seen.has(s.title) || seen.size >= (story ? 12 : 10)) return;
@@ -2227,13 +2249,23 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
       const q = P(s), w = Math.max(ctx.measureText(s.title).width, nw), h = lh + nh;
       const spots = [{ x: q.x + 17, y: q.y - 30 }, { x: q.x + 17, y: q.y + 2 }, { x: q.x - 17 - w, y: q.y - 30 }, { x: q.x - 17 - w, y: q.y + 2 },
         { x: q.x - w / 2, y: q.y - 22 - h }, { x: q.x - w / 2, y: q.y + 18 }, { x: q.x + 17, y: q.y - h + 4 }, { x: q.x - 17 - w, y: q.y - h + 4 }];
-      const spot = spots.map(p => ({ ...p, w, h })).find(free);
+      // crowded spot: loved places and places a credit names may sit a little further out
+      if (s.mark || named.has(s.title)) [28, 56].forEach(o => spots.push({ x: q.x + 17 + o, y: q.y - 30 - o }, { x: q.x + 17 + o, y: q.y + 2 + o },
+        { x: q.x - 17 - w - o, y: q.y - 30 - o }, { x: q.x - 17 - w - o, y: q.y + 2 + o }, { x: q.x - w / 2, y: q.y - 22 - h - o }, { x: q.x - w / 2, y: q.y + 18 + o }));
+      const k = spots.map(p => ({ ...p, w, h })).findIndex(free), spot = k < 0 ? null : { ...spots[k], w, h };
       if (!spot) return;
       taken.push(spot); seen.add(s.title);
       ctx.save();
       // only the loved names are printed in the second ink on Riso; the rest sit in register with the drawing
       if (!s.mark && L.overprint) { ctx.globalCompositeOperation = 'source-over'; ctx.translate(-2.2, 1.6); }
       ctx.fillStyle = s.mark && L.overprint ? L.accent : L.ink;
+      // a name set further out gets a hairline back to its dot, so it can't be read as the neighbour's
+      if (k >= 8) {
+        const cx = Math.max(spot.x, Math.min(q.x, spot.x + w)), cy = Math.max(spot.y + 4, Math.min(q.y, spot.y + lh - 4));
+        const dx = cx - q.x, dy = cy - q.y, d = Math.hypot(dx, dy) || 1;
+        ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 1.4; ctx.globalAlpha = 0.5; ctx.beginPath();
+        ctx.moveTo(q.x + dx / d * 13, q.y + dy / d * 13); ctx.lineTo(cx - dx / d * 6, cy - dy / d * 6); ctx.stroke(); ctx.globalAlpha = 1;
+      }
       if (!s.mark) ctx.globalAlpha = 0.88;
       ctx.textAlign = spot.x + w / 2 < q.x - 20 ? 'right' : 'left';
       const tx = ctx.textAlign === 'right' ? spot.x + w : spot.x;
@@ -2707,6 +2739,7 @@ function drawWorldShifted(ctx, B, rect, world, L, lwBase = 1, shade = true) {
 }
 /** A trip's day-by-day lines: the real path where cached, otherwise a gentle bow. */
 /** A loose, dotted meander from A to B: time spent wandering, not a route. Seeded so it's the same every redraw. */
+const hexAlpha = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; };
 function wanderLeg(ctx, A, B, lw, seed) {
   const dx = B.x - A.x, dy = B.y - A.y, len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len;
   const amp = Math.min(len * 0.16, 46), waves = Math.max(1.5, Math.min(4, len / 90)), ph = (seed % 7) * 0.9;
