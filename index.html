@@ -94,6 +94,14 @@ main { padding: 6px 16px 24px; max-width: 720px; margin: 0 auto; }
 .subtabs { display: flex; background: color-mix(in srgb, var(--ink) 7%, transparent); border-radius: 12px; padding: 3px; margin: 12px 0 4px; }
 .subtabs button { flex: 1; border: 0; background: none; padding: 8px 4px; border-radius: 9px; font-size: 14px; font-weight: 500; cursor: pointer; color: var(--muted); }
 .subtabs button.on { background: var(--card); color: var(--ink); box-shadow: var(--shadow); }
+/* chapter chips + Days/Map/Saved/Log stay put under the header while the page scrolls */
+.trip-bar { position: sticky; top: var(--top-h, 58px); z-index: 4; margin: 0 -16px; padding: 0 16px 2px;
+  background: color-mix(in srgb, var(--paper) 96%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid transparent; }
+.top.scrolled:has(+ main .trip-bar) { border-bottom-color: transparent; background: color-mix(in srgb, var(--paper) 96%, transparent); }
+.trip-bar.stuck { border-bottom-color: var(--line); }
+.trip-bar .subtabs { margin-bottom: 8px; }
+.day, .section-title { scroll-margin-top: calc(var(--top-h, 58px) + var(--bar-h, 100px) + 8px); }
 
 .banner { background: color-mix(in srgb, var(--accent) 12%, var(--card)); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
   border-radius: var(--radius); padding: 12px 14px; margin-top: 12px; display: flex; align-items: center; gap: 12px; font-size: 14px; }
@@ -980,7 +988,17 @@ window.addEventListener('hashchange', () => {
   lastRoute = key;
   render(); window.scrollTo(0, 0);
 });
-window.addEventListener('scroll', () => { const t = $('.top'); if (t) t.classList.toggle('scrolled', window.scrollY > 4); }, { passive: true });
+window.addEventListener('scroll', () => {
+  const t = $('.top'); if (t) t.classList.toggle('scrolled', window.scrollY > 4);
+  const b = $('.trip-bar'); if (b && t) b.classList.toggle('stuck', b.getBoundingClientRect().top <= t.offsetHeight + 1 && window.scrollY > 4);
+}, { passive: true });
+// the trip bar sticks just under the header; measure both so days scrolled into view land below them
+function stickyBars() {
+  const t = $('.top'), b = $('.trip-bar'), root = document.documentElement.style;
+  if (t) root.setProperty('--top-h', t.offsetHeight + 'px');
+  if (b) root.setProperty('--bar-h', b.offsetHeight + 'px');
+}
+window.addEventListener('resize', () => stickyBars());
 
 function syncBadge() {
   const pending = outbox.length;
@@ -1010,6 +1028,7 @@ function render() {
   html += navView(r.name === 'range' ? 'trips' : r.name);
   app.innerHTML = html;
   bindCommon();
+  stickyBars();
   if (r.name === 'trip' && r.sub === 'map') initMap(r.id);
   if (r.name === 'trip' && r.sub === 'recap') initRecap(r.id);
   if (r.name === 'range') initRange();
@@ -1069,15 +1088,18 @@ function tripView(id, sub) {
   const meta = `<div class="trip-head"><div class="row">
       <span class="chip">${esc(fmtRange(t.start, t.end))}</span><span class="chip ${st.cls}">${st.label}</span>
       ${t.timezone ? `<span class="chip">${esc(t.timezone.split('/').pop().replace(/_/g, ' '))} time</span>` : ''}
-    </div>${chapterRow(t)}</div>`;
+    </div></div>`;
+  const onCh = activeChapter(t);
+  const bar = `<div class="trip-bar">${chapterRow(t, true)}${tabbar}</div>` +
+    (onCh ? `<div class="chap-note" style="margin-top:0">${esc(fmtRange(onCh.start, onCh.end))} · places within ${esc(onCh.radius_km || 25)} km of where you stay</div>` : '');
   let body = '';
   if (sub === 'saved') body = savedContent(t);
   else if (sub === 'log') body = logContent(t);
   else body = daysContent(t);
-  return head + `<main>${meta}${tabbar}${body}</main>`;
+  return head + `<main>${meta}${bar}${body}</main>`;
 }
 
-function chapterRow(t) {
+function chapterRow(t, noNote) {
   const chs = chaptersOf(t.id), on = activeChapter(t);
   return `<div class="row chapters">
     ${chs.length ? `<button class="chap ${on ? '' : 'on'}" data-chapter-pick="">Whole trip</button>` : ''}
@@ -1086,7 +1108,7 @@ function chapterRow(t) {
       return `<button class="chap ${on && on.id === c.id ? 'on' : ''}" data-chapter-pick="${esc(c.id)}">${esc(c.name)}${shared ? ' <span class="shared-dot" title="Shared"></span>' : ''}</button>`;
     }).join('')}
     ${on ? `<button class="chap ghost" data-chapter-edit="${esc(on.id)}">Edit · Share</button>` : `<button class="chap ghost" data-chapter-new="${esc(t.id)}">+ Chapter</button>`}
-  </div>${on ? `<div class="chap-note">${esc(fmtRange(on.start, on.end))} · places within ${esc(on.radius_km || 25)} km of where you stay</div>` : ''}`;
+  </div>${on && !noNote ? `<div class="chap-note">${esc(fmtRange(on.start, on.end))} · places within ${esc(on.radius_km || 25)} km of where you stay</div>` : ''}`;
 }
 
 function matchesBanner(t) {

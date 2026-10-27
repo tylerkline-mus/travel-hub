@@ -32,6 +32,8 @@ Read this before changing anything. Keep it current when the structure changes.
 
 ## App structure (index.html)
 
+Trip header: the chapter chips + Days/Map/Saved/Log (`.trip-bar`) stick under the header while scrolling; `stickyBars()` measures both into `--top-h`/`--bar-h` so days scrolled into view land below them. Every sheet has a ✕ (`.sheet-x`, added in `openSheet`).
+
 Routes: `#/` trips · `#/trip/:id/days|map|saved|log` · `#/someday`. Key functions: `tripDays` (includes travel days outside trip dates), `fixedEvents`, `plannedStops`, `stayForNight/Morning`, `drawMap` (+ `drawFlights` with date-line handling), `savedResults` (search with SYNONYMS, `openNow`, near me), `openItem`, `openCapture`, `openHere` (log a stop), `openReview`, `undoable`, `demoData` (sample mode — keep it exercising every feature).
 
 ## Testing
