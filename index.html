@@ -694,6 +694,15 @@ function stayForNight(tripId, d) {
 function stayForMorning(tripId, d) {
   return stayForNight(tripId, addDays(d, -1)) || stayForNight(tripId, d);
 }
+/** Where you're staying that day (tonight's place, else last night's). */
+function stayForDay(tripId, d) { return stayForNight(tripId, d) || stayForMorning(tripId, d); }
+/** The stay a logged spot is really at: the same Google place as last night's or tonight's stay, or (for a pin
+ *  with no Google place) within 40 m of it. A different place next door, like the bakery downstairs, never matches. */
+function stayMatch(tripId, d, p) {
+  if (!p) return null;
+  return [stayForMorning(tripId, d), stayForNight(tripId, d)].filter(st => st && hasCoords(st))
+    .find(st => p.place_id && st.place_id ? p.place_id === st.place_id : !p.place_id && hasCoords(p) && meters(p, st) < 40) || null;
+}
 function fixedEvents(tripId, d) {
   const out = [];
   topItemsFor(tripId).filter(i => i.kind === 'fixed').forEach(i => {
@@ -1394,6 +1403,7 @@ function logContent(t) {
   const key = 'log:' + d;
   const reorder = ui.reorder === key;
 
+  const homeStay = stayForDay(t.id, d);
   const chips = days.length ? `<div class="filters">${days.map(x => `<button class="${x === d ? 'on' : ''} ${logsFor(t.id, x).length ? 'has' : ''}" data-logday="${x}">${esc(fmtShortDay(x))}</button>`).join('')}</div>` : '';
   let list = '', n = 0;
   tops.forEach((l, k) => {
@@ -1429,9 +1439,11 @@ function logContent(t) {
       <button class="btn" data-act="here">I’m here</button>
       <button class="btn ghost" data-act="wander">Out wandering</button>
     </div>
+    ${homeStay ? `<div class="log-actions" style="margin-top:0"><button class="btn ghost" data-act="home">${esc(homeLabel(homeStay))}</button></div>` : ''}
     <div style="text-align:center;margin:-2px 0 6px"><button class="linkbtn" data-act="review">Review plan${toReview ? ` (${toReview})` : ''}</button></div>
     ${list}
     <div style="display:flex;gap:6px;justify-content:center;margin-top:10px">
+      ${!reorder && outOfTimeOrder(tops) ? `<button class="linkbtn" data-act="timeorder">Put in time order</button>` : ''}
       ${tops.length > 1 ? `<button class="linkbtn" data-reorder="${key}">${reorder ? 'Done reordering' : 'Reorder'}</button>` : ''}
       ${all.length ? `<button class="linkbtn" data-maplived="${d}">See on map</button>` : ''}
     </div>
@@ -1500,7 +1512,10 @@ function recapData(t, frame) {
           return;
         }
         if (!hasCoords(l)) return;
-        const it = l.item_id ? itemById(l.item_id) : null;
+        const it0 = l.item_id ? itemById(l.item_id) : null;
+        // a stop logged at where you're staying is the stay, however it was logged (one place, not a "found" hotel)
+        const st = it0 ? (isStay(it0) ? it0 : null) : !l.parent_id ? stayMatch(t.id, d, l) : null, it = st || it0;
+        if (st) l = { ...l, item_id: st.id, title: st.title, category: st.category || 'Stay', origin: 'planned' };
         const s = pt(l, { mode: l.parent_id ? 'tour' : l.mode, tour: !!l.parent_id, mark: l.rating === 'loved', found: l.origin === 'found', wasMaybe: !!(it && it.priority === 'maybe'),
           wasMust: !!(it && it.priority === 'must'), meh: l.rating === 'meh', note: l.note || '', time: l.time || '', top: !l.parent_id, id: l.id,
           city: l.city || (it && it.city) || '', region: (it && it.region) || '', country: (it && it.country) || '',
@@ -3652,6 +3667,8 @@ function bindCommon() {
     else if (a === 'here') openHere(r.id, currentLogDay(tripById(r.id)));
     else if (a === 'review') openReview(r.id, currentLogDay(tripById(r.id)));
     else if (a === 'wander') logWander(tripById(r.id), currentLogDay(tripById(r.id)));
+    else if (a === 'home') logHome(tripById(r.id), currentLogDay(tripById(r.id)));
+    else if (a === 'timeorder') putInTimeOrder(tripById(r.id), currentLogDay(tripById(r.id)));
     else if (a === 'refreshAll') refreshAll(r.id, el);
   });
 }
@@ -4369,7 +4386,10 @@ function openHere(tripId, d) {
       if (!picked && !near && !pin && !text) { ta.focus(); return; }
       const parentSel = $('#h-parent', sh);
       const parent_id = parentSel ? parentSel.value : '';
-      const it = picked ? itemById(picked) : null;
+      // a nearby place or pin at where you're staying logs the stay itself, not a "found" hotel
+      const atStay = !picked && !parent_id && (near || pin) ? stayMatch(tripId, d, near || pin) : null;
+      if (atStay) { near = null; pin = null; }
+      const it = picked ? itemById(picked) : atStay;
       let time = $('#h-time', sh).value;
       if (earlier && isToday && !time) { $('#h-time', sh).focus(); toast('Add the time you were there, so it lands in the right place'); return; }
       const tops = topLogs(tripId, d);
@@ -4461,6 +4481,59 @@ function swapLogPlace(l, { item, place }) {
   // the old planned place goes back on the list if nothing else logs it
   if (was && was !== item && !db.log.some(x => x.item_id === was.id)) queue('updateItem', { id: was.id, patch: { status: 'open' } }, () => { was.status = 'open'; });
   closeSheet(); toast('Changed to ' + patch.title);
+}
+
+/** "Back at the hotel": one tap logs the stay itself (linked to the booking), so the day's line goes home. */
+function homeLabel(st) {
+  const c = String(st.category || '').toLowerCase();
+  return 'Back at the ' + (/airbnb|apartment|flat/.test(c) ? 'apartment' : /hostel/.test(c) ? 'hostel' : /stay|hotel|lodging/.test(c) ? 'hotel' : 'stay');
+}
+function logHome(t, d) {
+  const st = stayForDay(t.id, d); if (!st) return;
+  const now = tzNow(t.timezone);
+  if (d !== now.day) return openHome(t, d, st);
+  const tops = topLogs(t.id, d).filter(l => !isWander(l)), last = tops[tops.length - 1];
+  if (last && last.item_id === st.id) { toast('Already back at ' + st.title); return; }
+  saveHome(t, d, st, now.time, true);
+  toast('Back at ' + st.title + ', ' + fmtTime(now.time));
+}
+function saveHome(t, d, st, time, live) {
+  const tops = topLogs(t.id, d);
+  const seq = !tops.length ? 0 : live ? Math.max(...tops.map(seqOf).filter(x => x < 9999), -1) + 1 : seqForTime(tops, time);
+  const l = { id: uid('lg'), trip_id: t.id, day: d, seq: String(seq), time, item_id: st.id, title: st.title, lat: st.lat, lng: st.lng, city: st.city || '',
+              place_id: st.place_id || '', category: st.category || 'Stay', origin: 'planned', mode: '', logged_at: new Date().toISOString(), timezone: t.timezone || '' };
+  queue('addLog', { id: l.id, trip: t.id, day: d, seq: l.seq, time, item_id: st.id, category: l.category, logged_at: l.logged_at, timezone: l.timezone },
+    () => db.log.push(l));
+}
+function openHome(t, d, st) {
+  openSheet(`
+    <h3>${esc(homeLabel(st))}</h3>
+    <p class="hint" style="margin-top:-4px">${esc(st.title)}. Ends the outing before it, so the day’s line goes home.</p>
+    <div class="field"><label>Back at</label><input type="time" id="hm-time"></div>
+    <div class="btnrow"><button class="btn" id="hm-save">Add</button></div>
+  `, sh => {
+    $('#hm-save', sh).onclick = () => {
+      const time = $('#hm-time', sh).value;
+      if (!time) { $('#hm-time', sh).focus(); return; }
+      saveHome(t, d, st, time, false); closeSheet();
+    };
+  });
+}
+/** True when a timed stop sits after a later-timed one. */
+function outOfTimeOrder(tops) {
+  let last = '';
+  return tops.some(l => { if (!l.time) return false; const bad = last && l.time < last; last = l.time; return bad; });
+}
+/** Sort the day by time; a stop with no time stays right after the one it followed. */
+function putInTimeOrder(t, d) {
+  const tops = topLogs(t.id, d);
+  let carry = '';
+  const keyed = tops.map((l, k) => { if (l.time) carry = l.time; return { l, t: l.time || carry, k }; });
+  const ids = keyed.sort((a, b) => (a.t && b.t ? a.t.localeCompare(b.t) : 0) || a.k - b.k).map(x => x.l.id);
+  queue('reorder', { sheet: 'Log', ids, key: 'log:' + d }, () => {
+    ids.forEach((x, n) => { const o = db.log.find(y => y.id === x); if (o) o.seq = String(n); });
+  });
+  toast('Put in time order');
 }
 
 /** One tap: "I've left, I'm just wandering." On a past day it asks for the time instead. */

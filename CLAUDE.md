@@ -70,6 +70,13 @@ Sample mode runs fully offline. Test with Playwright at 390×844 @2x: route `cdn
 - Poster (`recapData`): a wander ends the stop before it (`wanderAt`) and marks the next leg `wandered`, drawn by `wanderLeg` as a loose dotted meander (no Routes lookup for it). `data.wandered` = minutes from each wander to the next timed stop.
 - **Lingered longest** now: ends at a wander if there is one (up to 8 h); otherwise only counts if the gap fits the place (`lingerCap`: 45 min shops/bakeries/hot dogs, 2 h cafés/bars, 2½ h restaurants, 3 h museums/pools/churches/parks). Stays never count. New credit **Wandered** (on by default, from 45 min): "about 3½ hours, off the map".
 
+## Back at the hotel (Oct 2026, on the trip)
+
+- Why: Tyler logged "back at the hotel" through I'm here, which saved the hotel as a *found* nearby place, not linked to the booking — the poster then counted it as a separate place ("Went back to: Exeter", "Most often: Hotels").
+- **Back at the hotel** button under I'm here / Out wandering, shown when the day has a stay (`stayForDay` = tonight's, else last night's; label by category: hotel / apartment / hostel / stay, `homeLabel`). `logHome` logs the stay item itself (`item_id`, origin planned) with now's time after everything; on a past day `openHome` asks the time (`seqForTime`). A repeat right after the stay is ignored.
+- `stayMatch(trip, d, p)`: same Google place as last night's or tonight's stay, or a pin with no place within 40 m (a different place next door, like DEIG under the Exeter, never matches). I'm here uses it so a nearby pick/pin at the stay logs the stay; the poster uses it on unlinked rows so old "found" hotel rows count as the stay.
+- **Put in time order** link under the Log day when a timed stop sits after a later one (`outOfTimeOrder` / `putInTimeOrder`: sorts by time, untimed rows ride with the stop before them, saved through `reorder`).
+
 ## Adding a stop after the fact (Oct 2026, on the trip)
 
 - I'm here on today has a **I'm here now / Earlier today** switch (`earlier`). Earlier: hides the location bits (`#h-live`: where you are, Around you, Just this spot), clears the auto-pick, and needs a time. Saving ignores the phone's current position (`pos = earlier ? null : livePos`), so a typed name isn't pinned where you're standing and `here_lat` stays empty. On a past day the sheet is already in this mode (time optional there).
