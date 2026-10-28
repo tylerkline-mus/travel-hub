@@ -176,6 +176,9 @@ main { padding: 6px 16px 24px; max-width: 720px; margin: 0 auto; }
   color: var(--muted); font-size: 14px; cursor: pointer; }
 .wander-row .squig { font-size: 18px; line-height: 1; color: var(--found); }
 .wander-row .moves { margin-left: auto; }
+.start-row { display: flex; align-items: center; gap: 10px; margin: 6px 0 2px; padding: 4px 14px; color: var(--muted); font-size: 14px; }
+.start-row b { font-weight: 600; color: var(--ink); }
+.start-row .sq { width: 10px; height: 10px; border-radius: 2px; background: var(--fixed); flex: none; margin: 0 5px; }
 .entry { display: flex; gap: 12px; align-items: flex-start; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; cursor: pointer; }
 .entry .body { flex: 1; min-width: 0; }
 .badge { font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 6px; border-radius: 5px; margin-right: 6px; vertical-align: 1px; }
@@ -703,6 +706,15 @@ function stayForNight(tripId, d) {
 }
 function stayForMorning(tripId, d) {
   return stayForNight(tripId, addDays(d, -1)) || stayForNight(tripId, d);
+}
+/** Where a logged day starts: last night's stay only (on an arrival day you didn't wake up at tonight's hotel). */
+function startStay(tripId, d) { return stayForNight(tripId, addDays(d, -1)) || null; }
+/** True when a logged day should be drawn/listed as starting from last night's stay (not when the first stop is the stay itself). */
+function startsAtStay(tripId, d, first) {
+  const st = startStay(tripId, d);
+  if (!st) return null;
+  if (first && (first.item_id === st.id || stayMatch(tripId, d, first) === st)) return null;
+  return st;
 }
 /** Where you're staying that day (tonight's place, else last night's). */
 function stayForDay(tripId, d) { return stayForNight(tripId, d) || stayForMorning(tripId, d); }
@@ -1429,6 +1441,8 @@ function logContent(t) {
   const homeStay = stayForDay(t.id, d), docked = d === tzNow(t.timezone).day && liveTrip() === t;
   const chips = days.length ? `<div class="filters">${days.map(x => `<button class="${x === d ? 'on' : ''} ${logsFor(t.id, x).length ? 'has' : ''}" data-logday="${x}">${esc(fmtShortDay(x))}</button>`).join('')}</div>` : '';
   let list = '', n = 0;
+  const start = tops.length ? startsAtStay(t.id, d, tops.find(l => !isWander(l))) : null;
+  if (start) list += `<div class="start-row"><span class="sq" aria-hidden="true"></span><span>Started at <b>${esc(start.title)}</b></span></div>`;
   tops.forEach((l, k) => {
     if (isWander(l)) {
       list += `<div class="wander-row ${l._pending ? 'pending' : ''}" data-log="${esc(l.id)}"><span class="squig" aria-hidden="true">〰</span><span>Out wandering${l.time ? ' · from ' + esc(fmtTime(l.time)) : ''}</span>
@@ -1436,7 +1450,7 @@ function logContent(t) {
       return;
     }
     n++;
-    if (n > 1 && !isWander(tops[k - 1])) list += `<div class="leg"><button data-mode="${esc(l.id)}">${esc(MODE_LABEL[l.mode] || 'How did you get here?')}</button></div>`;
+    if (n > 1 ? !isWander(tops[k - 1]) : start && k === 0) list += `<div class="leg"><button data-mode="${esc(l.id)}">${esc(MODE_LABEL[l.mode] || 'How did you get here?')}</button></div>`;
     const kids = logKids(l.id);
     const kept = artifactsOf(l.id), ph = kept.find(a => a.kind === 'photo');
     const nSnd = kept.filter(a => a.kind === 'sound').length, nSouv = kept.filter(a => a.kind === 'souvenir').length;
@@ -1560,7 +1574,11 @@ function recapData(t, frame) {
     const homeIn = home && hasCoords(home) && ft.inDay(d) && ft.inArea(pt(home));
     if (homeIn && (seq.length || ft.all || frame && frame.kind === 'stay')) homes.set(home.id, pt(home));
     seq.forEach(s => stops.push(s));
-    const path = (homeIn && seq.length ? [pt(home, { home: true })] : []).concat(seq);
+    // a logged day starts from last night's stay (never tonight's hotel on an arrival day, and not twice when the first stop is the stay)
+    const last = lived ? startStay(t.id, d) : null;
+    const st = lived ? (last && !(seq[0] && seq[0].key === last.id) ? last : null) : home;
+    const startIn = st && hasCoords(st) && ft.inDay(d) && ft.inArea(pt(st));
+    const path = (startIn && seq.length ? [pt(st, { home: true })] : []).concat(seq);
     if (path.length > 1) tracks.push({ day: d, pts: path });
     perDay.push({ day: d, n: total, marks: seq.filter(s => s.mark).length, in: ft.all || (ft.inDay(d) && (seq.length > 0 || !frame || frame.kind !== 'place')) });
   });
@@ -3600,7 +3618,9 @@ function drawMap(t, layer) {
   if (ui.mapLayer === 'lived') {
     const seq = flatLogs(t.id, d);
     seq.forEach((l, k) => addNum(l, k + 1, l.parent_id ? C.tour : l.origin === 'found' ? C.found : C.place, 'log'));
-    drawLegs(home ? [home, ...seq] : seq, C.found);
+    const st = startsAtStay(t.id, d, seq.find(l => !isWander(l) && !l.parent_id));
+    if (st && st !== home) addHome(st);
+    drawLegs(st ? [st, ...seq] : seq, C.found);
     say(seq.length ? '' : 'Nothing logged this day yet.');
     return pts;
   }
