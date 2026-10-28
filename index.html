@@ -250,6 +250,8 @@ nav.tabs.live { flex-wrap: wrap; row-gap: 6px; padding-top: 10px; }
 nav.tabs .quick { flex-basis: 100%; display: flex; gap: 8px; }
 nav.tabs .quick button { flex: 1; flex-direction: row; justify-content: center; font-size: 14px; font-weight: 600; padding: 11px 4px;
   border-radius: 12px; border: 1px solid var(--line); background: var(--card); color: var(--ink); white-space: nowrap; }
+nav.tabs .quick.four { gap: 6px; }
+nav.tabs .quick.four button { font-size: 13px; padding: 11px 2px; letter-spacing: -.01em; }
 nav.tabs .quick button.go { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
 nav.tabs.live .add { width: 44px; height: 44px; margin-top: 0; box-shadow: none; }
 nav.tabs.live .add svg { width: 22px; height: 22px; }
@@ -507,7 +509,7 @@ function lingerCap(cat) {
 }
 /** Stays, errands and getting around: still part of the line on a poster, but never named on it or counted as a highlight.
  *  A place you marked loved is never a chore. Same idea as the review page's errand filter, by category. */
-const CHORE_RX = /^(stay|hotel|lodging|hostel|airbnb|guesthouse|motel)$|airport|terminal|transportation|transit|station|bus stop|shuttle|parking|car rental|convenience|supermarket|grocery|pharmacy|drugstore|post office|government|bank|atm|laundr|wandering/i;
+const CHORE_RX = /^(stay|hotel|lodging|hostel|airbnb|guesthouse|motel)$|airport|terminal|transportation|transit|station|bus stop|shuttle|parking|car rental|convenience|supermarket|grocery|pharmacy|drugstore|post office|government|bank|atm|laundr|wandering|pickup/i;
 const isChore = s => !s.mark && (CHORE_RX.test(s.category || '') || /^(somewhere|dropped pin|saved place)$/i.test(s.title || ''));
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -1081,9 +1083,10 @@ function liveTrip() {
 function navView(active) {
   const lt = cfg ? liveTrip() : null, st = lt ? stayForDay(lt.id, tzNow(lt.timezone).day) : null;
   document.body.classList.toggle('live-dock', !!lt);
-  const quick = lt ? `<div class="quick">
+  const quick = lt ? `<div class="quick${st ? ' four' : ''}">
       <button class="go" data-act="qhere">I’m here</button>
       <button data-act="qwander">Wandering</button>
+      <button data-act="qonway">On my way</button>
       ${st ? `<button data-act="qhome">${esc(homeLabel(st).replace('Back at the ', 'Back at '))}</button>` : ''}
     </div>` : '';
   return `<nav class="tabs${lt ? ' live' : ''}">${quick}
@@ -1456,7 +1459,7 @@ function logContent(t) {
     const nSnd = kept.filter(a => a.kind === 'sound').length, nSouv = kept.filter(a => a.kind === 'souvenir').length;
     // the thumbnail says "photos"; sounds and souvenirs get a word, early so it isn't cut off
     const keptLine = [nSnd ? (nSnd === 1 ? '♪ sound' : `♪ ${nSnd} sounds`) : '', nSouv ? 'brought home' : ''].filter(Boolean).join(' · ');
-    const meta = [l.time ? fmtTime(l.time) : '', keptLine, l.city, l.note].filter(Boolean).join(' · ');
+    const meta = [l.time ? fmtTime(l.time) : '', l.category === PICKUP_CAT ? 'picked up here' : '', keptLine, l.city, l.note].filter(Boolean).join(' · ');
     const rb = rateBadge(l);
     list += `<div class="entry ${l._pending ? 'pending' : ''}" data-log="${esc(l.id)}">
       <span class="num" style="--c:${l.origin === 'found' ? 'var(--found)' : 'var(--place)'}">${n}</span>
@@ -3722,6 +3725,7 @@ function bindCommon() {
     else if (a === 'review') openReview(r.id, currentLogDay(tripById(r.id)));
     else if (a === 'wander') logWander(tripById(r.id), currentLogDay(tripById(r.id)));
     else if (a === 'home') logHome(tripById(r.id), currentLogDay(tripById(r.id)));
+    else if (a === 'qonway') { const lt = liveTrip(); if (lt) logOnMyWay(lt, tzNow(lt.timezone).day); }
     else if (a === 'qhere' || a === 'qwander' || a === 'qhome') {
       const lt = liveTrip(); if (!lt) return;
       const today = tzNow(lt.timezone).day;
@@ -4336,7 +4340,7 @@ function openHere(tripId, d) {
     ${navigator.clipboard && navigator.clipboard.readText ? `<button class="linkbtn" id="h-paste" style="margin:-8px 0 10px">Paste a link</button>` : ''}
     <div class="two">
       <div class="field"><label id="h-time-label">${isToday ? 'Time (optional)' : 'Time'}</label><div class="inline"><input type="time" id="h-time"><button class="btn ghost small" id="h-now">Now</button></div></div>
-      <div class="field"><label>Got here by</label><select id="h-mode">${MODES.map(([k, l]) => `<option value="${k}" ${k === (prev && prev.mode) ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="field"><label>Got here by</label><select id="h-mode">${MODES.map(([k, l]) => `<option value="${k}" ${k === (onWayFor(t, d) || (prev && prev.mode)) ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     </div>
     ${tours.length ? `<div class="field"><label>Part of</label><select id="h-parent"><option value="">— (on my own)</option>${tours.map(l => `<option value="${esc(l.id)}">${esc(l.title)}</option>`).join('')}</select></div>` : ''}
     <div class="field"><label>Note</label><input id="h-note" placeholder="What it was like, what you ordered…"></div>
@@ -4477,6 +4481,7 @@ function openHere(tripId, d) {
       // a typed name (no link) at your current spot keeps your location
       else if (!it && !isMapsUrl(text) && pos) { payload.title = text; payload.lat = pos.lat; payload.lng = pos.lng; }
       queue('addLog', payload, () => { db.log.push(local); if (it) it.status = 'done'; });
+      if (!parent_id && !earlier) store.set('th_onway', null);   // the ride you were on ends at this stop
       keep.forEach(k => keepArtifact(local, k.kind, { blob: k.blob, mime: k.kind === 'photo' ? 'image/jpeg' : k.blob.type, duration: k.duration || '' }));
       // logging a planned tour also logs its stops (delete any you skipped)
       if (it && isTour(it)) {
@@ -4596,6 +4601,49 @@ function putInTimeOrder(t, d) {
     ids.forEach((x, n) => { const o = db.log.find(y => y.id === x); if (o) o.seq = String(n); });
   });
   toast('Put in time order');
+}
+
+/* ---------- On my way: "I was picked up here (a bus stop, a tour pickup) and I'm moving now" ---------- */
+const PICKUP_CAT = 'Pickup';
+/** The ride you're on, if you tapped On my way today and haven't logged a stop since. */
+function onWayFor(t, d) {
+  const w = store.get('th_onway', null);
+  return w && w.trip === t.id && w.day === d && Date.now() - w.at < 14 * 3600e3 ? w.mode : '';
+}
+async function logOnMyWay(t, d) {
+  const now = tzNow(t.timezone);
+  const tops = topLogs(t.id, d).filter(l => !isWander(l)), last = tops[tops.length - 1];
+  if (last && last.category === PICKUP_CAT && onWayFor(t, d)) { toast('Already on your way from ' + last.title); return; }
+  // a tour day rides the tour bus; otherwise it's a bus
+  const mode = fixedEvents(t.id, d).some(e => e.start && isTour(e.i)) ? 'tour' : 'transit';
+  toast('Finding where you are…');
+  const pos = await new Promise(res => {
+    if (!navigator.geolocation) return res(null);
+    navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lng: p.coords.longitude }), () => res(null),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
+  });
+  // a saved place you're standing at (a booked pickup stop, say), else the street you're on
+  let spot = null;
+  if (pos) {
+    const near = itemsFor(t.id).filter(i => i.kind !== 'idea' && hasCoords(i) && !isFlight(i)).map(i => ({ i, m: meters(pos, i) }))
+      .filter(x => x.m < 120).sort((a, b) => a.m - b.m)[0];
+    if (near) spot = { item: near.i.parent_id ? null : near.i, title: near.i.title, lat: +near.i.lat, lng: +near.i.lng, city: near.i.city || '', place_id: near.i.place_id || '' };
+    else { const nm = await hereName(pos); spot = { title: nm ? nm.title : 'Pickup spot', city: nm ? nm.city : '', lat: pos.lat, lng: pos.lng, place_id: '' }; }
+  }
+  const time = tzNow(t.timezone).time;
+  const all = topLogs(t.id, d);
+  const seq = all.length ? Math.max(...all.map(seqOf).filter(x => x < 9999), -1) + 1 : 0;
+  const it = spot && spot.item;
+  const l = { id: uid('lg'), trip_id: t.id, day: d, seq: String(seq), time, title: spot ? spot.title : 'Picked up', category: PICKUP_CAT,
+    origin: it ? 'planned' : 'found', item_id: it ? it.id : '', lat: spot ? spot.lat : '', lng: spot ? spot.lng : '', city: spot ? spot.city : '',
+    place_id: spot ? spot.place_id : '', mode: '', here_lat: pos ? pos.lat : '', here_lng: pos ? pos.lng : '', logged_at: new Date().toISOString(), timezone: t.timezone || '' };
+  const payload = { id: l.id, trip: t.id, day: d, seq: l.seq, time, title: l.title, category: PICKUP_CAT, logged_at: l.logged_at, timezone: l.timezone,
+    item_id: it ? it.id : undefined, lat: l.lat || undefined, lng: l.lng || undefined, city: l.city || undefined, place_id: l.place_id || undefined,
+    here_lat: pos ? pos.lat : undefined, here_lng: pos ? pos.lng : undefined };
+  queue('addLog', payload, () => { db.log.push(l); if (it) it.status = 'done'; });
+  store.set('th_onway', { trip: t.id, day: d, mode, at: Date.now() });
+  toast(`On your way from ${l.title}, ${fmtTime(time)}. Tap I’m here at the next stop.`);
+  render();
 }
 
 /** One tap: "I've left, I'm just wandering." On a past day it asks for the time instead. */
