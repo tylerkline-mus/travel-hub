@@ -490,7 +490,11 @@ const seqOf = o => (o.seq === '' || o.seq == null) ? 9999 : +o.seq;
 /* "Out wandering": a log entry with no place, only a time. It ends the stop before it, and the poster draws the stretch
    after it as a loose wander instead of a straight walk. Saved as an ordinary log row (category Wandering), so no script change. */
 const WANDER_CAT = 'Wandering';
-const isWander = l => l && l.category === WANDER_CAT && !(l.lat !== '' && l.lat != null && !isNaN(+l.lat));
+/* "On my way": the same kind of marker row (category Leaving, no place): "we're leaving the stop before this". It ends that stop
+   like a wander does, but the next leg is an ordinary ride, not a meander. isWander covers both markers; isLeave tells them apart. */
+const LEAVE_CAT = 'Leaving';
+const isWander = l => l && (l.category === WANDER_CAT || l.category === LEAVE_CAT) && !(l.lat !== '' && l.lat != null && !isNaN(+l.lat));
+const isLeave = l => isWander(l) && l.category === LEAVE_CAT;
 /** How long a stop can believably have lasted, by what kind of place it is. A longer gap to the next logged stop means you were out and about. */
 /** The seq for a stop added later with a time: right after the latest-timed stop before it, before whatever followed. */
 function seqForTime(tops, time) {
@@ -1449,7 +1453,7 @@ function logContent(t) {
   if (start) list += `<div class="start-row"><span class="sq" aria-hidden="true"></span><span>Started at <b>${esc(start.title)}</b></span></div>`;
   tops.forEach((l, k) => {
     if (isWander(l)) {
-      list += `<div class="wander-row ${l._pending ? 'pending' : ''}" data-log="${esc(l.id)}"><span class="squig" aria-hidden="true">〰</span><span>Out wandering${l.time ? ' · from ' + esc(fmtTime(l.time)) : ''}</span>
+      list += `<div class="wander-row ${l._pending ? 'pending' : ''}" data-log="${esc(l.id)}"><span class="squig" aria-hidden="true">${isLeave(l) ? '→' : '〰'}</span><span>${isLeave(l) ? 'On my way' : 'Out wandering'}${l.time ? (isLeave(l) ? ' · left at ' : ' · from ') + esc(fmtTime(l.time)) : ''}</span>
         ${reorder ? `<div class="moves"><button data-move="up" data-list="${key}" data-id="${esc(l.id)}" ${k === 0 ? 'disabled' : ''}>↑</button><button data-move="down" data-list="${key}" data-id="${esc(l.id)}" ${k === tops.length - 1 ? 'disabled' : ''}>↓</button></div>` : ''}</div>`;
       return;
     }
@@ -1549,6 +1553,7 @@ function recapData(t, frame) {
       flatLogs(t.id, d).forEach(l => {
         if (isWander(l)) {
           if (prev && !prev.wanderAt) prev.wanderAt = l.time || '';
+          if (isLeave(l)) return;
           pendW = pendW || l;
           return;
         }
@@ -4327,6 +4332,10 @@ function openHere(tripId, d) {
   const dayPlan = plannedStops(tripId, d).concat(fixedEvents(tripId, d).filter(e => e.start).map(e => e.i)).filter(i => !logged.has(i.id));
   const others = topItemsFor(tripId).filter(i => i.kind !== 'fixed' && !logged.has(i.id) && i.day !== d);
   const tours = topLogs(tripId, d).filter(l => { const it = l.item_id && itemById(l.item_id); return it && isTour(it); });
+  // still on the tour: it's the last real stop logged and (today) the tour's end time hasn't passed
+  const lastReal = topLogs(tripId, d).filter(l => !isWander(l)).slice(-1)[0];
+  const tourIt = lastReal && tours.includes(lastReal) ? itemById(lastReal.item_id) : null;
+  const onTour = tourIt && (!isToday || !tourIt.end_time || now.time < tourIt.end_time) ? lastReal.id : '';
   const prev = topLogs(tripId, d).slice(-1)[0];
   let picked = null, pos = null, near = null, nearList = [], pin = null;
   let livePos = null;
@@ -4346,7 +4355,7 @@ function openHere(tripId, d) {
       <div class="field"><label id="h-time-label">${isToday ? 'Time (optional)' : 'Time'}</label><div class="inline"><input type="time" id="h-time"><button class="btn ghost small" id="h-now">Now</button></div></div>
       <div class="field"><label>Got here by</label><select id="h-mode">${MODES.map(([k, l]) => `<option value="${k}" ${k === (onWayFor(t, d) || (prev && prev.mode)) ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     </div>
-    ${tours.length ? `<div class="field"><label>Part of</label><select id="h-parent"><option value="">— (on my own)</option>${tours.map(l => `<option value="${esc(l.id)}">${esc(l.title)}</option>`).join('')}</select></div>` : ''}
+    ${tours.length ? `<div class="field"><label>Part of</label><select id="h-parent"><option value="">— (on my own)</option>${tours.map(l => `<option value="${esc(l.id)}" ${l.id === onTour ? 'selected' : ''}>${esc(l.title)}</option>`).join('')}</select></div>` : ''}
     <div class="field"><label>Note</label><input id="h-note" placeholder="What it was like, what you ordered…"></div>
     <div class="photo-grid" id="h-kept"></div>
     <div class="keep-actions"><button class="btn ghost small" id="h-ph">+ Photo</button><button class="btn ghost small" id="h-rec">● Record sound</button></div>
@@ -4607,46 +4616,26 @@ function putInTimeOrder(t, d) {
   toast('Put in time order');
 }
 
-/* ---------- On my way: "I was picked up here (a bus stop, a tour pickup) and I'm moving now" ---------- */
-const PICKUP_CAT = 'Pickup';
+/* ---------- On my way: "we're leaving this stop now" (a marker, no new place) ---------- */
+const PICKUP_CAT = 'Pickup';   // old On my way rows logged a place; still a chore on posters
 /** The ride you're on, if you tapped On my way today and haven't logged a stop since. */
 function onWayFor(t, d) {
   const w = store.get('th_onway', null);
   return w && w.trip === t.id && w.day === d && Date.now() - w.at < 14 * 3600e3 ? w.mode : '';
 }
-async function logOnMyWay(t, d) {
-  const now = tzNow(t.timezone);
-  const tops = topLogs(t.id, d).filter(l => !isWander(l)), last = tops[tops.length - 1];
-  if (last && last.category === PICKUP_CAT && onWayFor(t, d)) { toast('Already on your way from ' + last.title); return; }
+function logOnMyWay(t, d) {
+  const now = tzNow(t.timezone), tops = topLogs(t.id, d), last = tops[tops.length - 1];
+  if (last && isLeave(last)) { toast('Already on your way since ' + fmtTime(last.time)); return; }
   // a tour day rides the tour bus; otherwise it's a bus
   const mode = fixedEvents(t.id, d).some(e => e.start && isTour(e.i)) ? 'tour' : 'transit';
-  toast('Finding where you are…');
-  const pos = await new Promise(res => {
-    if (!navigator.geolocation) return res(null);
-    navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lng: p.coords.longitude }), () => res(null),
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
-  });
-  // a saved place you're standing at (a booked pickup stop, say), else the street you're on
-  let spot = null;
-  if (pos) {
-    const near = itemsFor(t.id).filter(i => i.kind !== 'idea' && hasCoords(i) && !isFlight(i)).map(i => ({ i, m: meters(pos, i) }))
-      .filter(x => x.m < 120).sort((a, b) => a.m - b.m)[0];
-    if (near) spot = { item: near.i.parent_id ? null : near.i, title: near.i.title, lat: +near.i.lat, lng: +near.i.lng, city: near.i.city || '', place_id: near.i.place_id || '' };
-    else { const nm = await hereName(pos); spot = { title: nm ? nm.title : 'Pickup spot', city: nm ? nm.city : '', lat: pos.lat, lng: pos.lng, place_id: '' }; }
-  }
-  const time = tzNow(t.timezone).time;
-  const all = topLogs(t.id, d);
-  const seq = all.length ? Math.max(...all.map(seqOf).filter(x => x < 9999), -1) + 1 : 0;
-  const it = spot && spot.item;
-  const l = { id: uid('lg'), trip_id: t.id, day: d, seq: String(seq), time, title: spot ? spot.title : 'Picked up', category: PICKUP_CAT,
-    origin: it ? 'planned' : 'found', item_id: it ? it.id : '', lat: spot ? spot.lat : '', lng: spot ? spot.lng : '', city: spot ? spot.city : '',
-    place_id: spot ? spot.place_id : '', mode: '', here_lat: pos ? pos.lat : '', here_lng: pos ? pos.lng : '', logged_at: new Date().toISOString(), timezone: t.timezone || '' };
-  const payload = { id: l.id, trip: t.id, day: d, seq: l.seq, time, title: l.title, category: PICKUP_CAT, logged_at: l.logged_at, timezone: l.timezone,
-    item_id: it ? it.id : undefined, lat: l.lat || undefined, lng: l.lng || undefined, city: l.city || undefined, place_id: l.place_id || undefined,
-    here_lat: pos ? pos.lat : undefined, here_lng: pos ? pos.lng : undefined };
-  queue('addLog', payload, () => { db.log.push(l); if (it) it.status = 'done'; });
+  const seq = tops.length ? Math.max(...tops.map(seqOf).filter(x => x < 9999), -1) + 1 : 0;
+  const l = { id: uid('lg'), trip_id: t.id, day: d, seq: String(seq), time: now.time, title: 'On my way', category: LEAVE_CAT, origin: 'found',
+              lat: '', lng: '', logged_at: new Date().toISOString(), timezone: t.timezone || '', _pending: true };
+  queue('addLog', { id: l.id, trip: t.id, day: d, seq: l.seq, time: l.time, title: l.title, category: LEAVE_CAT, logged_at: l.logged_at, timezone: l.timezone },
+    () => db.log.push(l));
   store.set('th_onway', { trip: t.id, day: d, mode, at: Date.now() });
-  toast(`On your way from ${l.title}, ${fmtTime(time)}. Tap I’m here at the next stop.`);
+  const from = [...tops].reverse().find(x => !isWander(x));
+  toast(`Left ${from ? from.title : 'there'} at ${fmtTime(now.time)}. Tap I’m here at the next stop.`);
   render();
 }
 
@@ -4655,7 +4644,7 @@ function logWander(t, d) {
   const now = tzNow(t.timezone), today = d === now.day;
   if (!today) return openWander(null, t, d);
   const tops = topLogs(t.id, d);
-  if (tops.length && isWander(tops[tops.length - 1])) { toast('Already wandering since ' + fmtTime(tops[tops.length - 1].time)); return; }
+  if (tops.length && isWander(tops[tops.length - 1]) && !isLeave(tops[tops.length - 1])) { toast('Already wandering since ' + fmtTime(tops[tops.length - 1].time)); return; }
   saveWander(t, d, now.time, true);
   toast('Out wandering from ' + fmtTime(now.time) + '. Tap I’m here when you stop somewhere.');
 }
@@ -4670,9 +4659,11 @@ function saveWander(t, d, time, live) {
 }
 function openWander(l, t, d) {
   openSheet(`
-    <h3>Out wandering</h3>
+    ${l && isLeave(l) ? `<h3>On my way</h3>
+    <p class="hint" style="margin-top:-4px">When you left the stop before this. It ends that stop; the next stop’s “Got here by” says how you travelled.</p>
+    <div class="field"><label>Left at</label>` : `<h3>Out wandering</h3>
     <p class="hint" style="margin-top:-4px">Time between stops that you didn’t log anywhere. Nothing about where you were is kept. It ends the stop before it, and on the poster it’s drawn as a loose wander.</p>
-    <div class="field"><label>From</label><input type="time" id="w-time" value="${esc(l ? l.time : tzNow(t.timezone).time)}"></div>
+    <div class="field"><label>From</label>`}<input type="time" id="w-time" value="${esc(l ? l.time : tzNow(t.timezone).time)}"></div>
     <div class="btnrow">${l ? `<button class="btn danger" id="w-del">Remove</button>` : ''}<button class="btn" id="w-save">${l ? 'Save' : 'Add'}</button></div>
   `, sh => {
     $('#w-save', sh).onclick = () => {
