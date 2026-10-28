@@ -214,7 +214,7 @@ main { padding: 6px 16px 24px; max-width: 720px; margin: 0 auto; }
 .pri.must { background: var(--accent); color: var(--accent-ink); }
 .pri.maybe { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--muted); }
 .rate { font-weight: 600; margin-right: 6px; }
-.rate.loved { color: #c2405a; } .rate.liked { color: var(--idea); } .rate.meh { color: var(--muted); }
+.rate.best { color: #a8660c; } .rate.loved { color: #c2405a; } .rate.liked { color: var(--idea); } .rate.meh { color: var(--muted); }
 .route-codes { font-weight: 700; letter-spacing: .03em; }
 .search { margin-top: 12px; }
 .search input { width: 100%; border: 1px solid var(--line); background: var(--card); border-radius: 12px; padding: 12px 14px; font-size: 16px; outline: none; -webkit-appearance: none; }
@@ -287,6 +287,7 @@ nav.tabs.live > button { padding-top: 2px; padding-bottom: 2px; }
 .hint { font-size: 13px; color: var(--muted); margin: -6px 2px 14px; min-height: 18px; }
 .seg { display: flex; background: color-mix(in srgb, var(--ink) 7%, transparent); border-radius: 10px; padding: 3px; margin-bottom: 14px; flex-wrap: wrap; }
 .seg button { flex: 1; border: 0; background: none; padding: 8px 6px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; color: var(--muted); white-space: nowrap; }
+#lg-rate button { flex: 1 1 auto; padding: 8px 5px; }
 .seg button.on { background: var(--card); color: var(--ink); box-shadow: var(--shadow); }
 .btn { border: 0; background: var(--accent); color: var(--accent-ink); font-weight: 600; border-radius: 12px; padding: 13px 16px; font-size: 16px; cursor: pointer; width: 100%; }
 .btn.ghost { background: var(--card); color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
@@ -464,7 +465,7 @@ const MODE_LABEL = Object.fromEntries(MODES);
 const PRIOS = [['must', 'Must'], ['want', 'Want'], ['maybe', 'Maybe']];
 const PRIO_RANK = { must: 0, want: 1, '': 2, maybe: 3 };
 const prioRank = i => PRIO_RANK[i.priority || ''] ?? 2;
-const RATINGS = [['loved', '♥ Loved'], ['liked', '✓ Liked'], ['meh', '– Meh']];
+const RATINGS = [['best', '★ Unforgettable'], ['loved', '♥ Loved'], ['liked', '✓ Liked'], ['meh', '– Meh']];
 const ratingOf = l => l.rating || (l.would_return ? 'loved' : '');
 function prioBadge(i) { return i.priority === 'must' ? '<span class="pri must">Must</span>' : i.priority === 'maybe' ? '<span class="pri maybe">Maybe</span>' : ''; }
 function rateBadge(l) { const r = ratingOf(l); const lab = RATINGS.find(x => x[0] === r); return lab ? `<span class="rate ${r}">${lab[1]}</span>` : ''; }
@@ -1556,7 +1557,7 @@ function recapData(t, frame) {
         // a stop logged at where you're staying is the stay, however it was logged (one place, not a "found" hotel)
         const st = it0 ? (isStay(it0) ? it0 : null) : !l.parent_id ? stayMatch(t.id, d, l) : null, it = st || it0;
         if (st) l = { ...l, item_id: st.id, title: st.title, category: st.category || 'Stay', origin: 'planned' };
-        const s = pt(l, { mode: l.parent_id ? 'tour' : l.mode, tour: !!l.parent_id, mark: l.rating === 'loved', found: l.origin === 'found', wasMaybe: !!(it && it.priority === 'maybe'),
+        const s = pt(l, { mode: l.parent_id ? 'tour' : l.mode, tour: !!l.parent_id, mark: l.rating === 'loved' || l.rating === 'best', best: l.rating === 'best', found: l.origin === 'found', wasMaybe: !!(it && it.priority === 'maybe'),
           wasMust: !!(it && it.priority === 'must'), meh: l.rating === 'meh', note: l.note || '', time: l.time || '', top: !l.parent_id, id: l.id,
           city: l.city || (it && it.city) || '', region: (it && it.region) || '', country: (it && it.country) || '',
           category: l.category || (it && it.category) || '', key: l.item_id || l.place_id || `${l.title}|${(+l.lat).toFixed(3)},${(+l.lng).toFixed(3)}`,
@@ -1703,7 +1704,7 @@ function recapCredits(t, data, prefs, extras) {
     S.forEach(s => { (visits[s.key] ||= { key: s.key, title: s.title, n: 0 }).n++; });
     const back = Object.values(visits).filter(v => v.n > 1).sort((a, b) => b.n - a.n)[0];
     const finds = [...new Map(S.filter(s => s.found).map(s => [s.key, s])).values()];
-    const favs = finds.filter(s => s.mark).sort((a, b) => (!!b.note - !!a.note) || ((back && a.key === back.key) - (back && b.key === back.key)));
+    const favs = finds.filter(s => s.mark).sort((a, b) => (!!b.best - !!a.best) || (!!b.note - !!a.note) || ((back && a.key === back.key) - (back && b.key === back.key)));
     const fav = (prefs.fav && finds.find(s => s.key === prefs.fav)) || favs[0];
     if (fav) out.fav = { value: fav.title, choices: finds, chosen: fav.key, titles: [fav.title] };
     if (back) out.back = { value: `${back.title}, ${back.n === 2 ? 'twice' : numWord(back.n) + ' times'}`, titles: [back.title] };
@@ -2281,13 +2282,15 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     ctx.save();
     if (L.overprint) { ctx.globalCompositeOperation = 'multiply'; ctx.translate(2.2, -1.6); }
     ctx.fillStyle = L.accent;
-    const marks = data.stops.filter(s => s.mark);
-    marks.forEach(s => { const q = P(s); ctx.beginPath(); ctx.arc(q.x, q.y, 9, 0, Math.PI * 2); ctx.fill(); });
+    // unforgettable places: a bigger dot with a ring around it, and their names go down first
+    const marks = data.stops.filter(s => s.mark).sort((a, b) => !!b.best - !!a.best);
+    marks.forEach(s => { const q = P(s); ctx.beginPath(); ctx.arc(q.x, q.y, s.best ? 11 : 9, 0, Math.PI * 2); ctx.fill();
+      if (s.best) { ctx.beginPath(); ctx.arc(q.x, q.y, 18, 0, Math.PI * 2); ctx.lineWidth = 2.2; ctx.strokeStyle = L.accent; ctx.stroke(); } });
     // hand labels for the loved places, nudged so they don't collide
     ctx.font = `italic 400 ${story ? 33 : 30}px ${PF}`;
     const taken = [{ x: M, y: mapRect.y + mapRect.h - 40, w: 260, h: 40 }];
     if (inset) taken.push({ x: inset.x - 6, y: inset.y - 6, w: inset.w + 12, h: inset.h + 12 });
-    [...data.stops, ...data.homes].forEach(s => { const q = P(s); taken.push({ x: q.x - 9, y: q.y - 9, w: 18, h: 18 }); });
+    [...data.stops, ...data.homes].forEach(s => { const q = P(s), r = s.best ? 20 : 9; taken.push({ x: q.x - r, y: q.y - r, w: r * 2, h: r * 2 }); });
     // and the lines (sampled), so a name never sits on a route
     data.tracks.forEach(tr => tr.pts.forEach((pb, k) => { if (!k) return; const A = P(tr.pts[k - 1]), B = P(pb), n = Math.ceil(Math.hypot(B.x - A.x, B.y - A.y) / 14);
       for (let j = 1; j < n; j++) taken.push({ x: A.x + (B.x - A.x) * j / n - 3, y: A.y + (B.y - A.y) * j / n - 3, w: 6, h: 6 }); }));
@@ -2297,16 +2300,17 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     // loved places first, then any place a credit names (so it can be found), then notes, then the rest; errands go unnamed
     const named = new Set(shown.flatMap(c => c.titles || [])), lab = data.stops.filter(s => !s.mark && !isChore(s));
     const labelled = [...marks, ...lab.filter(s => named.has(s.title)), ...lab.filter(s => s.note), ...lab.filter(s => !s.note && s.top !== false), ...lab.filter(s => !s.note && s.top === false)];
-    const big = `italic 400 ${story ? 33 : 30}px ${PF}`, small = `italic 400 ${story ? 27 : 25}px ${PF}`;
+    const big = `italic 400 ${story ? 33 : 30}px ${PF}`, small = `italic 400 ${story ? 27 : 25}px ${PF}`, best = `italic 500 ${story ? 38 : 35}px ${PF}`;
     labelled.forEach(s => {
       if (!s.title || seen.has(s.title) || seen.size >= (story ? 12 : 10)) return;
-      ctx.font = s.mark ? big : small;
+      ctx.font = s.best ? best : s.mark ? big : small;
       const note = prefs.notes !== false && s.note ? (s.note.length > 38 ? s.note.slice(0, 36).trim() + '…' : s.note) : '';
       const nh = note ? (story ? 32 : 30) : 0, nf = `400 ${story ? 25 : 23}px ${PF}`, tf = ctx.font;
       ctx.font = nf; const nw = note ? ctx.measureText(note).width : 0; ctx.font = tf;
-      const lh = s.mark ? (story ? 36 : 34) : (story ? 30 : 28);
+      const lh = s.best ? (story ? 41 : 38) : s.mark ? (story ? 36 : 34) : (story ? 30 : 28);
       const q = P(s), w = Math.max(ctx.measureText(s.title).width, nw), h = lh + nh;
-      const spots = [{ x: q.x + 17, y: q.y - 30 }, { x: q.x + 17, y: q.y + 2 }, { x: q.x - 17 - w, y: q.y - 30 }, { x: q.x - 17 - w, y: q.y + 2 },
+      const o0 = s.best ? 8 : 0;   // clear the ring
+      const spots = [{ x: q.x + 17 + o0, y: q.y - 30 - o0 }, { x: q.x + 17, y: q.y + 2 }, { x: q.x - 17 - w, y: q.y - 30 }, { x: q.x - 17 - w, y: q.y + 2 },
         { x: q.x - w / 2, y: q.y - 22 - h }, { x: q.x - w / 2, y: q.y + 18 }, { x: q.x + 17, y: q.y - h + 4 }, { x: q.x - 17 - w, y: q.y - h + 4 }];
       // crowded spot: loved places and places a credit names may sit a little further out
       if (s.mark || named.has(s.title)) [28, 56].forEach(o => spots.push({ x: q.x + 17 + o, y: q.y - 30 - o }, { x: q.x + 17 + o, y: q.y + 2 + o },
@@ -2736,7 +2740,7 @@ function rangeCredits(R, p) {
       const back = Object.values(v).filter(o => o.days.size > 1).sort((a, b) => b.trips.size - a.trips.size || b.days.size - a.days.size)[0];
       if (back) out.back = { value: back.trips.size > 1 ? `${back.title}, on ${numWord(back.trips.size)} trips` : `${back.title}, ${back.days.size === 2 ? 'twice' : numWord(back.days.size) + ' times'}` };
       const finds = [...new Map(S.filter(s => s.found).map(s => [s.key, s])).values()];
-      const favs = finds.filter(s => s.mark).sort((a, b) => (!!b.note - !!a.note) || ((back && a.key === back.key) - (back && b.key === back.key)));
+      const favs = finds.filter(s => s.mark).sort((a, b) => (!!b.best - !!a.best) || (!!b.note - !!a.note) || ((back && a.key === back.key) - (back && b.key === back.key)));
       const fav = (p.fav && finds.find(s => s.key === p.fav)) || favs[0];
       if (fav) out.fav = { value: fav.title, choices: finds, chosen: fav.key };
       S.forEach(s => { if (s.category && !/^(stay|flight|tour|place)$/i.test(s.category)) cats[s.category.toLowerCase()] = (cats[s.category.toLowerCase()] || 0) + 1; });
@@ -5082,7 +5086,7 @@ function demoData() {
       { id: 'l8', trip_id: 'tr_demo1', day: d(1), seq: '0', item_id: 'f3', title: 'Nikko day tour', origin: 'planned', mode: 'walk', lat: 35.7111, lng: 139.7976 },
       { id: 'l8a', trip_id: 'tr_demo1', day: d(1), seq: '0', parent_id: 'l8', item_id: 'c1', title: 'Nikkō Tōshō-gū', origin: 'planned', mode: 'tour', lat: 36.7580, lng: 139.5987 },
       { id: 'l8b', rating: 'loved', trip_id: 'tr_demo1', day: d(1), seq: '1', parent_id: 'l8', item_id: 'c2', title: 'Kegon Falls', origin: 'planned', mode: 'tour', lat: 36.7383, lng: 139.5025 },
-      { id: 'l9', rating: 'loved', trip_id: 'tr_demo1', day: d(2), seq: '0', item_id: 'p4', title: 'Golden Gai', origin: 'planned', mode: 'transit', time: '19:30', lat: 35.6938, lng: 139.7036 },
+      { id: 'l9', rating: 'best', trip_id: 'tr_demo1', day: d(2), seq: '0', item_id: 'p4', title: 'Golden Gai', origin: 'planned', mode: 'transit', time: '19:30', lat: 35.6938, lng: 139.7036 },
       { id: 'l10', rating: 'liked', trip_id: 'tr_demo1', day: d(2), seq: '1', item_id: 'p5', title: 'Disk Union Shinjuku', origin: 'planned', mode: 'walk', time: '21:00', lat: 35.6920, lng: 139.7030 },
       { id: 'l11', rating: 'meh', trip_id: 'tr_demo1', day: d(2), seq: '2', title: 'Omoide Yokocho', origin: 'found', mode: 'walk', category: 'Bar', time: '22:10', lat: 35.6930, lng: 139.6995 },
       { id: 'l12', rating: 'loved', trip_id: 'tr_demo1', day: d(2), seq: '3', title: 'A tiny jazz kissa', origin: 'found', mode: 'walk', category: 'Bar', time: '00:50', note: 'Bill Evans all night', lat: 35.6905, lng: 139.7058 },
@@ -5090,7 +5094,7 @@ function demoData() {
       { id: 'l14', rating: 'meh', trip_id: 'tr_demo1', day: d(3), seq: '1', item_id: 'p9', title: 'Torikizoku Kuramae', origin: 'planned', mode: 'walk', lat: 35.7030, lng: 139.7915 },
       ...[
         [d(-150), 'Guesthouse on Skólavörðustígur', 64.1440, -21.9270, { item_id: 'rf2', origin: 'planned', time: '09:30' }],
-        [d(-150), 'Bæjarins Beztu Pylsur', 64.1482, -21.9406, { rating: 'loved', origin: 'found', mode: 'walk', note: 'One with everything', category: 'Hot dog stand', time: '13:10' }],
+        [d(-150), 'Bæjarins Beztu Pylsur', 64.1482, -21.9406, { rating: 'best', origin: 'found', mode: 'walk', note: 'One with everything', category: 'Hot dog stand', time: '13:10' }],
         [d(-150), 'Sundhöllin', 64.1430, -21.9220, { rating: 'liked', origin: 'found', mode: 'walk', category: 'Swimming pool', time: '17:00' }],
         [d(-149), 'Hallgrímskirkja', 64.1417, -21.9266, { item_id: 'rp1', rating: 'liked', origin: 'planned', mode: 'walk', time: '10:00' }],
         [d(-149), 'Harpa', 64.1503, -21.9327, { item_id: 'rp2', rating: 'loved', origin: 'planned', mode: 'walk', time: '20:00', note: 'Iceland Symphony, Sibelius 5' }],
