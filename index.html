@@ -1998,6 +1998,26 @@ function rgbaOf(c) {
   const h = String(c).replace('#', '');
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), 1];
 }
+/** The land the trip is on (each piece of land with a trip point on or near it), as bounds — so the corner square
+ *  frames the whole country's outline (all of Iceland), not just the stretch of coast you saw. Too big a country: null. */
+function landBounds(world, pts) {
+  if (!world || !pts.length) return null;
+  const hit = new Set();
+  pts.forEach(p => {
+    let best = null;
+    for (const l of world.lands) {
+      const b = l.b, pad = 0.15;
+      if (p.lng < b.w - pad || p.lng > b.e + pad || p.lat < b.s - pad || p.lat > b.n + pad) continue;
+      const inside = inLand({ lands: [l] }, p), area = (b.e - b.w) * (b.n - b.s);
+      if (inside) { best = l; break; }
+      if (!best || area < (best.b.e - best.b.w) * (best.b.n - best.b.s)) best = l;
+    }
+    if (best) hit.add(best);
+  });
+  if (!hit.size) return null;
+  const b = geoBounds([...hit].flatMap(l => [{ lat: l.b.s, lng: l.b.w }, { lat: l.b.n, lng: l.b.e }]));
+  return meters({ lat: b.s, lng: b.w }, { lat: b.n, lng: b.e }) > 6000000 ? null : b;
+}
 function inLand(world, p) {
   for (const l of world.lands) for (const k of [0, 360, -360]) {
     const lng = p.lng + k, b = l.b;
@@ -2417,8 +2437,10 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
       const box = inset;
       ctx.fillStyle = L.paper; ctx.fillRect(box.x, box.y, box.w, box.h);
       ctx.strokeStyle = L.ink; ctx.lineWidth = 1.5; ctx.strokeRect(box.x, box.y, box.w, box.h);
-      const Q = projector(geoBounds(insetAll), box, 0.14);
-      if (useGround && ground.world) { ctx.save(); ctx.beginPath(); ctx.rect(box.x, box.y, box.w, box.h); ctx.clip();
+      const lb = ground && ground.world ? landBounds(ground.world, insetAll) : null;
+      const Q = projector(geoBounds(lb ? [...insetAll, { lat: lb.s, lng: lb.w }, { lat: lb.n, lng: lb.e }] : insetAll), box, 0.1);
+      // the country's outline is always in the corner square, whatever the Ground setting (Tyler, Oct 2026)
+      if (ground && ground.world) { ctx.save(); ctx.beginPath(); ctx.rect(box.x, box.y, box.w, box.h); ctx.clip();
         drawGround(ctx, Q, box, ground, L, 'country', 0.8, !!prefs.shade); ctx.restore(); }
       ctx.fillStyle = L.ink;
       insetAll.forEach(p => { const q = Q(p); ctx.beginPath(); ctx.arc(q.x, q.y, 2.4, 0, Math.PI * 2); ctx.fill(); });
@@ -2709,10 +2731,11 @@ function initRecap(tripId) {
   // Ground: world outlines for the country view and the inset, OSM water for city-sized frames. Fetched once, then cached.
   const wanted = new Set();
   const fetchGround = () => {
+    // the world outline is fetched even with Ground off: the corner square always shows the country
+    if (!ground.world && !wanted.has('world')) { wanted.add('world'); loadWorld().then(w => { if (w) { ground.world = w; if ($('#poster') === canvas) redraw(); } else wanted.delete('world'); }); }
     if (p.ground === 'none') return;
     const f = posterFrame(data, p);
     if (!f.framePts.length) return;
-    if (!ground.world && !wanted.has('world')) { wanted.add('world'); loadWorld().then(w => { if (w) { ground.world = w; if ($('#poster') === canvas) redraw(); } else wanted.delete('world'); }); }
     const scale = groundScale(f.framePts), roads = p.ground === 'roads';
     const box = groundBox(f.framePts, p.size), key = JSON.stringify([box, scale, roads]);
     if (ground.osmKey !== key && !wanted.has(key)) {
