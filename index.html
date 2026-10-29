@@ -2178,24 +2178,27 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
   const rows = shown.map(c => ({ label: c.label, lines: wrapText(ctx, c.value, CW - labelW).slice(0, 2) }));
   // the key (default): unforgettable places with their icons, loved places, then the measures. Credits are the alternative.
   const keyMode = prefs.bottom !== 'credits';
-  const K = keyMode ? recapKey(data, story) : null;
+  // constellation: nothing but the dots and lines, and the title (Tyler, Oct 2026)
+  const constel = !!prefs.constellation;
+  const K = keyMode && !constel ? recapKey(data, story) : null;
   const kBestH = K ? Math.ceil(K.best.length / 2) * 72 : 0, kLovedH = K ? Math.ceil(K.loved.length / 3) * 38 : 0;
   const keyH = K ? 46 + (K.best.length ? 16 + kBestH : 0) + (K.loved.length ? 10 + kLovedH : 0) + (K.measures.length ? 26 + 104 : 0) : 0;
-  const creditsH = keyMode ? keyH : rows.reduce((h, r) => h + r.lines.length * noteLH + 6, 0);
+  const creditsH = constel ? 0 : keyMode ? keyH : rows.reduce((h, r) => h + r.lines.length * noteLH + 6, 0);
   const lineSize = noteSize + 4;
   ctx.font = `italic 400 ${lineSize}px ${PF}`;
-  const ownLines = prefs.line ? wrapText(ctx, prefs.line, Math.min(CW, 900)).slice(0, 3) : [];
-  const stripH = 84;
-  const bottomH = kickerH + titleLines.length * titleSize * 1.0 + 26 + stripH + 58 +
+  const ownLines = prefs.line && !constel ? wrapText(ctx, prefs.line, Math.min(CW, 900)).slice(0, 3) : [];
+  const stripH = constel ? 0 : 84;
+  const bottomH = kickerH + titleLines.length * titleSize * 1.0 + (constel ? 0 : 26 + stripH + 58) +
     (ownLines.length ? ownLines.length * Math.round(lineSize * 1.35) + (rows.length ? 22 : 0) : 0) + creditsH;
   const topY = M + 4;
-  const mapRect = { x: M - 10, y: topY + 58, w: CW + 20, h: H - M - bottomH - (topY + 58) - 40 };
+  const mapTop = topY + (constel ? 0 : 58);
+  const mapRect = { x: M - 10, y: mapTop, w: CW + 20, h: H - M - bottomH - mapTop - 40 };
 
   // ---- top line: dates left, coordinates right ----
   const centre = data.stops.length ? data.stops : data.homes.length ? data.homes : data.unvisited;
   ctx.fillStyle = L.ink; ctx.font = `500 ${story ? 34 : 31}px ${PF}`;
-  ctx.textAlign = 'left'; ctx.fillText(data.sliced && data.from ? longRange(data.from, data.to) : longRange(t.start || data.days[0], t.end || data.days[data.days.length - 1]), M, topY + 26);
-  if (centre.length) {
+  ctx.textAlign = 'left'; if (!constel) ctx.fillText(data.sliced && data.from ? longRange(data.from, data.to) : longRange(t.start || data.days[0], t.end || data.days[data.days.length - 1]), M, topY + 26);
+  if (centre.length && !constel) {
     const c = centre.reduce((a, p) => ({ lat: a.lat + p.lat / centre.length, lng: a.lng + p.lng / centre.length }), { lat: 0, lng: 0 });
     ctx.font = `400 ${story ? 34 : 31}px ${PF}`; ctx.textAlign = 'right';
     if ('fontVariantNumeric' in ctx) ctx.fontVariantNumeric = 'tabular-nums';
@@ -2217,7 +2220,7 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     const insetAll = data.sliced ? data.allPts : everything;
     const insetShows = framePts.length && insetAll.length > framePts.length &&
       (b => meters({ lat: b.s, lng: b.w }, { lat: b.n, lng: b.e }))(geoBounds(insetAll)) > 3 * Math.max(500, (b => meters({ lat: b.s, lng: b.w }, { lat: b.n, lng: b.e }))(geoBounds(framePts)));
-    if ((zoomed || data.sliced) && insetShows) {
+    if ((zoomed || data.sliced) && insetShows && !constel) {
       const S = story ? 230 : 200, xs = [W - M - S, M], ys = [mapRect.y + mapRect.h - S - 4, mapRect.y + 4];
       const probe = [...everything, ...data.unvisited].map(P);
       data.tracks.forEach(tr => tr.pts.forEach((b, k) => { if (!k) return; const A = P(tr.pts[k - 1]), B = P(b);
@@ -2308,6 +2311,7 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     });
 
     // scale bar (bottom left of the drawing)
+    if (!constel) {
     const nice = [50, 100, 200, 250, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000];
     const target = P.metersPerPx * 150;
     const len = nice.reduce((a, b) => Math.abs(b - target) < Math.abs(a - target) ? b : a);
@@ -2316,6 +2320,7 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     ctx.moveTo(M, sy - 8); ctx.lineTo(M, sy); ctx.lineTo(M + px, sy); ctx.lineTo(M + px, sy - 8); ctx.stroke();
     ctx.fillStyle = L.ink; ctx.font = `400 25px ${PF}`;
     ctx.fillText(len >= 1000 ? `${len / 1000} km` : `${len} m`, M + px + 12, sy + 1);
+    }
     ctx.restore();
 
     // ---- colour layer (overprinted on Riso, slightly off-register) ----
@@ -2339,7 +2344,7 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     // where the off-map legs went: a quiet italic note hugging the edge they leave by, slid along it to a free spot
     ctx.save(); if (L.overprint) { ctx.globalCompositeOperation = 'source-over'; ctx.translate(-2.2, 1.6); }
     ctx.font = `italic 400 ${story ? 25 : 23}px ${PF}`; ctx.fillStyle = L.ink; ctx.textAlign = 'left';
-    edgeNotes.forEach(n => {
+    (constel ? [] : edgeNotes).forEach(n => {
       const km = n.km >= 10 ? Math.round(n.km) : n.km.toFixed(1);
       const txt = n.out ? `to ${n.name}, ${km} km →` : `← from ${n.name}`;
       const w = ctx.measureText(txt).width, h = 30, pad = 14, side = Math.abs(n.ux) >= Math.abs(n.uy);
@@ -2361,7 +2366,7 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     // with the key, the map carries pictures, not words: unforgettable places show their icon (or their name until one's drawn);
     // loved places are named in the key only
     const iconOf = s => parseIcon((data.stops.find(o => o.key === s.key && o.icon) || {}).icon);
-    const labelled = keyMode ? marks.filter(s => s.best)
+    const labelled = constel ? [] : keyMode ? marks.filter(s => s.best)
       : [...marks, ...lab.filter(s => named.has(s.title)), ...lab.filter(s => s.note), ...lab.filter(s => !s.note && s.top !== false), ...lab.filter(s => !s.note && s.top === false)];
     const big = `italic 400 ${story ? 33 : 30}px ${PF}`, small = `italic 400 ${story ? 27 : 25}px ${PF}`, best = `italic 500 ${story ? 38 : 35}px ${PF}`;
     labelled.forEach(s => {
@@ -2405,7 +2410,7 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     });
     ctx.restore();
     // place names from the map go wherever is still free
-    if (useGround) drawPlaceNames(ctx, P, ground, groundScale(framePts), mapRect, taken, L, story, Math.min(90, mapRect.h * 0.15));
+    if (useGround && !constel) drawPlaceNames(ctx, P, ground, groundScale(framePts), mapRect, taken, L, story, Math.min(90, mapRect.h * 0.15));
 
     // locator inset when zoomed in: the whole trip, with the drawn area boxed
     if (inset) {
@@ -2441,7 +2446,7 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
   // a slice shows only its own days (first to last day inside the frame)
   const score = data.sliced && data.from ? data.perDay.filter(d => d.day >= data.from && d.day <= data.to) : data.perDay;
   const N = score.length, top = y + 6, base = y + stripH - 26;
-  if (N) {
+  if (N && !constel) {
     const step = CW / N, maxN = Math.max(1, ...score.map(d => d.n)), sw = Math.max(2, Math.min(N <= 14 ? 10 : 7, step * 0.42));
     // a short strip runs edge to edge, so the first and last dates sit under their strokes
     const edge = N > 1 && N <= 14, xOf = i => edge ? M + sw / 2 + (CW - sw) * i / (N - 1) : M + step * i + step / 2;
@@ -2482,7 +2487,7 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     y += ownLines.length * Math.round(lineSize * 1.35) + 22;
   }
   if (K) drawKey(ctx, K, L, M, CW, y - 20, story);
-  else rows.forEach(r => {
+  else if (!constel) rows.forEach(r => {
     ctx.globalAlpha = 0.62; ctx.font = `400 ${noteSize}px ${PF}`; ctx.fillText(r.label, M, y);
     ctx.globalAlpha = 1; ctx.font = `500 ${noteSize}px ${PF}`;
     r.lines.forEach((ln, i) => ctx.fillText(ln, M + labelW, y + i * noteLH));
@@ -2636,6 +2641,7 @@ function recapView(t) {
     ${(p.slices || []).length ? `<div class="slices">${p.slices.map(sl => `<span class="slice ${sl.id === f.sliceId ? 'on' : ''}"><button data-slice="${esc(sl.id)}">${esc(sl.name)}</button><button data-unslice="${esc(sl.id)}" aria-label="Remove ${esc(sl.name)}">✕</button></span>`).join('')}</div>` : ''}
     <div class="field"><label>Size</label></div>${seg('size', [['post', 'Post 4:5'], ['story', 'Story 9:16']])}
     <div class="field"><label>Look</label></div>${seg('look', Object.entries(POSTER_LOOKS).map(([k, v]) => [k, v.name]))}
+    <label class="check"><input type="checkbox" id="rc-constel" ${p.constellation ? 'checked' : ''}><span>Constellation only<small>Just the dots and lines, and the title</small></span></label>
     ${cluster ? `<div class="field"><label>Map</label></div>${seg('zoom', [['all', 'Whole trip'], ['close', 'Up close']])}` : ''}
     <div class="field"><label>Ground</label></div>${seg('ground', [['none', 'None'], ['water', 'Water and names'], ['roads', 'Plus roads']])}
     <label class="check shade" id="rc-shade-row" ${p.ground === 'none' ? 'hidden' : ''}><input type="checkbox" id="rc-shade" ${p.shade ? 'checked' : ''}><span>Shade land and water<small>Off keeps just the lines</small></span></label>
@@ -2725,6 +2731,7 @@ function initRecap(tripId) {
     if (!b.wandered && !routeCache[routeKey(leg)] && leg.mode !== 'train' && leg.mode !== 'tour' && meters(a, b) < 30000) legs.push(leg); }));
   if (legs.length) getRoutes(legs.slice(0, 120)).then(() => { if ($('#poster') === canvas) { data = recapData(t, p.frame); redraw(); } });
 
+  const co = $('#rc-constel'); if (co) co.onchange = () => { p.constellation = co.checked; savePosterPrefs(t.id, p); redraw(); };
   const sh = $('#rc-shade'); if (sh) sh.onchange = () => { p.shade = sh.checked; savePosterPrefs(t.id, p); redraw(); };
   $$('[data-pref]').forEach(g => $$('button', g).forEach(b => b.onclick = () => {
     p[g.dataset.pref] = b.dataset.v; savePosterPrefs(t.id, p);
