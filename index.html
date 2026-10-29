@@ -1507,7 +1507,7 @@ const POSTER_SIZES = { post: [1080, 1350], story: [1080, 1920] };
 const PF = '"Familjen Grotesk", "Helvetica Neue", Arial, sans-serif';
 const MONTH_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
-function posterPrefs(tripId) { return Object.assign({ size: 'post', look: 'fog', zoom: 'close', ground: 'roads', line: '', frame: { kind: 'all' }, slices: [] }, store.get('th_poster', {})[tripId] || {}); }
+function posterPrefs(tripId) { return Object.assign({ size: 'post', look: 'fog', zoom: 'close', ground: 'roads', line: '', frame: { kind: 'all' }, slices: [], bottom: 'key' }, store.get('th_poster', {})[tripId] || {}); }
 function savePosterPrefs(tripId, p) { const all = store.get('th_poster', {}); all[tripId] = p; store.set('th_poster', all); }
 
 let posterFonts = null;
@@ -1535,6 +1535,14 @@ function frameTest(t, frame) {
     : stay ? d >= stay.day && d <= (stay.end_day || stay.day) : true;
   const inArea = p => f.kind !== 'place' || meters(p, f) < f.r * 1000;
   return { inDay, inArea, all: f.kind === 'all' || !f.kind || (f.kind === 'stay' && !stay) };
+}
+/** Minutes spent at a stop: its time to the next thing logged. Without a wander or On my way, the gap includes getting
+ *  to the next place, so it's capped at what the place could believably hold you (lingerCap). */
+function endDwell(p, endT, explicit) {
+  if (p.dwell != null || !p.time || !endT) return;
+  const m = minsOf(endT) - minsOf(p.time);
+  if (m < 0 || m > 8 * 60) return;
+  p.dwell = explicit ? m : Math.min(m, lingerCap(p.category));
 }
 function recapData(t, frame) {
   const logs = db.log.filter(l => l.trip_id === t.id);
@@ -1566,9 +1574,12 @@ function recapData(t, frame) {
           wasMust: !!(it && it.priority === 'must'), meh: l.rating === 'meh', note: l.note || '', time: l.time || '', top: !l.parent_id, id: l.id,
           city: l.city || (it && it.city) || '', region: (it && it.region) || '', country: (it && it.country) || '',
           category: l.category || (it && it.category) || '', key: l.item_id || l.place_id || `${l.title}|${(+l.lat).toFixed(3)},${(+l.lng).toFixed(3)}`,
-          wandered: !!pendW, wanderFrom: pendW ? pendW.time || '' : '' });
+          wandered: !!pendW, wanderFrom: pendW ? pendW.time || '' : '', icon: l.icon || '' });
+        // time spent at the stop before: until a wander/On my way if one was logged, else until this stop (capped by what the place could hold)
+        if (prev) endDwell(prev, prev.wanderAt || s.time, !!prev.wanderAt);
         pendW = null; seq.push(s); prev = s;
       });
+      if (prev && prev.wanderAt) endDwell(prev, prev.wanderAt, true);
     } else {
       fixedEvents(t.id, d).forEach(e => {
         if (!e.start || isStay(e.i) || isFlight(e.i)) return;
@@ -1596,7 +1607,7 @@ function recapData(t, frame) {
     (lived ? i.status !== 'done' && !logs.some(l => l.item_id === i.id) : !i.day)).map(i => pt(i)).filter(ft.inArea);
 
   // Leg lengths: real path when the Routes cache has it, else straight line
-  let walked = 0, moved = 0;
+  let walked = 0, moved = 0, rode = 0;
   tracks.forEach(tr => tr.pts.forEach((b, k) => {
     if (!k) return;
     const a = tr.pts[k - 1];
@@ -1604,14 +1615,14 @@ function recapData(t, frame) {
     const pl = routeCache[routeKey({ from: [a.lat, a.lng], to: [b.lat, b.lng], mode })];
     let m = 0;
     if (pl) { const p = decodePolyline(pl); for (let j = 1; j < p.length; j++) m += meters({ lat: p[j - 1][0], lng: p[j - 1][1] }, { lat: p[j][0], lng: p[j][1] }); }
-    else m = meters(a, b) * 1.2;
-    moved += m; if (mode === 'walk') walked += m;
+    else m = meters(a, b) * (mode === 'walk' ? 1.2 : 1.15);
+    moved += m; if (mode === 'walk') walked += m; else if (/^(car|tour|transit|bus)$/.test(mode)) rode += m;
   }));
   let wandered = 0;
   stops.forEach(s => { if (s.wandered && s.wanderFrom && s.time) { const m = minsOf(s.time) - minsOf(s.wanderFrom); if (m > 0 && m < 12 * 60) wandered += m; } });
   const busiest = perDay.reduce((x, y) => (y.n > (x ? x.n : 0) ? y : x), null);
   const inDays = perDay.filter(x => x.in).map(x => x.day);
-  return { lived, days, tracks, stops, homes: [...homes.values()], unvisited, perDay, walked, moved, busiest, allPts, sliced: !ft.all, wandered,
+  return { lived, days, tracks, stops, homes: [...homes.values()], unvisited, perDay, walked, moved, rode, busiest, allPts, sliced: !ft.all, wandered,
     from: inDays[0], to: inDays[inDays.length - 1],
     found: stops.filter(s => s.found).length, marked: stops.filter(s => s.mark),
     maybeLoved: stops.filter(s => s.mark && s.wasMaybe && lived) };
@@ -2165,7 +2176,12 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
   const labelW = Math.min(360, Math.max(0, ...shown.map(c => ctx.measureText(c.label).width)) + 34);
   ctx.font = `500 ${noteSize}px ${PF}`;
   const rows = shown.map(c => ({ label: c.label, lines: wrapText(ctx, c.value, CW - labelW).slice(0, 2) }));
-  const creditsH = rows.reduce((h, r) => h + r.lines.length * noteLH + 6, 0);
+  // the key (default): unforgettable places with their icons, loved places, then the measures. Credits are the alternative.
+  const keyMode = prefs.bottom !== 'credits';
+  const K = keyMode ? recapKey(data, story) : null;
+  const kBestH = K ? Math.ceil(K.best.length / 2) * 72 : 0, kLovedH = K ? Math.ceil(K.loved.length / 3) * 38 : 0;
+  const keyH = K ? 46 + (K.best.length ? 16 + kBestH : 0) + (K.loved.length ? 10 + kLovedH : 0) + (K.measures.length ? 26 + 104 : 0) : 0;
+  const creditsH = keyMode ? keyH : rows.reduce((h, r) => h + r.lines.length * noteLH + 6, 0);
   const lineSize = noteSize + 4;
   ctx.font = `italic 400 ${lineSize}px ${PF}`;
   const ownLines = prefs.line ? wrapText(ctx, prefs.line, Math.min(CW, 900)).slice(0, 3) : [];
@@ -2211,6 +2227,11 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
       inset = boxes.reduce((a, b) => busy(b) < busy(a) ? b : a);
     }
     const lw = story ? 3.4 : 3;
+    // a dot's size is the time spent there; errands and quick stops shrink to specks
+    const dotR = s => s.dwell != null ? Math.max(s.best ? 8 : s.mark ? 6 : 4, 4 + Math.sqrt(s.dwell) * 1.15) : (s.best ? 11 : s.mark ? 9 : 5);
+    const speck = s => !s.mark && (isChore(s) || (s.dwell != null && s.dwell < 10));
+    const homeStop = s => s.home || /^(stay|hotel|lodging|hostel|airbnb|guesthouse|motel)$/i.test(s.category || '');
+    const edgeNotes = [];
 
     // the ground: coast, water, borders — quiet hairlines under everything
     if (useGround) {
@@ -2238,13 +2259,25 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
       const mode = b.mode || guessMode(a, b);
       const A0 = P(a), B0 = P(b), inA = inDrawing(A0), inB = inDrawing(B0);
       if (!inA && !inB) return;
+      // the walk home isn't part of the story: the square already says where home is
+      if (inA && inB && homeStop(b)) return;
       if (inA !== inB) {
-        const I = inA ? A0 : B0, O = inA ? B0 : A0, d = Math.hypot(O.x - I.x, O.y - I.y) || 1, f = Math.min(1, 240 / d);
-        const g = ctx.createLinearGradient(I.x, I.y, I.x + (O.x - I.x) * f, I.y + (O.y - I.y) * f);
-        g.addColorStop(0, L.ink); g.addColorStop(0.3, L.ink); g.addColorStop(1, hexAlpha(L.ink, 0));
-        ctx.strokeStyle = g;
-      } else ctx.strokeStyle = L.ink;
-      if (b.wandered) return wanderLeg(ctx, A0, B0, lw, ti * 13 + k);
+        // a leg to or from somewhere off the drawing: a short fading stub, and a quiet note at the edge saying where
+        const I = inA ? A0 : B0, O = inA ? B0 : A0, d = Math.hypot(O.x - I.x, O.y - I.y) || 1, ux = (O.x - I.x) / d, uy = (O.y - I.y) / d;
+        const tx = ux > 0 ? (mapRect.x + mapRect.w - I.x) / ux : ux < 0 ? (mapRect.x - I.x) / ux : 1e9;
+        const ty = uy > 0 ? (mapRect.y + mapRect.h - I.y) / uy : uy < 0 ? (mapRect.y - I.y) / uy : 1e9;
+        const te = Math.min(tx, ty), sl = Math.min(80, te * 0.5);
+        const g = ctx.createLinearGradient(I.x, I.y, I.x + ux * sl, I.y + uy * sl);
+        g.addColorStop(0, hexAlpha(L.ink, 0.6)); g.addColorStop(1, hexAlpha(L.ink, 0));
+        ctx.save(); ctx.strokeStyle = g; ctx.lineWidth = lw * 0.7; ctx.setLineDash([]);
+        ctx.beginPath(); ctx.moveTo(I.x, I.y); ctx.lineTo(I.x + ux * sl, I.y + uy * sl); ctx.stroke(); ctx.restore();
+        const o = inA ? b : a, inner = inA ? a : b;
+        const name = o.city && o.city !== inner.city ? o.city : o.title.replace(/ International Airport$/, '');
+        if (name && !edgeNotes.some(n => n.name === name && n.out === inA)) edgeNotes.push({ name, out: inA, km: meters(a, b) / 1000, x: I.x + ux * te, y: I.y + uy * te, ux, uy });
+        return;
+      }
+      ctx.strokeStyle = L.ink;
+      if (b.wandered) return wanderLeg(ctx, A0, B0, lw, ti * 13 + k, dotR(a));
       const pl = routeCache[routeKey({ from: [a.lat, a.lng], to: [b.lat, b.lng], mode })];
       ctx.setLineDash(mode === 'tour' || mode === 'car' ? [1, lw * 3.2] : mode === 'train' || mode === 'transit' ? [lw * 4, lw * 2.4] : []);
       ctx.globalAlpha = .9;
@@ -2264,12 +2297,14 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     // stays: small squares
     data.homes.forEach(h => { const q = P(h); ctx.fillStyle = L.paper; ctx.strokeStyle = L.ink; ctx.lineWidth = 2.4;
       ctx.fillRect(q.x - 7, q.y - 7, 14, 14); ctx.strokeRect(q.x - 7, q.y - 7, 14, 14); });
-    // stops: dots, open rings for things found along the way
+    // stops: sized by time spent; open rings for things found along the way; errands and quick stops as specks
     data.stops.forEach(s => {
       if (s.mark) return;
       const q = P(s); ctx.beginPath();
-      if (s.found) { ctx.arc(q.x, q.y, 6.5, 0, Math.PI * 2); ctx.fillStyle = L.paper; ctx.fill(); ctx.lineWidth = 2.4; ctx.strokeStyle = L.ink; ctx.stroke(); }
-      else { ctx.arc(q.x, q.y, 5, 0, Math.PI * 2); ctx.fillStyle = L.ink; ctx.fill(); }
+      if (speck(s)) { ctx.arc(q.x, q.y, 3, 0, Math.PI * 2); ctx.fillStyle = L.ink; ctx.globalAlpha = 0.55; ctx.fill(); ctx.globalAlpha = 1; return; }
+      const r = s.dwell != null ? dotR(s) : (s.found ? 6.5 : 5);
+      if (s.found || s.dwell != null) { ctx.arc(q.x, q.y, r, 0, Math.PI * 2); ctx.fillStyle = L.paper; ctx.fill(); ctx.lineWidth = 2.4; ctx.strokeStyle = L.ink; ctx.stroke(); }
+      else { ctx.arc(q.x, q.y, r, 0, Math.PI * 2); ctx.fillStyle = L.ink; ctx.fill(); }
     });
 
     // scale bar (bottom left of the drawing)
@@ -2289,34 +2324,54 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     ctx.fillStyle = L.accent;
     // unforgettable places: a bigger dot with a ring around it, and their names go down first
     const marks = data.stops.filter(s => s.mark).sort((a, b) => !!b.best - !!a.best);
-    marks.forEach(s => { const q = P(s); ctx.beginPath(); ctx.arc(q.x, q.y, s.best ? 11 : 9, 0, Math.PI * 2); ctx.fill();
-      if (s.best) { ctx.beginPath(); ctx.arc(q.x, q.y, 18, 0, Math.PI * 2); ctx.lineWidth = 2.2; ctx.strokeStyle = L.accent; ctx.stroke(); } });
+    marks.forEach(s => { const q = P(s), r = dotR(s); ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, Math.PI * 2); ctx.fill();
+      if (s.best) { ctx.beginPath(); ctx.arc(q.x, q.y, r + 7, 0, Math.PI * 2); ctx.lineWidth = 2.2; ctx.strokeStyle = L.accent; ctx.stroke(); } });
     // hand labels for the loved places, nudged so they don't collide
     ctx.font = `italic 400 ${story ? 33 : 30}px ${PF}`;
     const taken = [{ x: M, y: mapRect.y + mapRect.h - 40, w: 260, h: 40 }];
     if (inset) taken.push({ x: inset.x - 6, y: inset.y - 6, w: inset.w + 12, h: inset.h + 12 });
-    [...data.stops, ...data.homes].forEach(s => { const q = P(s), r = s.best ? 20 : 9; taken.push({ x: q.x - r, y: q.y - r, w: r * 2, h: r * 2 }); });
+    [...data.stops, ...data.homes].forEach(s => { const q = P(s), r = s.best ? dotR(s) + 9 : Math.max(9, dotR(s) + 2); taken.push({ x: q.x - r, y: q.y - r, w: r * 2, h: r * 2 }); });
     // and the lines (sampled), so a name never sits on a route
     data.tracks.forEach(tr => tr.pts.forEach((pb, k) => { if (!k) return; const A = P(tr.pts[k - 1]), B = P(pb), n = Math.ceil(Math.hypot(B.x - A.x, B.y - A.y) / 14);
       for (let j = 1; j < n; j++) taken.push({ x: A.x + (B.x - A.x) * j / n - 3, y: A.y + (B.y - A.y) * j / n - 3, w: 6, h: 6 }); }));
     const free = r => r.x > 8 && r.x + r.w < W - 8 && r.y > mapRect.y - 10 && r.y + r.h < mapRect.y + mapRect.h &&
       !taken.some(o => r.x < o.x + o.w && r.x + r.w > o.x && r.y < o.y + o.h && r.y + r.h > o.y);
+    // where the off-map legs went: a quiet italic note hugging the edge they leave by, slid along it to a free spot
+    ctx.save(); if (L.overprint) { ctx.globalCompositeOperation = 'source-over'; ctx.translate(-2.2, 1.6); }
+    ctx.font = `italic 400 ${story ? 25 : 23}px ${PF}`; ctx.fillStyle = L.ink; ctx.textAlign = 'left';
+    edgeNotes.forEach(n => {
+      const km = n.km >= 10 ? Math.round(n.km) : n.km.toFixed(1);
+      const txt = n.out ? `to ${n.name}, ${km} km →` : `← from ${n.name}`;
+      const w = ctx.measureText(txt).width, h = 30, pad = 14, side = Math.abs(n.ux) >= Math.abs(n.uy);
+      const x0 = Math.max(mapRect.x + pad, Math.min(mapRect.x + mapRect.w - pad - w, n.ux > 0 && side ? mapRect.x + mapRect.w - pad - w : n.ux < 0 && side ? mapRect.x + pad : n.x - w / 2));
+      const y0 = Math.max(mapRect.y + 4, Math.min(mapRect.y + mapRect.h - h - 40, side ? n.y - h / 2 : n.uy > 0 ? mapRect.y + mapRect.h - h - 40 : mapRect.y + 4));
+      // slide along the edge (nearest first) until it's clear of dots, lines and names
+      const span = side ? mapRect.h : mapRect.w, ks = [];
+      for (let k = -Math.ceil(span / 20); k <= Math.ceil(span / 20); k++) ks.push(k);
+      ks.sort((a, b) => Math.abs(a) - Math.abs(b));
+      const tries = ks.map(k => side ? { x: x0, y: y0 + k * 20, w: w + 16, h } : { x: Math.max(mapRect.x + pad, Math.min(mapRect.x + mapRect.w - pad - w - 16, x0 + k * 20)), y: y0, w: w + 16, h });
+      const spot = tries.find(free); if (!spot) return;
+      taken.push(spot); ctx.globalAlpha = 0.6; ctx.fillText(txt, spot.x, spot.y + h - 8); ctx.globalAlpha = 1;
+    });
+    ctx.restore();
     const seen = new Set();
     // loved places first, then any place a credit names (so it can be found), then notes, then the rest; errands go unnamed
     const named = new Set(shown.flatMap(c => c.titles || [])), lab = data.stops.filter(s => !s.mark && !isChore(s));
-    const labelled = [...marks, ...lab.filter(s => named.has(s.title)), ...lab.filter(s => s.note), ...lab.filter(s => !s.note && s.top !== false), ...lab.filter(s => !s.note && s.top === false)];
+    // with the key below, only places that earned a name get one on the map: unforgettable first, then loved
+    const labelled = keyMode ? marks
+      : [...marks, ...lab.filter(s => named.has(s.title)), ...lab.filter(s => s.note), ...lab.filter(s => !s.note && s.top !== false), ...lab.filter(s => !s.note && s.top === false)];
     const big = `italic 400 ${story ? 33 : 30}px ${PF}`, small = `italic 400 ${story ? 27 : 25}px ${PF}`, best = `italic 500 ${story ? 38 : 35}px ${PF}`;
     labelled.forEach(s => {
-      if (!s.title || seen.has(s.title) || seen.size >= (story ? 12 : 10)) return;
+      if (!s.title || seen.has(s.title) || seen.size >= (keyMode ? (story ? 16 : 14) : story ? 12 : 10)) return;
       ctx.font = s.best ? best : s.mark ? big : small;
       const note = prefs.notes !== false && s.note ? (s.note.length > 38 ? s.note.slice(0, 36).trim() + '…' : s.note) : '';
       const nh = note ? (story ? 32 : 30) : 0, nf = `400 ${story ? 25 : 23}px ${PF}`, tf = ctx.font;
       ctx.font = nf; const nw = note ? ctx.measureText(note).width : 0; ctx.font = tf;
       const lh = s.best ? (story ? 41 : 38) : s.mark ? (story ? 36 : 34) : (story ? 30 : 28);
       const q = P(s), w = Math.max(ctx.measureText(s.title).width, nw), h = lh + nh;
-      const o0 = s.best ? 8 : 0;   // clear the ring
-      const spots = [{ x: q.x + 17 + o0, y: q.y - 30 - o0 }, { x: q.x + 17, y: q.y + 2 }, { x: q.x - 17 - w, y: q.y - 30 }, { x: q.x - 17 - w, y: q.y + 2 },
-        { x: q.x - w / 2, y: q.y - 22 - h }, { x: q.x - w / 2, y: q.y + 18 }, { x: q.x + 17, y: q.y - h + 4 }, { x: q.x - 17 - w, y: q.y - h + 4 }];
+      const e = Math.max(0, dotR(s) - 8) + (s.best ? 7 : 0);   // clear a bigger dot (and the ring)
+      const spots = [{ x: q.x + 17 + e, y: q.y - 30 - e / 2 }, { x: q.x + 17 + e, y: q.y + 2 + e / 2 }, { x: q.x - 17 - e - w, y: q.y - 30 - e / 2 }, { x: q.x - 17 - e - w, y: q.y + 2 + e / 2 },
+        { x: q.x - w / 2, y: q.y - 22 - e - h }, { x: q.x - w / 2, y: q.y + 18 + e }, { x: q.x + 17 + e, y: q.y - h + 4 }, { x: q.x - 17 - e - w, y: q.y - h + 4 }];
       // crowded spot: loved places and places a credit names may sit a little further out
       if (s.mark || named.has(s.title)) [28, 56].forEach(o => spots.push({ x: q.x + 17 + o, y: q.y - 30 - o }, { x: q.x + 17 + o, y: q.y + 2 + o },
         { x: q.x - 17 - w - o, y: q.y - 30 - o }, { x: q.x - 17 - w - o, y: q.y + 2 + o }, { x: q.x - w / 2, y: q.y - 22 - h - o }, { x: q.x - w / 2, y: q.y + 18 + o }));
@@ -2419,7 +2474,8 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     ownLines.forEach((ln, i) => ctx.fillText(ln, M, y + i * Math.round(lineSize * 1.35)));
     y += ownLines.length * Math.round(lineSize * 1.35) + 22;
   }
-  rows.forEach(r => {
+  if (K) drawKey(ctx, K, L, M, CW, y - 20, story);
+  else rows.forEach(r => {
     ctx.globalAlpha = 0.62; ctx.font = `400 ${noteSize}px ${PF}`; ctx.fillText(r.label, M, y);
     ctx.globalAlpha = 1; ctx.font = `500 ${noteSize}px ${PF}`;
     r.lines.forEach((ln, i) => ctx.fillText(ln, M + labelW, y + i * noteLH));
@@ -2428,6 +2484,110 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
   ctx.globalAlpha = 1;
 
   paperGrain(ctx, W, H, L);
+}
+/* ---- The key: the places that earned a name, then a few honest measures (Oct 2026, Tyler preferred it to superlatives) ---- */
+function recapKey(data, story) {
+  const S = data.stops.filter(s => !isChore(s));
+  const groups = new Map();
+  S.forEach(s => { const g = groups.get(s.key); if (g) { g.n++; if (s.dwell != null) g.dwell = (g.dwell || 0) + s.dwell; if (!g.icon && s.icon) g.icon = s.icon; }
+    else groups.set(s.key, { ...s, n: 1 }); });
+  const all = [...groups.values()];
+  const short = d => { const x = parseDate(d); return x ? `${DOW[x.getDay()]} ${x.getDate()}` : ''; };
+  const mins = m => m >= 60 ? `${Math.floor(m / 60)} h ${m % 60 ? (m % 60) + ' min' : ''}`.trim() : `${m} min`;
+  const kind = c => c && !/^(place|tour|stay)$/i.test(c) ? c.toLowerCase() : '';
+  const best = all.filter(g => g.best).slice(0, story ? 8 : 4).map(g => ({ title: g.title, icon: parseIcon(g.icon),
+    sub: [kind(g.category), g.n > 1 ? (g.n === 2 ? 'twice' : numWord(g.n) + ' times') : g.dwell != null ? mins(g.dwell) : '', short(g.day)].filter(Boolean).join(' · ') }));
+  const loved = all.filter(g => g.mark && !g.best).sort((a, b) => (b.n - a.n) || ((b.dwell || 0) - (a.dwell || 0))).slice(0, story ? 12 : 6)
+    .map(g => ({ title: g.title, t: g.n > 1 ? '×' + g.n : g.dwell != null ? g.dwell + 'm' : '' }));
+  const measures = [];
+  const km = m => { const k = m / 1000; return k >= 10 ? Math.round(k) : k.toFixed(1); };
+  const hrs = m => m >= 90 ? `≈ ${Math.round(m / 30) / 2} h`.replace('.5', '½') : `${Math.round(m / 5) * 5} min`;
+  if (data.walked >= 300) measures.push({ label: 'On foot', value: `${km(data.walked)} km`, note: 'between stops' });
+  if (data.rode >= 2000) measures.push({ label: 'By road', value: `${km(data.rode)} km`, note: 'tours and rides' });
+  if (data.wandered >= 20) measures.push({ label: 'Off the map', value: hrs(data.wandered), note: 'wandering' });
+  const lingered = S.reduce((a, s) => a + (s.dwell || 0), 0);
+  if (lingered >= 30) measures.push({ label: 'Lingered', value: hrs(lingered), note: `across ${all.length} place${all.length === 1 ? '' : 's'}` });
+  return { best, loved, measures };
+}
+/** An icon drawn from a photo, stored on the Log row as JSON: {"r": rotation, "p": [[path, stroke i|a|'', fill p|a|''], …]} on a 48-unit square. */
+function parseIcon(s) { if (!s) return null; try { const o = JSON.parse(s); return o && Array.isArray(o.p) ? o : null; } catch (e) { return null; } }
+function drawIcon(ctx, icon, x, y, size, L) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(size / 48, size / 48);
+  if (icon.r) { ctx.translate(24, 24); ctx.rotate(icon.r * Math.PI / 180); ctx.translate(-24, -24); }
+  ctx.lineWidth = 1.7; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  icon.p.forEach(([d, st, fl]) => { let p; try { p = new Path2D(d); } catch (e) { return; }
+    if (fl) { ctx.fillStyle = fl === 'a' ? L.accent : L.paper; ctx.fill(p); }
+    if (st) { ctx.strokeStyle = st === 'a' ? L.accent : L.ink; ctx.stroke(p); } });
+  ctx.restore();
+}
+function drawKey(ctx, K, L, M, CW, y, story) {
+  const W = M * 2 + CW;
+  // legend row: KEY ——— ◉ unforgettable  ● loved  ○○ time spent  · errand  ~> wandered
+  ctx.textBaseline = 'middle';
+  const fs = story ? 18 : 17;
+  ctx.font = `600 ${fs}px ${PF}`; setSpacing(ctx, 3); ctx.fillStyle = L.ink; ctx.globalAlpha = 0.62; ctx.fillText('KEY', M, y); const kw = ctx.measureText('KEY').width; setSpacing(ctx, 0);
+  ctx.font = `400 ${fs}px ${PF}`;
+  const items = [['best', 'unforgettable', 24], ['loved', 'loved', 16], ['time', 'time spent', 28], ['speck', 'errand', 10], ['wander', 'wandered', 34]];
+  const gap = 26, widths = items.map(([, t, g]) => g + 8 + ctx.measureText(t).width);
+  let x = W - M - widths.reduce((a, b) => a + b, 0) - gap * (items.length - 1);
+  ctx.strokeStyle = L.ink; ctx.globalAlpha = 0.24; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(M + kw + 18, y); ctx.lineTo(x - 18, y); ctx.stroke();
+  items.forEach(([k, t, g], i) => {
+    ctx.globalAlpha = 1;
+    if (k === 'best') { ctx.fillStyle = L.accent; ctx.beginPath(); ctx.arc(x + 12, y, 6, 0, 7); ctx.fill(); ctx.strokeStyle = L.accent; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(x + 12, y, 10.5, 0, 7); ctx.stroke(); }
+    if (k === 'loved') { ctx.fillStyle = L.accent; ctx.beginPath(); ctx.arc(x + 8, y, 6, 0, 7); ctx.fill(); }
+    if (k === 'time') { ctx.strokeStyle = L.ink; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(x + 4, y, 3.5, 0, 7); ctx.stroke(); ctx.beginPath(); ctx.arc(x + 19, y, 8, 0, 7); ctx.stroke(); }
+    if (k === 'speck') { ctx.fillStyle = L.ink; ctx.globalAlpha = 0.6; ctx.beginPath(); ctx.arc(x + 5, y, 3, 0, 7); ctx.fill(); ctx.globalAlpha = 1; }
+    if (k === 'wander') { ctx.strokeStyle = L.ink; wanderLeg(ctx, { x: x - 6, y }, { x: x + 60, y }, 2.2, 0, 0); }
+    ctx.fillStyle = L.ink; ctx.globalAlpha = 0.62; ctx.fillText(t, x + g + 8, y);
+    x += widths[i] + gap;
+  });
+  ctx.globalAlpha = 1; ctx.textBaseline = 'alphabetic';
+  y += 46 - 20;
+  // unforgettable: two to a row, the icon drawn from your photo (or the ringed dot), the name, then what/how long/when
+  if (K.best.length) {
+    y += 16;
+    const colW = CW / 2;
+    K.best.forEach((b, i) => {
+      const cx = M + (i % 2) * colW, cy = y + Math.floor(i / 2) * 72;
+      if (b.icon) drawIcon(ctx, b.icon, cx, cy - 2, 56, L);
+      else { ctx.fillStyle = L.accent; ctx.beginPath(); ctx.arc(cx + 28, cy + 27, 8, 0, 7); ctx.fill(); ctx.strokeStyle = L.accent; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx + 28, cy + 27, 14, 0, 7); ctx.stroke(); }
+      const tw = colW - 88;
+      ctx.fillStyle = L.ink; ctx.font = `500 ${story ? 27 : 25}px ${PF}`; ctx.fillText(fitText(ctx, b.title, tw), cx + 76, cy + 26);
+      ctx.globalAlpha = 0.62; ctx.font = `400 ${story ? 20 : 19}px ${PF}`; ctx.fillText(fitText(ctx, b.sub, tw), cx + 76, cy + 52); ctx.globalAlpha = 1;
+    });
+    y += Math.ceil(K.best.length / 2) * 72;
+  }
+  // loved: three to a row, smaller, with time spent
+  if (K.loved.length) {
+    y += 10;
+    const colW = (CW - 42) / 3;
+    K.loved.forEach((l, i) => {
+      const cx = M + 42 + (i % 3) * colW, cy = y + Math.floor(i / 3) * 38 + 20;
+      ctx.fillStyle = L.accent; ctx.beginPath(); ctx.arc(cx + 5, cy - 7, 5.5, 0, 7); ctx.fill();
+      ctx.fillStyle = L.ink; ctx.font = `400 ${story ? 21 : 20}px ${PF}`;
+      const tt = l.t ? ctx.measureText(l.t).width + 10 : 0;
+      ctx.font = `400 ${story ? 21 : 20}px ${PF}`; const nm = fitText(ctx, l.title, colW - 30 - tt); ctx.fillText(nm, cx + 20, cy);
+      if (l.t) { const nw = ctx.measureText(nm).width; ctx.globalAlpha = 0.62; ctx.font = `400 ${story ? 17 : 16}px ${PF}`; ctx.fillText(l.t, cx + 30 + nw, cy); ctx.globalAlpha = 1; }
+    });
+    y += Math.ceil(K.loved.length / 3) * 38;
+  }
+  // the measures: a ship's-log strip under a hairline
+  if (K.measures.length) {
+    y += 26;
+    ctx.strokeStyle = L.ink; ctx.globalAlpha = 0.24; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(M, y); ctx.lineTo(M + CW, y); ctx.stroke(); ctx.globalAlpha = 1;
+    const colW = CW / 4;
+    K.measures.forEach((m, i) => {
+      const cx = M + i * colW;
+      ctx.fillStyle = L.ink; ctx.globalAlpha = 0.62; ctx.font = `400 ${story ? 20 : 19}px ${PF}`; ctx.fillText(m.label, cx, y + 32);
+      ctx.globalAlpha = 1; ctx.font = `600 ${story ? 42 : 40}px ${PF}`; setSpacing(ctx, -0.8); ctx.fillText(m.value, cx, y + 74); setSpacing(ctx, 0);
+      ctx.globalAlpha = 0.62; ctx.font = `italic 400 ${story ? 18 : 17}px ${PF}`; ctx.fillText(m.note, cx, y + 99); ctx.globalAlpha = 1;
+    });
+  }
+}
+function fitText(ctx, s, w) {
+  if (ctx.measureText(s).width <= w) return s;
+  let t = s; while (t.length > 1 && ctx.measureText(t + '…').width > w) t = t.slice(0, -1);
+  return t.trim() + '…';
 }
 /** A seeded noise pass so the paper isn't flat. */
 function paperGrain(ctx, W, H, L) {
@@ -2473,10 +2633,13 @@ function recapView(t) {
     <div class="field"><label>Ground</label></div>${seg('ground', [['none', 'None'], ['water', 'Water and names'], ['roads', 'Plus roads']])}
     <label class="check shade" id="rc-shade-row" ${p.ground === 'none' ? 'hidden' : ''}><input type="checkbox" id="rc-shade" ${p.shade ? 'checked' : ''}><span>Shade land and water<small>Off keeps just the lines</small></span></label>
     <div class="field"><label for="rc-line">Your own line (optional)</label><input id="rc-line" maxlength="140" value="${esc(p.line)}" placeholder="Something only you’d write" autocomplete="off"></div>
-    <div class="field"><label>Credits</label></div>
+    <div class="field"><label>Under the title</label></div>${seg('bottom', [['key', 'Key and measures'], ['credits', 'Credits']])}
+    <div id="rc-credit-box" ${p.bottom === 'credits' ? '' : 'hidden'}>
     <p class="hint" style="margin:-2px 2px 6px">A post fits six, a story eight, in this order.</p>
     <div id="rc-credits" class="credit-list"></div>
     ${data.lived && data.stops.some(s => s.mark && s.note) ? `<label class="check credit-notes"><input type="checkbox" id="rc-notes" ${p.notes !== false ? 'checked' : ''}><span>Show my notes beside places I loved</span></label>` : ''}
+    </div>
+    <p class="hint" id="rc-key-hint" style="margin:-2px 2px 14px" ${p.bottom === 'credits' ? 'hidden' : ''}>Places you marked ★ Unforgettable get their own line, with an icon when one’s been drawn from your photo. Loved places follow, then distances and time.</p>
     <button class="btn" id="rc-save">Save image</button>
   </main>`;
 }
@@ -2559,6 +2722,7 @@ function initRecap(tripId) {
   $$('[data-pref]').forEach(g => $$('button', g).forEach(b => b.onclick = () => {
     p[g.dataset.pref] = b.dataset.v; savePosterPrefs(t.id, p);
     if (g.dataset.pref === 'ground') $('#rc-shade-row').hidden = p.ground === 'none';
+    if (g.dataset.pref === 'bottom') { $('#rc-credit-box').hidden = p.bottom !== 'credits'; $('#rc-key-hint').hidden = p.bottom === 'credits'; }
     $$('button', g).forEach(x => x.classList.toggle('on', x === b)); redraw(); fetchGround();
   }));
   let tm;
@@ -2808,27 +2972,26 @@ function drawWorldShifted(ctx, B, rect, world, L, lwBase = 1, shade = true) {
 /** A trip's day-by-day lines: the real path where cached, otherwise a gentle bow. */
 /** A loose, dotted meander from A to B: time spent wandering, not a route. Seeded so it's the same every redraw. */
 const hexAlpha = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; };
-function wanderLeg(ctx, A, B, lw, seed) {
-  // out and back to the same place (a wander from the hotel that ends at the hotel): a loose loop off to one side
-  if (Math.hypot(B.x - A.x, B.y - A.y) < 24) {
-    const r = 70, ang = (seed % 8) * Math.PI / 4, cx = A.x + Math.cos(ang) * r, cy = A.y + Math.sin(ang) * r, ph = (seed % 5) * 1.3;
-    ctx.setLineDash([1, lw * 2.6]); ctx.globalAlpha = .55; ctx.beginPath();
-    for (let j = 0; j <= 72; j++) {
-      const u = j / 72, a = ang + Math.PI + u * Math.PI * 2, rr = r * (1 + 0.28 * Math.sin(u * Math.PI * 6 + ph) * Math.sin(Math.PI * u));
-      const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
-      j ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-    }
-    ctx.stroke(); ctx.globalAlpha = .9; return;
+/** Wandering: we don't know where you went, so the line leaves the stop as a short dotted squiggle with an arrow
+ *  pointing toward the next place, then stops. Out and back to the same spot: the squiggle heads off to one side. */
+function wanderLeg(ctx, A, B, lw, seed, rA = 10) {
+  const len0 = Math.hypot(B.x - A.x, B.y - A.y);
+  let ux, uy, L;
+  if (len0 < 24) { const ang = (seed % 8) * Math.PI / 4 + 0.4; ux = Math.cos(ang); uy = Math.sin(ang); L = 46; }
+  else { ux = (B.x - A.x) / len0; uy = (B.y - A.y) / len0; L = Math.min(56, Math.max(20, (len0 - rA) * 0.45)); }
+  const nx = -uy, ny = ux, s0 = rA + 6, amp = lw * 1.5;
+  ctx.save();
+  ctx.setLineDash([0.5, lw * 2.4]); ctx.lineCap = 'round'; ctx.globalAlpha = .85; ctx.beginPath();
+  for (let t = 0; t <= L; t += 1.5) {
+    const o = Math.sin((t / L) * Math.PI * 3) * amp, x = A.x + ux * (s0 + t) + nx * o, y = A.y + uy * (s0 + t) + ny * o;
+    t ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
   }
-  const dx = B.x - A.x, dy = B.y - A.y, len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len;
-  const amp = Math.min(len * 0.16, 46), waves = Math.max(1.5, Math.min(4, len / 90)), ph = (seed % 7) * 0.9;
-  ctx.setLineDash([1, lw * 2.6]); ctx.globalAlpha = .55; ctx.beginPath();
-  for (let j = 0; j <= 48; j++) {
-    const u = j / 48, env = Math.sin(Math.PI * u), off = Math.sin(u * Math.PI * 2 * waves + ph) * amp * env;
-    const x = A.x + dx * u + nx * off, y = A.y + dy * u + ny * off;
-    j ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-  }
-  ctx.stroke(); ctx.globalAlpha = .9;
+  ctx.stroke();
+  const tx = A.x + ux * (s0 + L + 5), ty = A.y + uy * (s0 + L + 5), hs = lw * 2.6;
+  ctx.setLineDash([]); ctx.lineWidth = Math.max(1.4, lw * 0.7); ctx.beginPath();
+  ctx.moveTo(tx - ux * hs + nx * hs * 0.75, ty - uy * hs + ny * hs * 0.75); ctx.lineTo(tx, ty);
+  ctx.lineTo(tx - ux * hs - nx * hs * 0.75, ty - uy * hs - ny * hs * 0.75); ctx.stroke();
+  ctx.restore();
 }
 function drawTracks(ctx, tracks, P, L, lw, real) {
   ctx.strokeStyle = L.ink; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
@@ -5085,7 +5248,7 @@ function demoData() {
       { id: 'l14', rating: 'meh', trip_id: 'tr_demo1', day: d(3), seq: '1', item_id: 'p9', title: 'Torikizoku Kuramae', origin: 'planned', mode: 'walk', lat: 35.7030, lng: 139.7915 },
       ...[
         [d(-150), 'Guesthouse on Skólavörðustígur', 64.1440, -21.9270, { item_id: 'rf2', origin: 'planned', time: '09:30' }],
-        [d(-150), 'Bæjarins Beztu Pylsur', 64.1482, -21.9406, { rating: 'best', origin: 'found', mode: 'walk', note: 'One with everything', category: 'Hot dog stand', time: '13:10' }],
+        [d(-150), 'Bæjarins Beztu Pylsur', 64.1482, -21.9406, { rating: 'best', origin: 'found', mode: 'walk', note: 'One with everything', category: 'Hot dog stand', time: '13:10', icon: '{"r":-28,"p":[["M5 21.5 H43 A2.5 2.5 0 0 1 43 26.5 H5 A2.5 2.5 0 0 1 5 21.5 Z","i","p"],["M10 18 H38 A6 6 0 0 1 38 30 H10 A6 6 0 0 1 10 18 Z","i","p"],["M9 23 H39","i",""],["M11 21.5 l2.5 2 2.5 -2 2.5 2 2.5 -2 2.5 2 2.5 -2 2.5 2 2.5 -2 2.5 2 2.5 -2","a",""]]}' }],
         [d(-150), 'Sundhöllin', 64.1430, -21.9220, { rating: 'liked', origin: 'found', mode: 'walk', category: 'Swimming pool', time: '17:00' }],
         [d(-149), 'Hallgrímskirkja', 64.1417, -21.9266, { item_id: 'rp1', rating: 'liked', origin: 'planned', mode: 'walk', time: '10:00' }],
         [d(-149), 'Harpa', 64.1503, -21.9327, { item_id: 'rp2', rating: 'loved', origin: 'planned', mode: 'walk', time: '20:00', note: 'Iceland Symphony, Sibelius 5' }],

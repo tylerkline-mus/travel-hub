@@ -24,7 +24,8 @@ const SHEETS = {
   Log:   ['id', 'trip_id', 'item_id', 'place_id', 'title', 'lat', 'lng', 'logged_at', 'timezone',
           'origin', 'note', 'would_return', 'cost', 'currency', 'photo_url', 'created',
           'parent_id', 'day', 'seq', 'time', 'mode', 'address', 'city', 'maps_url', 'updated', 'rating', 'category',
-          'here_lat', 'here_lng'],   // where the phone actually was (so a wrong guess can be fixed from the app)
+          'here_lat', 'here_lng',    // where the phone actually was (so a wrong guess can be fixed from the app)
+          'icon'],                   // a small line drawing Claude made from the stop's photo (JSON paths on a 48-unit square), drawn in the poster's key
   Routes: ['key', 'polyline', 'duration', 'distance', 'created'],
   // Photos, sounds and souvenirs kept with a logged stop. The files live in Drive (Travel Hub / <trip>), private to you.
   Artifacts: ['id', 'log_id', 'trip_id', 'kind', 'title', 'note', 'file_id', 'mime', 'duration', 'seq', 'created', 'updated'],
