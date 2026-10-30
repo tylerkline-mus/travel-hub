@@ -176,6 +176,12 @@ main { padding: 6px 16px 24px; max-width: 720px; margin: 0 auto; }
   color: var(--muted); font-size: 14px; cursor: pointer; }
 .wander-row .squig { font-size: 18px; line-height: 1; color: var(--found); }
 .wander-row .moves { margin-left: auto; }
+.totals-row { display: flex; align-items: flex-start; gap: 10px; margin: 12px 0 4px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px;
+  font-size: 14px; line-height: 1.5; color: var(--ink); cursor: pointer; background: var(--card); }
+.totals-row b { font-weight: 600; }
+.totals-row.empty { border-style: dashed; background: none; color: var(--muted); }
+.totals-row .sub { display: block; font-size: 12px; }
+.totals-row .ico { font-size: 16px; line-height: 1.3; }
 .start-row { display: flex; align-items: center; gap: 10px; margin: 6px 0 2px; padding: 4px 14px; color: var(--muted); font-size: 14px; }
 .start-row b { font-weight: 600; color: var(--ink); }
 .start-row .sq { width: 10px; height: 10px; border-radius: 2px; background: var(--fixed); flex: none; margin: 0 5px; }
@@ -813,7 +819,23 @@ function daylightRow(t, d) {
 function plannedStops(tripId, d) {
   return topItemsFor(tripId).filter(i => i.kind !== 'fixed' && i.day === d).sort((a, b) => seqOf(a) - seqOf(b) || a.title.localeCompare(b.title));
 }
-function logsFor(tripId, d) { return db.log.filter(l => l.trip_id === tripId && l.day === d); }
+function logsFor(tripId, d) { return db.log.filter(l => l.trip_id === tripId && l.day === d && !isTotals(l)); }
+/* Day totals: how far you walked and rode that day, typed in from the phone's Health app or Google Maps Timeline.
+   One Log row per day (title "Day totals", category Totals, no place), the numbers as JSON in note. Never a stop. */
+const TOTALS_CAT = 'Totals';
+const isTotals = l => l && l.category === TOTALS_CAT;
+function dayTotalsRow(tripId, d) { return db.log.find(l => l.trip_id === tripId && l.day === d && isTotals(l)) || null; }
+function dayTotals(tripId, d) { const r = dayTotalsRow(tripId, d); if (!r) return null; try { return JSON.parse(r.note || '{}'); } catch (e) { return null; } }
+const distUnit = () => store.get('th_units', 'mi');
+const fmtLen = (m, u = distUnit()) => { const v = u === 'mi' ? m / 1609.344 : m / 1000; return (v >= 10 ? Math.round(v) : v.toFixed(1)) + ' ' + u; };
+const fmtMins = m => m >= 60 ? `${Math.floor(m / 60)} h${m % 60 ? ' ' + (m % 60) + ' min' : ''}` : `${m} min`;
+/** "2:33", "2h 33", "2 hr 33 min", "153" → minutes */
+function parseMins(v) {
+  v = String(v || '').trim().toLowerCase(); if (!v) return 0;
+  let m = v.match(/^(\d+):(\d{1,2})$/); if (m) return +m[1] * 60 + +m[2];
+  m = v.match(/^(?:(\d+(?:\.\d+)?)\s*h[a-z]*)?\s*(?:(\d+)\s*m[a-z]*)?$/); if (m && (m[1] || m[2])) return Math.round((+m[1] || 0) * 60 + (+m[2] || 0));
+  return Math.round(+v) || 0;
+}
 function topLogs(tripId, d) { return logsFor(tripId, d).filter(l => !l.parent_id).sort((a, b) => seqOf(a) - seqOf(b)); }
 function logKids(id) { return db.log.filter(l => l.parent_id === id).sort((a, b) => seqOf(a) - seqOf(b)); }
 function flatLogs(tripId, d) { return topLogs(tripId, d).flatMap(l => [l, ...logKids(l.id)]); }
@@ -1131,7 +1153,7 @@ function tripsView() {
     const st = tripStatus(t);
     const its = topItemsFor(t.id);
     const n = k => its.filter(i => i.kind === k).length;
-    const logged = db.log.filter(l => l.trip_id === t.id && !isWander(l)).length;
+    const logged = db.log.filter(l => l.trip_id === t.id && !isWander(l) && !isTotals(l)).length;
     return `<div class="trip-card" style="--hue:${hue(t.id)}" data-go="#/trip/${encodeURIComponent(t.id)}">
       <h2>${esc(t.name)}</h2>
       ${t.destination ? `<div class="dest">${esc(t.destination)}</div>` : ''}
@@ -1467,6 +1489,62 @@ function unratedStops(t, d) {
   });
 }
 /** Shown from 8pm on today, and on any past day, until there's nothing left to rate or review. */
+function totalsLine(t, d) {
+  const x = dayTotals(t.id, d);
+  if (!x || !(x.walk_m || x.ride_m || x.steps)) return `<div class="totals-row empty" data-totals="${esc(d)}"><span class="ico" aria-hidden="true">👣</span><span>Add how far you went today <span class="sub">from Health or Google Maps</span></span></div>`;
+  const parts = [];
+  if (x.walk_m || x.walk_min || x.steps) parts.push(`<b>On foot</b> ${[x.walk_m ? fmtLen(x.walk_m) : '', x.walk_min ? fmtMins(x.walk_min) : '', x.steps ? Number(x.steps).toLocaleString('en-US') + ' steps' : ''].filter(Boolean).join(' · ')}`);
+  if (x.ride_m || x.ride_min) parts.push(`<b>By road</b> ${[x.ride_m ? fmtLen(x.ride_m) : '', x.ride_min ? fmtMins(x.ride_min) : ''].filter(Boolean).join(' · ')}`);
+  return `<div class="totals-row" data-totals="${esc(d)}"><span class="ico" aria-hidden="true">👣</span><span>${parts.join('<br>')}</span></div>`;
+}
+function openTotals(t, d) {
+  const row = dayTotalsRow(t.id, d), x = dayTotals(t.id, d) || {};
+  let u = distUnit();
+  const val = m => m ? String(+(u === 'mi' ? m / 1609.344 : m / 1000).toFixed(2)) : '';
+  const hm = m => m ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}` : '';
+  openSheet(`
+    <h3>How far today</h3>
+    <p class="hint" style="margin-top:-4px">${esc(fmtDay(d))}. Copy the numbers from Google Maps Timeline (the walking and driving totals at the top of the day) or the Health app (Walking + Running Distance, Steps). The poster uses these instead of its own guess.</p>
+    <div class="seg" id="tt-unit"><button data-u="mi" class="${u === 'mi' ? 'on' : ''}">Miles</button><button data-u="km" class="${u === 'km' ? 'on' : ''}">Kilometres</button></div>
+    <h4>On foot</h4>
+    <div class="two">
+      <div class="field"><label>Distance (<span class="tt-u">${u}</span>)</label><input type="number" inputmode="decimal" step="0.1" min="0" id="tt-walk" value="${val(x.walk_m)}"></div>
+      <div class="field"><label>Time (h:mm)</label><input inputmode="numeric" id="tt-walkmin" placeholder="2:33" value="${hm(x.walk_min)}"></div>
+    </div>
+    <div class="field"><label>Steps (optional)</label><input type="number" inputmode="numeric" min="0" id="tt-steps" value="${esc(x.steps || '')}"></div>
+    <h4>By car, bus or tour</h4>
+    <div class="two">
+      <div class="field"><label>Distance (<span class="tt-u">${u}</span>)</label><input type="number" inputmode="decimal" step="0.1" min="0" id="tt-ride" value="${val(x.ride_m)}"></div>
+      <div class="field"><label>Time (h:mm)</label><input inputmode="numeric" id="tt-ridemin" placeholder="3:55" value="${hm(x.ride_min)}"></div>
+    </div>
+    <div class="btnrow">${row ? `<button class="btn danger" id="tt-del">Remove</button>` : ''}<button class="btn" id="tt-save">Save</button></div>
+  `, sh => {
+    $$('#tt-unit button', sh).forEach(b => b.onclick = () => {
+      const nu = b.dataset.u; if (nu === u) return;
+      // convert what's typed so switching units doesn't change the distance
+      ['#tt-walk', '#tt-ride'].forEach(id => { const el = $(id, sh), v = parseFloat(el.value); if (!isNaN(v)) el.value = String(+(nu === 'km' ? v * 1.609344 : v / 1.609344).toFixed(2)); });
+      u = nu; store.set('th_units', u);
+      $$('#tt-unit button', sh).forEach(x2 => x2.classList.toggle('on', x2.dataset.u === u)); $$('.tt-u', sh).forEach(e => { e.textContent = u; });
+    });
+    const toM = id => { const v = parseFloat($(id, sh).value); return isNaN(v) || v <= 0 ? 0 : Math.round(v * (u === 'mi' ? 1609.344 : 1000)); };
+    $('#tt-save', sh).onclick = () => {
+      const data = { walk_m: toM('#tt-walk'), walk_min: parseMins($('#tt-walkmin', sh).value), steps: Math.round(+$('#tt-steps', sh).value || 0),
+                     ride_m: toM('#tt-ride'), ride_min: parseMins($('#tt-ridemin', sh).value) };
+      Object.keys(data).forEach(k => { if (!data[k]) delete data[k]; });
+      store.set('th_units', u);
+      const note = JSON.stringify(data);
+      if (row) queue('updateLog', { id: row.id, patch: { note } }, () => { row.note = note; });
+      else {
+        const l = { id: uid('lg'), trip_id: t.id, day: d, seq: '', time: '', title: 'Day totals', category: TOTALS_CAT, origin: '', note,
+                    lat: '', lng: '', logged_at: new Date().toISOString(), timezone: t.timezone || '' };
+        queue('addLog', { id: l.id, trip: t.id, day: d, seq: '', title: l.title, category: TOTALS_CAT, note, logged_at: l.logged_at, timezone: l.timezone }, () => db.log.push(l));
+      }
+      closeSheet(); render();
+    };
+    const del = $('#tt-del', sh);
+    if (del) del.onclick = () => { closeSheet(); undoable('Removed the totals', () => { db.log = db.log.filter(z => z.id !== row.id); }, () => queue('deleteLog', { id: row.id })); };
+  });
+}
 function wrapUpCard(t, d, toReview) {
   const now = logNow(t.timezone);
   if (d > now.day || (d === now.day && timeCmp(now.time, '20:00') < 0)) return '';
@@ -1534,6 +1612,7 @@ function logContent(t) {
     ${homeStay && !docked ? `<div class="log-actions" style="margin-top:0"><button class="btn ghost" data-act="home">${esc(homeLabel(homeStay))}</button></div>` : ''}
     ${wrap || `<div style="text-align:center;margin:-2px 0 6px"><button class="linkbtn" data-act="review">Review plan${toReview ? ` (${toReview})` : ''}</button></div>`}
     ${list}
+    ${totalsLine(t, d)}
     <div style="display:flex;gap:6px;justify-content:center;margin-top:10px">
       ${!reorder && outOfTimeOrder(tops) ? `<button class="linkbtn" data-act="timeorder">Put in time order</button>` : ''}
       ${tops.length > 1 ? `<button class="linkbtn" data-reorder="${key}">${reorder ? 'Done reordering' : 'Reorder'}</button>` : ''}
@@ -1655,6 +1734,7 @@ function recapData(t, frame) {
 
   // Leg lengths: real path when the Routes cache has it, else straight line
   let walked = 0, moved = 0, rode = 0;
+  const estWalk = {}, estRide = {};
   tracks.forEach(tr => tr.pts.forEach((b, k) => {
     if (!k) return;
     const a = tr.pts[k - 1];
@@ -1663,13 +1743,25 @@ function recapData(t, frame) {
     let m = 0;
     if (pl) { const p = decodePolyline(pl); for (let j = 1; j < p.length; j++) m += meters({ lat: p[j - 1][0], lng: p[j - 1][1] }, { lat: p[j][0], lng: p[j][1] }); }
     else m = meters(a, b) * (mode === 'walk' ? 1.2 : 1.15);
-    moved += m; if (mode === 'walk') walked += m; else if (/^(car|tour|transit|bus)$/.test(mode)) rode += m;
+    moved += m; if (mode === 'walk') { walked += m; estWalk[tr.day] = (estWalk[tr.day] || 0) + m; }
+    else if (/^(car|tour|transit|bus)$/.test(mode)) { rode += m; estRide[tr.day] = (estRide[tr.day] || 0) + m; }
   }));
+  // Day totals typed in from Health / Google Maps replace the guess for that day (not for an area frame: they cover the whole day)
+  const totals = {};
+  let walkMin = 0, rideMin = 0, steps = 0, measured = false;
+  if (lived && (!frame || frame.kind !== 'place')) days.filter(ft.inDay).forEach(d => {
+    const x = dayTotals(t.id, d); if (!x) return;
+    totals[d] = x; measured = true;
+    if (x.walk_m) { walked += x.walk_m - (estWalk[d] || 0); moved += x.walk_m - (estWalk[d] || 0); }
+    if (x.ride_m) { rode += x.ride_m - (estRide[d] || 0); moved += x.ride_m - (estRide[d] || 0); }
+    walkMin += x.walk_min || 0; rideMin += x.ride_min || 0; steps += x.steps || 0;
+  });
   let wandered = 0;
   stops.forEach(s => { if (s.wandered && s.wanderFrom && s.time) { const m = minsOf(s.time) - minsOf(s.wanderFrom); if (m > 0 && m < 12 * 60) wandered += m; } });
   const busiest = perDay.reduce((x, y) => (y.n > (x ? x.n : 0) ? y : x), null);
   const inDays = perDay.filter(x => x.in).map(x => x.day);
   return { lived, days, tracks, stops, homes: [...homes.values()], unvisited, perDay, walked, moved, rode, busiest, allPts, sliced: !ft.all, wandered,
+    totals, measured, walkMin, rideMin, steps,
     from: inDays[0], to: inDays[inDays.length - 1],
     found: stops.filter(s => s.found).length, marked: stops.filter(s => s.mark),
     maybeLoved: stops.filter(s => s.mark && s.wasMaybe && lived) };
@@ -1803,7 +1895,8 @@ function recapCredits(t, data, prefs, extras) {
         if (pl) { const p = decodePolyline(pl); for (let j = 1; j < p.length; j++) m += meters({ lat: p[j - 1][0], lng: p[j - 1][1] }, { lat: p[j][0], lng: p[j][1] }); }
         else m += meters(a, b) * 1.25; });
       if (m > 2000 && (!walk || m > walk.m)) walk = { m, d: tr.day }; });
-    if (walk) out.walk = { value: `${dayName(walk.d)}, about ${walk.m >= 10000 ? Math.round(walk.m / 1000) : (walk.m / 1000).toFixed(1)} km`, day: walk.d, strength: walk.m / 2000 };
+    Object.entries(data.totals || {}).forEach(([d, x]) => { if (x.walk_m > 2000 && (!walk || x.walk_m > walk.m)) walk = { m: x.walk_m, d }; });
+    if (walk) out.walk = { value: `${dayName(walk.d)}, about ${fmtLen(walk.m)}`, day: walk.d, strength: walk.m / 2000 };
     // two credits about the same day say less than one: keep the stronger, unless both were switched on by hand
     if (out.offscript && out.walk && out.offscript.day === out.walk.day) {
       const weak = out.walk.strength >= out.offscript.strength ? 'offscript' : 'walk';
@@ -2582,8 +2675,10 @@ function recapKey(data, story) {
   const measures = [];
   const km = m => { const k = m / 1000; return k >= 10 ? Math.round(k) : k.toFixed(1); };
   const hrs = m => m >= 90 ? `≈ ${Math.round(m / 30) / 2} h`.replace('.5', '½') : `${Math.round(m / 5) * 5} min`;
-  if (data.walked >= 300) measures.push({ label: 'On foot', value: `${km(data.walked)} km`, note: 'between stops' });
-  if (data.rode >= 2000) measures.push({ label: 'By road', value: `${km(data.rode)} km`, note: 'tours and rides' });
+  const hm = m => m >= 60 ? `${Math.floor(m / 60)} h ${m % 60 ? (m % 60) + ' min' : ''}`.trim() : `${m} min`;
+  if (data.walked >= 300) measures.push({ label: 'On foot', value: fmtLen(data.walked),
+    note: data.measured ? [data.walkMin ? hm(data.walkMin) : '', data.steps ? Number(data.steps).toLocaleString('en-US') + ' steps' : ''].filter(Boolean).join(' · ') || 'walked' : 'between stops' });
+  if (data.rode >= 2000) measures.push({ label: 'By road', value: fmtLen(data.rode), note: data.measured && data.rideMin ? hm(data.rideMin) : 'tours and rides' });
   if (data.wandered >= 20) measures.push({ label: 'Off the map', value: hrs(data.wandered), note: 'wandering' });
   const lingered = S.reduce((a, s) => a + (s.dwell || 0), 0);
   if (lingered >= 30) measures.push({ label: 'Lingered', value: hrs(lingered), note: `across ${all.length} place${all.length === 1 ? '' : 's'}` });
@@ -3961,6 +4056,7 @@ function bindCommon() {
   $$('[data-move]').forEach(el => el.onclick = e => { e.stopPropagation(); moveIn(el.dataset.list, el.dataset.id, el.dataset.move); });
   $$('[data-addday]').forEach(el => el.onclick = () => openAddToDay(r.id, el.dataset.addday));
   $$('[data-mapday]').forEach(el => el.onclick = () => { ui.mapDay = el.dataset.mapday; ui.mapLayer = 'plan'; location.hash = `#/trip/${encodeURIComponent(r.id)}/map`; });
+  $$('[data-totals]').forEach(el => el.onclick = () => openTotals(tripById(r.id), el.dataset.totals));
   $$('[data-maplived]').forEach(el => el.onclick = () => { ui.mapDay = el.dataset.maplived; ui.mapLayer = 'lived'; location.hash = `#/trip/${encodeURIComponent(r.id)}/map`; });
   $$('[data-logday]').forEach(el => el.onclick = () => {
     ui.logDay[r.id] = el.dataset.logday; ui.reorder = null;
@@ -5389,6 +5485,7 @@ function demoData() {
       { id: 'l2', trip_id: 'tr_demo1', day: d(-1), seq: '1', item_id: 'f2', title: 'Hotel in Kuramae', origin: 'planned', mode: 'train', time: '17:05', lat: 35.7037, lng: 139.7930 },
       { id: 'l3', rating: 'loved', trip_id: 'tr_demo1', day: d(-1), seq: '2', title: 'Ramen counter near Kuramae', origin: 'found', mode: 'walk', note: 'Shio ramen, 8 seats', would_return: 'yes', category: 'Ramen restaurant', time: '19:40', lat: 35.7045, lng: 139.7925 },
       { id: 'l4', rating: 'loved', trip_id: 'tr_demo1', day: d(0), seq: '0', item_id: 'p1', title: 'Sensō-ji', origin: 'planned', mode: 'walk', time: '07:10', lat: 35.7148, lng: 139.7967 },
+      { id: 'ltot', trip_id: 'tr_demo1', day: d(0), seq: '', title: 'Day totals', category: 'Totals', note: '{"walk_m":9200,"walk_min":153,"steps":12840,"ride_m":4100,"ride_min":22}' },
       { id: 'l5', rating: 'liked', trip_id: 'tr_demo1', day: d(0), seq: '1', title: 'Kappabashi kitchen street', origin: 'found', mode: 'walk', note: 'Bought a knife', category: 'Shopping street', time: '09:40', lat: 35.7130, lng: 139.7890 },
       { id: 'l6', rating: 'loved', trip_id: 'tr_demo1', day: d(0), seq: '2', item_id: 'p3', title: 'Yanaka Ginza', origin: 'planned', mode: 'transit', time: '12:30', lat: 35.7275, lng: 139.7660 },
       { id: 'l7', rating: 'liked', trip_id: 'tr_demo1', day: d(0), seq: '3', title: 'Nezu Shrine', origin: 'found', mode: 'walk', category: 'Shrine', time: '14:15', lat: 35.7202, lng: 139.7607 },

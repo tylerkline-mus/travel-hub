@@ -90,6 +90,12 @@ Sample mode runs fully offline. Test with Playwright at 390×844 @2x: route `cdn
 - **Script** (`addLog`): a picked Google place is never linked by distance to a *different* saved place (Melabúðin was linked to Brauð & Co, 35 m away). Needs a redeploy.
 - **Wrap-up card** (`wrapUpCard`, `unratedStops`): on the Log from 8pm (and on any past day), "How was today?" lists unrated real stops (no stays, tours, flights, errands) with the four ratings as one-tap buttons, plus "N planned places didn't get logged" → the existing `openReview` (Went / Skip / Move). Later hides it for that day (`th_wrap_later`, per device). Replaces the Review plan link while it shows.
 
+## How far each day (Oct 30 2026, Tyler asked)
+
+- **Day totals**: one Log row per day, `title: 'Day totals'`, `category: 'Totals'`, no place, the numbers as JSON in `note`: `{walk_m, walk_min, steps, ride_m, ride_min}` (metres / minutes). No script change. `logsFor` skips it (`isTotals`), so it's never a stop, a count or a marker; read it with `dayTotals(tripId, d)`.
+- Log day shows a card under the stops (`totalsLine`, dashed "Add how far you went today" when empty); tap → `openTotals`: Miles / Kilometres switch (remembered in localStorage `th_units`, default mi; switching converts what's typed), walking distance + time + steps, ride distance + time. Times parse "2:33", "2 hr 33 min", "153" (`parseMins`). Tyler copies them from Google Maps Timeline (walk / drive totals at the top of the day) or Health.
+- `recapData`: a day with totals replaces that day's estimated walk/ride (`estWalk`/`estRide`) with the typed numbers (not for an area frame); returns `totals`, `measured`, `walkMin`, `rideMin`, `steps`. Key measures say the time and steps instead of "between stops"; Longest walk prefers a typed day. Poster distances in the key and Longest walk follow `th_units` (`fmtLen`); the scale bar and edge notes stay km.
+
 ## Adding a stop after the fact (Oct 2026, on the trip)
 
 - I'm here on today has a **I'm here now / Earlier today** switch (`earlier`). Earlier: hides the location bits (`#h-live`: where you are, Around you, Just this spot), clears the auto-pick, and needs a time. Saving ignores the phone's current position (`pos = earlier ? null : livePos`), so a typed name isn't pinned where you're standing and `here_lat` stays empty. On a past day the sheet is already in this mode (time optional there).
