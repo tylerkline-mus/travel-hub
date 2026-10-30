@@ -306,6 +306,16 @@ nav.tabs.live > button { padding-top: 2px; padding-bottom: 2px; }
 .pick { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); background: var(--card); border-radius: 10px; margin-bottom: 6px; cursor: pointer; }
 .pick.on { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); }
 .pick .body { flex: 1; min-width: 0; }
+.wrap-card { margin: 4px 0 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.wrap-h { display: flex; justify-content: space-between; align-items: baseline; font-family: var(--serif); font-weight: 600; font-size: 17px; margin-bottom: 4px; }
+.wrap-h .linkbtn { font-family: inherit; font-weight: 400; font-size: 13px; }
+.wrap-row { padding: 9px 0; border-top: 1px solid var(--line); }
+.wrap-row:first-of-type { border-top: 0; }
+.wrap-row .t { font-size: 15px; margin-bottom: 6px; }
+.wrap-row .t span { color: var(--muted); font-size: 13px; margin-left: 6px; }
+.wrap-rate { display: flex; flex-wrap: wrap; gap: 6px; }
+.wrap-rate button { flex: 1 1 auto; padding: 6px 8px; border-radius: 999px; border: 1px solid var(--line); background: none; font: inherit; font-size: 12.5px; color: var(--ink); cursor: pointer; white-space: nowrap; }
+.wrap-rate button:active { background: var(--line); }
 .review-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .review-row .body { flex: 1; min-width: 0; }
 .review-row .btn { padding: 7px 10px; font-size: 13px; }
@@ -500,7 +510,7 @@ const isLeave = l => isWander(l) && l.category === LEAVE_CAT;
 function seqForTime(tops, time) {
   const all = tops.map(seqOf).filter(x => x < 9999).sort((a, b) => a - b);
   if (!all.length) return 0;
-  const before = tops.filter(x => x.time && x.time <= time && seqOf(x) < 9999).sort((a, b) => a.time.localeCompare(b.time) || seqOf(a) - seqOf(b));
+  const before = tops.filter(x => x.time && timeCmp(x.time, time) <= 0 && seqOf(x) < 9999).sort((a, b) => timeCmp(a.time, b.time) || seqOf(a) - seqOf(b));
   if (!before.length) return all[0] - 1;
   const lo = seqOf(before[before.length - 1]), hi = all.find(x => x > lo);
   return hi === undefined ? lo + 1 : (lo + hi) / 2;
@@ -546,6 +556,16 @@ function tzNow(tz) {
     return { day: `${p.year}-${p.month}-${p.day}`, time: `${p.hour === '24' ? '00' : p.hour}:${p.minute}` };
   } catch (e) { const n = new Date(); return { day: todayStr(), time: String(n.getHours()).padStart(2, '0') + ':' + String(n.getMinutes()).padStart(2, '0') }; }
 }
+/** Logging's "now": until 4am it's still last night (Tyler, Oct 2026: a tap after midnight landed on the next day).
+ *  The time stays the real clock time ("00:20"); NIGHT_END makes it sort after 23:59 on that day. */
+const NIGHT_END = '04:00';
+function logNow(tz) {
+  const n = tzNow(tz);
+  return n.time < NIGHT_END ? { day: addDays(n.day, -1), time: n.time } : n;
+}
+/** A day's time in minutes, with 00:00–03:59 counted as after midnight of that day (so it sorts last). */
+const minsOf = t => { const [h, m] = String(t).split(':').map(Number); const v = h * 60 + (m || 0); return v < 240 ? v + 1440 : v; };
+const timeCmp = (a, b) => minsOf(a) - minsOf(b);
 function tripStatus(t) {
   const now = parseDate(tzNow(t.timezone).day), s = parseDate(t.start), e = parseDate(t.end);
   if (!s) return { label: 'Dreaming', cls: '' };
@@ -1081,12 +1101,12 @@ function render() {
 
 /** The trip happening today (the one on screen if it is), so logging is one tap from anywhere. */
 function liveTrip() {
-  const r = route(), on = t => t && tripDays(t).includes(tzNow(t.timezone).day);
+  const r = route(), on = t => t && tripDays(t).includes(logNow(t.timezone).day);
   const cur = r.name === 'trip' ? tripById(r.id) : null;
   return on(cur) ? cur : db.trips.find(on) || null;
 }
 function navView(active) {
-  const lt = cfg ? liveTrip() : null, st = lt ? stayForDay(lt.id, tzNow(lt.timezone).day) : null;
+  const lt = cfg ? liveTrip() : null, st = lt ? stayForDay(lt.id, logNow(lt.timezone).day) : null;
   document.body.classList.toggle('live-dock', !!lt);
   const quick = lt ? `<div class="quick${st ? ' four' : ''}">
       <button class="go" data-act="qhere">I’m here</button>
@@ -1429,11 +1449,37 @@ function logDays(t) {
 }
 function currentLogDay(t) {
   if (ui.logDay[t.id]) return ui.logDay[t.id];
-  const days = logDays(t), today = tzNow(t.timezone).day;
+  const days = logDays(t), today = logNow(t.timezone).day;
   if (days.includes(today)) return today;
   const withLogs = days.filter(d => logsFor(t.id, d).length);
   if (withLogs.length) return withLogs[withLogs.length - 1];
   return days[0] || today;
+}
+/* ---------- Wrapping up a day (Oct 2026: ratings came in one late batch, and plans that didn't happen stayed on their day) ---------- */
+/** Stops worth a rating: real places, not errands, the hotel or getting around. */
+function unratedStops(t, d) {
+  return flatLogs(t.id, d).filter(l => {
+    if (isWander(l) || ratingOf(l)) return false;
+    const it = l.item_id ? itemById(l.item_id) : null;
+    if (it && (isStay(it) || isTour(it) || isFlight(it))) return false;
+    const cat = l.category || (it && it.category) || '';
+    return !isChore({ category: cat, title: l.title }) && !CHORE_RX.test(l.title || '');
+  });
+}
+/** Shown from 8pm on today, and on any past day, until there's nothing left to rate or review. */
+function wrapUpCard(t, d, toReview) {
+  const now = logNow(t.timezone);
+  if (d > now.day || (d === now.day && timeCmp(now.time, '20:00') < 0)) return '';
+  const later = store.get('th_wrap_later', {});
+  if (later[t.id + ':' + d]) return '';
+  const left = unratedStops(t, d);
+  if (!left.length && !toReview) return '';
+  return `<div class="wrap-card">
+    <div class="wrap-h">${d === now.day ? 'How was today?' : 'Wrap up ' + esc(fmtDay(d))}<button class="linkbtn" data-wraplater="${esc(d)}">Later</button></div>
+    ${left.map(l => `<div class="wrap-row"><div class="t">${esc(l.title)}${l.time ? `<span>${esc(fmtTime(l.time))}</span>` : ''}</div>
+      <div class="wrap-rate">${RATINGS.map(([k, n]) => `<button data-rate="${esc(l.id)}" data-r="${k}">${esc(n)}</button>`).join('')}</div></div>`).join('')}
+    ${toReview ? `<button class="btn ghost small" data-act="review" style="margin-top:${left.length ? 10 : 2}px">${toReview} planned ${toReview === 1 ? 'place' : 'places'} didn’t get logged · Went, skip or move</button>` : ''}
+  </div>`;
 }
 function logContent(t) {
   const days = logDays(t);
@@ -1446,7 +1492,7 @@ function logContent(t) {
   const key = 'log:' + d;
   const reorder = ui.reorder === key;
 
-  const homeStay = stayForDay(t.id, d), docked = d === tzNow(t.timezone).day && liveTrip() === t;
+  const homeStay = stayForDay(t.id, d), docked = d === logNow(t.timezone).day && liveTrip() === t;
   const chips = days.length ? `<div class="filters">${days.map(x => `<button class="${x === d ? 'on' : ''} ${logsFor(t.id, x).length ? 'has' : ''}" data-logday="${x}">${esc(fmtShortDay(x))}</button>`).join('')}</div>` : '';
   let list = '', n = 0;
   const start = tops.length ? startsAtStay(t.id, d, tops.find(l => !isWander(l))) : null;
@@ -1476,16 +1522,17 @@ function logContent(t) {
       ${reorder ? `<div class="moves"><button data-move="up" data-list="${key}" data-id="${esc(l.id)}" ${k === 0 ? 'disabled' : ''}>↑</button><button data-move="down" data-list="${key}" data-id="${esc(l.id)}" ${k === tops.length - 1 ? 'disabled' : ''}>↓</button></div>` : ''}
     </div>`;
   });
-  if (!tops.length) list = `<div class="empty" style="padding:26px 10px"><div class="big">Nothing logged ${d === tzNow(t.timezone).day ? 'yet today' : 'this day'}</div>Tap “I’m here” at each stop, or fill the day in tonight. Order matters more than times.</div>`;
+  if (!tops.length) list = `<div class="empty" style="padding:26px 10px"><div class="big">Nothing logged ${d === logNow(t.timezone).day ? 'yet today' : 'this day'}</div>Tap “I’m here” at each stop, or fill the day in tonight. Order matters more than times.</div>`;
+  const wrap = wrapUpCard(t, d, toReview);
 
   return `${chips}
     <div class="log-head"><div class="d">${esc(fmtDay(d))}</div><div class="s">${dayLabel(t, d)} · ${all.length} stop${all.length === 1 ? '' : 's'}${found ? ` · ${found} found` : ''}</div></div>
     ${docked ? '' : `<div class="log-actions">
-      <button class="btn" data-act="here">${d === tzNow(t.timezone).day ? 'I’m here' : 'Add a stop'}</button>
+      <button class="btn" data-act="here">${d === logNow(t.timezone).day ? 'I’m here' : 'Add a stop'}</button>
       <button class="btn ghost" data-act="wander">Out wandering</button>
     </div>`}
     ${homeStay && !docked ? `<div class="log-actions" style="margin-top:0"><button class="btn ghost" data-act="home">${esc(homeLabel(homeStay))}</button></div>` : ''}
-    <div style="text-align:center;margin:-2px 0 6px"><button class="linkbtn" data-act="review">Review plan${toReview ? ` (${toReview})` : ''}</button></div>
+    ${wrap || `<div style="text-align:center;margin:-2px 0 6px"><button class="linkbtn" data-act="review">Review plan${toReview ? ` (${toReview})` : ''}</button></div>`}
     ${list}
     <div style="display:flex;gap:6px;justify-content:center;margin-top:10px">
       ${!reorder && outOfTimeOrder(tops) ? `<button class="linkbtn" data-act="timeorder">Put in time order</button>` : ''}
@@ -1699,7 +1746,6 @@ function pluralCat(c) {
   const pl = /[^aeiou]y$/.test(last) ? last.slice(0, -1) + 'ies' : /(s|sh|ch|x)$/.test(last) ? last + 'es' : last + 's';
   return cap([...w, pl].join(' '));
 }
-const minsOf = t => { const [h, m] = String(t).split(':').map(Number); return h * 60 + (m || 0); };
 function fmtClock(t) { let m = minsOf(t), h = Math.floor(m / 60) % 24; const ap = h < 12 ? 'am' : 'pm'; h = h % 12 || 12; m %= 60; return `${h}${m ? ':' + String(m).padStart(2, '0') : ''} ${ap}`; }
 function fmtSpan(min) {
   const h = Math.round(min / 30) / 2;
@@ -3923,6 +3969,18 @@ function bindCommon() {
   $$('[data-mapchip]').forEach(el => el.onclick = () => { ui.mapDay = el.dataset.mapchip; render(); });
   $$('[data-maplayer]').forEach(el => el.onclick = () => { ui.mapLayer = el.dataset.maplayer; render(); });
   $$('[data-mode]').forEach(el => el.onclick = e => { e.stopPropagation(); openMode(el.dataset.mode); });
+  $$('[data-rate]').forEach(el => el.onclick = () => {
+    const l = db.log.find(x => x.id === el.dataset.rate); if (!l) return;
+    const rating = el.dataset.r;
+    queue('updateLog', { id: l.id, patch: { rating } }, () => { l.rating = rating; });
+    toast(l.title + ': ' + RATINGS.find(x => x[0] === rating)[1]);
+    render();
+  });
+  $$('[data-wraplater]').forEach(el => el.onclick = () => {
+    const r = route(), later = store.get('th_wrap_later', {});
+    later[r.id + ':' + el.dataset.wraplater] = 1; store.set('th_wrap_later', later);
+    render();
+  });
   $$('[data-act]').forEach(el => el.onclick = () => {
     const a = el.dataset.act;
     if (a === 'capture') openCapture();
@@ -3934,10 +3992,10 @@ function bindCommon() {
     else if (a === 'review') openReview(r.id, currentLogDay(tripById(r.id)));
     else if (a === 'wander') logWander(tripById(r.id), currentLogDay(tripById(r.id)));
     else if (a === 'home') logHome(tripById(r.id), currentLogDay(tripById(r.id)));
-    else if (a === 'qonway') { const lt = liveTrip(); if (lt) logOnMyWay(lt, tzNow(lt.timezone).day); }
+    else if (a === 'qonway') { const lt = liveTrip(); if (lt) logOnMyWay(lt, logNow(lt.timezone).day); }
     else if (a === 'qhere' || a === 'qwander' || a === 'qhome') {
       const lt = liveTrip(); if (!lt) return;
-      const today = tzNow(lt.timezone).day;
+      const today = logNow(lt.timezone).day;
       if (a === 'qhere') openHere(lt.id, today);
       else if (a === 'qwander') logWander(lt, today);
       else logHome(lt, today);
@@ -4526,7 +4584,7 @@ async function hereName(p) {
 /* ---------- Travelogue: I'm here ---------- */
 function openHere(tripId, d) {
   const t = tripById(tripId); if (!t) return;
-  const now = tzNow(t.timezone);
+  const now = logNow(t.timezone);
   const isToday = d === now.day;
   const logged = new Set(db.log.filter(l => l.trip_id === tripId).map(l => l.item_id).filter(Boolean));
   const dayPlan = plannedStops(tripId, d).concat(fixedEvents(tripId, d).filter(e => e.start).map(e => e.i)).filter(i => !logged.has(i.id));
@@ -4535,8 +4593,12 @@ function openHere(tripId, d) {
   // still on the tour: it's the last real stop logged and (today) the tour's end time hasn't passed
   const lastReal = topLogs(tripId, d).filter(l => !isWander(l)).slice(-1)[0];
   const tourIt = lastReal && tours.includes(lastReal) ? itemById(lastReal.item_id) : null;
-  const onTour = tourIt && (!isToday || !tourIt.end_time || now.time < tourIt.end_time) ? lastReal.id : '';
+  const onTour = tourIt && (!isToday || !tourIt.end_time || timeCmp(now.time, tourIt.end_time) < 0) ? lastReal.id : '';
+  // on a tour, its own stops come first, so picking one ticks it off (they used to be logged as "found")
+  if (onTour) dayPlan.unshift(...childrenOf(tourIt.id).filter(c => !logged.has(c.id)));
   const prev = topLogs(tripId, d).slice(-1)[0];
+  // "Got here by": the ride you said you were on, else how you got to the last stop — but not the tour bus once the tour is over
+  const defMode = (onTour ? 'tour' : '') || onWayFor(t, d) || (prev && prev.mode && !(prev.mode === 'tour' && !onTour) ? prev.mode : '') || 'walk';
   let picked = null, pos = null, near = null, nearList = [], pin = null;
   let livePos = null;
   let earlier = !isToday;   // a stop you're adding after the fact: no "where you are now", and the time puts it in order
@@ -4553,7 +4615,7 @@ function openHere(tripId, d) {
     ${navigator.clipboard && navigator.clipboard.readText ? `<button class="linkbtn" id="h-paste" style="margin:-8px 0 10px">Paste a link</button>` : ''}
     <div class="two">
       <div class="field"><label id="h-time-label">${isToday ? 'Time (optional)' : 'Time'}</label><div class="inline"><input type="time" id="h-time"><button class="btn ghost small" id="h-now">Now</button></div></div>
-      <div class="field"><label>Got here by</label><select id="h-mode">${MODES.map(([k, l]) => `<option value="${k}" ${k === (onWayFor(t, d) || (prev && prev.mode)) ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="field"><label>Got here by</label><select id="h-mode">${MODES.map(([k, l]) => `<option value="${k}" ${k === defMode ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     </div>
     ${tours.length ? `<div class="field"><label>Part of</label><select id="h-parent"><option value="">— (on my own)</option>${tours.map(l => `<option value="${esc(l.id)}" ${l.id === onTour ? 'selected' : ''}>${esc(l.title)}</option>`).join('')}</select></div>` : ''}
     <div class="field"><label>Note</label><input id="h-note" placeholder="What it was like, what you ordered…"></div>
@@ -4668,7 +4730,19 @@ function openHere(tripId, d) {
       // a nearby place or pin at where you're staying logs the stay itself, not a "found" hotel
       const atStay = !picked && !parent_id && (near || pin) ? stayMatch(tripId, d, near || pin) : null;
       if (atStay) { near = null; pin = null; }
-      const it = picked ? itemById(picked) : atStay;
+      let it = picked ? itemById(picked) : atStay;
+      // a stop on a tour that matches one of the tour's planned stops (same Google place, or within 600 m) ticks that stop off
+      if (!it && parent_id && (near || pin || livePos)) {
+        const tl = db.log.find(x => x.id === parent_id), tItem = tl && tl.item_id ? itemById(tl.item_id) : null;
+        const at = near || pin || livePos;
+        const kids = tItem ? childrenOf(tItem.id).filter(c => !logged.has(c.id)) : [];
+        it = kids.find(c => near && near.place_id && c.place_id === near.place_id)
+          || kids.filter(c => hasCoords(c)).map(c => ({ c, m: meters(at, c) })).filter(x => x.m < 600).sort((a, b) => a.m - b.m).map(x => x.c)[0] || null;
+        if (it) { near = null; pin = null; }
+      }
+      // a double tap (same place in the last few minutes) logs once
+      const dup = !earlier && recentStop(tripId, d, it && it.id, near && near.place_id);
+      if (dup) { closeSheet(); toast('Already logged ' + dup.title); return; }
       let time = $('#h-time', sh).value;
       if (earlier && isToday && !time) { $('#h-time', sh).focus(); toast('Add the time you were there, so it lands in the right place'); return; }
       const tops = topLogs(tripId, d);
@@ -4770,7 +4844,7 @@ function homeLabel(st) {
 }
 function logHome(t, d) {
   const st = stayForDay(t.id, d); if (!st) return;
-  const now = tzNow(t.timezone);
+  const now = logNow(t.timezone);
   if (d !== now.day) return openHome(t, d, st);
   const tops = topLogs(t.id, d).filter(l => !isWander(l)), last = tops[tops.length - 1];
   if (last && last.item_id === st.id) { toast('Already back at ' + st.title); return; }
@@ -4802,18 +4876,36 @@ function openHome(t, d, st) {
 /** True when a timed stop sits after a later-timed one. */
 function outOfTimeOrder(tops) {
   let last = '';
-  return tops.some(l => { if (!l.time) return false; const bad = last && l.time < last; last = l.time; return bad; });
+  return tops.some(l => { if (!l.time) return false; const bad = last && timeCmp(l.time, last) < 0; last = l.time; return bad; });
 }
 /** Sort the day by time; a stop with no time stays right after the one it followed. */
 function putInTimeOrder(t, d) {
   const tops = topLogs(t.id, d);
   let carry = '';
   const keyed = tops.map((l, k) => { if (l.time) carry = l.time; return { l, t: l.time || carry, k }; });
-  const ids = keyed.sort((a, b) => (a.t && b.t ? a.t.localeCompare(b.t) : 0) || a.k - b.k).map(x => x.l.id);
+  const ids = keyed.sort((a, b) => (a.t && b.t ? timeCmp(a.t, b.t) : 0) || a.k - b.k).map(x => x.l.id);
   queue('reorder', { sheet: 'Log', ids, key: 'log:' + d }, () => {
     ids.forEach((x, n) => { const o = db.log.find(y => y.id === x); if (o) o.seq = String(n); });
   });
   toast('Put in time order');
+}
+
+/* ---------- Double taps ---------- */
+const DOUBLE_TAP_MS = 3 * 60e3;
+const loggedAgo = l => { const at = Date.parse(l.logged_at || l.created || ''); return isNaN(at) ? 1e12 : Date.now() - at; };
+/** A marker of this kind (Wandering / Leaving) logged on this day in the last few minutes. */
+function recentMarker(tripId, d, cat) {
+  return logsFor(tripId, d).some(l => isWander(l) && l.category === cat && loggedAgo(l) < DOUBLE_TAP_MS);
+}
+/** The same place (saved item or Google place) logged on this day in the last few minutes. */
+function recentStop(tripId, d, itemId, placeId) {
+  return logsFor(tripId, d).find(l => !isWander(l) && loggedAgo(l) < DOUBLE_TAP_MS
+    && ((itemId && l.item_id === itemId) || (placeId && l.place_id === placeId))) || null;
+}
+/** A tour booked on this day whose time window includes `time` (no end time = until 8pm). */
+function tourRunning(tripId, d, time) {
+  return fixedEvents(tripId, d).some(e => e.start && isTour(e.i)
+    && (!e.i.start_time || timeCmp(e.i.start_time, time) <= 0) && timeCmp(time, e.i.end_time || '20:00') < 0);
 }
 
 /* ---------- On my way: "we're leaving this stop now" (a marker, no new place) ---------- */
@@ -4824,10 +4916,11 @@ function onWayFor(t, d) {
   return w && w.trip === t.id && w.day === d && Date.now() - w.at < 14 * 3600e3 ? w.mode : '';
 }
 function logOnMyWay(t, d) {
-  const now = tzNow(t.timezone), tops = topLogs(t.id, d), last = tops[tops.length - 1];
+  const now = logNow(t.timezone), tops = topLogs(t.id, d), last = tops[tops.length - 1];
   if (last && isLeave(last)) { toast('Already on your way since ' + fmtTime(last.time)); return; }
-  // a tour day rides the tour bus; otherwise it's a bus
-  const mode = fixedEvents(t.id, d).some(e => e.start && isTour(e.i)) ? 'tour' : 'transit';
+  if (recentMarker(t.id, d, LEAVE_CAT)) { toast('Already got that'); return; }
+  // still on a day tour: the tour bus. Once its end time has passed (dinner after the tour), a bus.
+  const mode = tourRunning(t.id, d, now.time) ? 'tour' : 'transit';
   const seq = tops.length ? Math.max(...tops.map(seqOf).filter(x => x < 9999), -1) + 1 : 0;
   const l = { id: uid('lg'), trip_id: t.id, day: d, seq: String(seq), time: now.time, title: 'On my way', category: LEAVE_CAT, origin: 'found',
               lat: '', lng: '', logged_at: new Date().toISOString(), timezone: t.timezone || '', _pending: true };
@@ -4841,10 +4934,11 @@ function logOnMyWay(t, d) {
 
 /** One tap: "I've left, I'm just wandering." On a past day it asks for the time instead. */
 function logWander(t, d) {
-  const now = tzNow(t.timezone), today = d === now.day;
+  const now = logNow(t.timezone), today = d === now.day;
   if (!today) return openWander(null, t, d);
   const tops = topLogs(t.id, d);
   if (tops.length && isWander(tops[tops.length - 1]) && !isLeave(tops[tops.length - 1])) { toast('Already wandering since ' + fmtTime(tops[tops.length - 1].time)); return; }
+  if (recentMarker(t.id, d, WANDER_CAT)) { toast('Already got that'); return; }
   saveWander(t, d, now.time, true);
   toast('Out wandering from ' + fmtTime(now.time) + '. Tap I’m here when you stop somewhere.');
 }

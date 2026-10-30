@@ -306,6 +306,9 @@ const ACTIONS = {
           let best = null, bestD = 75;
           items.forEach(function (i) {
             if (i.lat === '' || i.lng === '') return;
+            // a Google place you picked is that place: never swap it for a different saved place next door
+            // (Melabúðin got logged as Brauð & Co, 35 m away, Oct 2026)
+            if (r.place_id && i.place_id && i.place_id !== r.place_id) return;
             const d = metersBetween(+r.lat, +r.lng, +i.lat, +i.lng);
             if (d < bestD) { best = i; bestD = d; }
           });
