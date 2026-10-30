@@ -181,6 +181,10 @@ main { padding: 6px 16px 24px; max-width: 720px; margin: 0 auto; }
 .totals-row b { font-weight: 600; }
 .totals-row.empty { border-style: dashed; background: none; color: var(--muted); }
 .totals-row .sub { display: block; font-size: 12px; }
+.hm { display: flex; align-items: center; gap: 6px; }
+.hm input { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 11px 8px; font-size: 16px; min-height: 46px; text-align: center; outline: none; }
+.hm input:focus { border-color: var(--accent); }
+.hm span { font-size: 13px; color: var(--muted); }
 .totals-row .ico { font-size: 16px; line-height: 1.3; }
 .start-row { display: flex; align-items: center; gap: 10px; margin: 6px 0 2px; padding: 4px 14px; color: var(--muted); font-size: 14px; }
 .start-row b { font-weight: 600; color: var(--ink); }
@@ -1501,7 +1505,9 @@ function openTotals(t, d) {
   const row = dayTotalsRow(t.id, d), x = dayTotals(t.id, d) || {};
   let u = distUnit();
   const val = m => m ? String(+(u === 'mi' ? m / 1609.344 : m / 1000).toFixed(2)) : '';
-  const hm = m => m ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}` : '';
+  // hours and minutes as two number boxes: the phone's number pad has no colon
+  const hmBox = (id, m) => `<div class="hm"><input type="number" inputmode="numeric" min="0" id="${id}-h" placeholder="0" value="${m ? Math.floor(m / 60) : ''}"><span>h</span>
+    <input type="number" inputmode="numeric" min="0" max="59" id="${id}-m" placeholder="0" value="${m ? m % 60 : ''}"><span>min</span></div>`;
   openSheet(`
     <h3>How far today</h3>
     <p class="hint" style="margin-top:-4px">${esc(fmtDay(d))}. Copy the numbers from Google Maps Timeline (the walking and driving totals at the top of the day) or the Health app (Walking + Running Distance, Steps). The poster uses these instead of its own guess.</p>
@@ -1509,13 +1515,13 @@ function openTotals(t, d) {
     <h4>On foot</h4>
     <div class="two">
       <div class="field"><label>Distance (<span class="tt-u">${u}</span>)</label><input type="number" inputmode="decimal" step="0.1" min="0" id="tt-walk" value="${val(x.walk_m)}"></div>
-      <div class="field"><label>Time (h:mm)</label><input inputmode="numeric" id="tt-walkmin" placeholder="2:33" value="${hm(x.walk_min)}"></div>
+      <div class="field"><label>Time</label>${hmBox('tt-walkmin', x.walk_min)}</div>
     </div>
     <div class="field"><label>Steps (optional)</label><input type="number" inputmode="numeric" min="0" id="tt-steps" value="${esc(x.steps || '')}"></div>
     <h4>By car, bus or tour</h4>
     <div class="two">
       <div class="field"><label>Distance (<span class="tt-u">${u}</span>)</label><input type="number" inputmode="decimal" step="0.1" min="0" id="tt-ride" value="${val(x.ride_m)}"></div>
-      <div class="field"><label>Time (h:mm)</label><input inputmode="numeric" id="tt-ridemin" placeholder="3:55" value="${hm(x.ride_min)}"></div>
+      <div class="field"><label>Time</label>${hmBox('tt-ridemin', x.ride_min)}</div>
     </div>
     <div class="btnrow">${row ? `<button class="btn danger" id="tt-del">Remove</button>` : ''}<button class="btn" id="tt-save">Save</button></div>
   `, sh => {
@@ -1526,10 +1532,11 @@ function openTotals(t, d) {
       u = nu; store.set('th_units', u);
       $$('#tt-unit button', sh).forEach(x2 => x2.classList.toggle('on', x2.dataset.u === u)); $$('.tt-u', sh).forEach(e => { e.textContent = u; });
     });
+    const mins = id => Math.max(0, Math.round((+$(id + '-h', sh).value || 0) * 60 + (+$(id + '-m', sh).value || 0)));
     const toM = id => { const v = parseFloat($(id, sh).value); return isNaN(v) || v <= 0 ? 0 : Math.round(v * (u === 'mi' ? 1609.344 : 1000)); };
     $('#tt-save', sh).onclick = () => {
-      const data = { walk_m: toM('#tt-walk'), walk_min: parseMins($('#tt-walkmin', sh).value), steps: Math.round(+$('#tt-steps', sh).value || 0),
-                     ride_m: toM('#tt-ride'), ride_min: parseMins($('#tt-ridemin', sh).value) };
+      const data = { walk_m: toM('#tt-walk'), walk_min: mins('#tt-walkmin'), steps: Math.round(+$('#tt-steps', sh).value || 0),
+                     ride_m: toM('#tt-ride'), ride_min: mins('#tt-ridemin') };
       Object.keys(data).forEach(k => { if (!data[k]) delete data[k]; });
       store.set('th_units', u);
       const note = JSON.stringify(data);
