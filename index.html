@@ -4793,8 +4793,11 @@ function notHereCenter(l) {
 async function pickRightPlace(l, box) {
   const c = notHereCenter(l); if (!c || !box) return;
   // your own saved places close by come first
-  const saved = topItemsFor(l.trip_id).filter(i => i.kind !== 'fixed' && hasCoords(i) && i.id !== l.item_id)
-    .map(i => ({ i, d: meters(c, i) })).filter(x => x.d < 150).sort((a, b) => a.d - b.d).slice(0, 4);
+  // a stop on a tour: the tour's own planned stops are candidates too, and tour sites are big (a car park to a geyser is 100 m+)
+  const parentLog = l.parent_id ? db.log.find(x => x.id === l.parent_id) : null, tourIt = parentLog && parentLog.item_id ? itemById(parentLog.item_id) : null;
+  const tourStops = tourIt ? childrenOf(tourIt.id) : [];
+  const saved = [...tourStops, ...topItemsFor(l.trip_id).filter(i => i.kind !== 'fixed')].filter(i => hasCoords(i) && i.id !== l.item_id)
+    .map(i => ({ i, d: meters(c, i) })).filter(x => x.d < (tourStops.includes(x.i) ? 600 : 150)).sort((a, b) => a.d - b.d).slice(0, 4);
   const row = (key, title, meta, color, hollow) => `<div class="pick" data-swap="${esc(key)}"><span class="num ${hollow ? 'hollow' : ''}" style="--c:${color}">•</span><div class="body"><div class="title">${esc(title)}</div><div class="meta">${esc(meta)}</div></div></div>`;
   let near = [];
   const draw = status => {
@@ -4824,6 +4827,27 @@ async function pickRightPlace(l, box) {
   draw(near.length || saved.length ? '' : 'Nothing else is listed close by.');
 }
 function swapLogPlace(l, { item, place }) {
+  // the right place is already logged this day (a tour stop ticked off from the plan, say): fold the two into one.
+  // Photos and sounds can't move between stops, so the one holding them is the one kept.
+  const twin = item ? db.log.find(x => x.id !== l.id && x.item_id === item.id && x.day === l.day && x.trip_id === l.trip_id) : null;
+  if (twin && !(artifactsOf(l.id).length && artifactsOf(twin.id).length)) {
+    const keepL = artifactsOf(l.id).length > 0, keep = keepL ? l : twin, drop = keepL ? twin : l;
+    // where and when come from the stop you tapped on the spot; the plan link, rating and note from whichever has them
+    const patch = {};
+    if (l.time) patch.time = l.time;
+    if (l.here_lat) { patch.here_lat = l.here_lat; patch.here_lng = l.here_lng; }
+    ['rating', 'note'].forEach(k => { if (!keep[k] && drop[k]) patch[k] = drop[k]; });
+    if (keepL) Object.assign(patch, { item_id: item.id, title: item.title, place_id: item.place_id || '', lat: item.lat, lng: item.lng,
+      address: item.address || '', city: item.city || '', maps_url: item.maps_url || '', category: item.category || '', origin: 'planned',
+      seq: twin.parent_id === l.parent_id ? l.seq : keep.seq });
+    else if (twin.parent_id === l.parent_id && l.seq !== '') patch.seq = l.seq;
+    closeSheet();
+    undoable('Merged with ' + item.title, () => { Object.assign(keep, patch); db.log = db.log.filter(x => x.id !== drop.id); }, () => {
+      if (Object.keys(patch).length) queue('updateLog', { id: keep.id, patch });
+      queue('deleteLog', { id: drop.id });
+    });
+    return;
+  }
   const patch = item
     ? { item_id: item.id, title: item.title, place_id: item.place_id || '', lat: item.lat, lng: item.lng, address: item.address || '',
         city: item.city || '', maps_url: item.maps_url || '', category: item.category || '', origin: 'planned' }
@@ -4981,7 +5005,7 @@ function openLogEntry(id) {
     <div class="field"><input id="lg-title" value="${esc(l.title)}" style="font-family:var(--serif);font-size:20px;font-weight:600;border:0;background:none;padding:4px 2px"></div>
     <div class="hint" style="margin-top:-8px">${l.origin === 'found' ? '<span class="badge found">Found</span>Not in your plan — discovered on the ground.' : l.origin === 'planned' ? `<span class="badge planned">Planned</span>${item ? 'From your plan: ' + esc(item.title) : 'Matched your plan.'}` : 'Matching to your plan…'}</div>
     ${l.address || l.maps_url ? `<div class="info">${esc(l.address || '')}${l.maps_url ? `<div class="links"><a href="${esc(l.maps_url)}" target="_blank" rel="noopener">Open in Maps</a></div>` : ''}</div>` : ''}
-    ${!l.parent_id && notHereCenter(l) ? `<button class="linkbtn" id="lg-nothere" style="margin:-4px 0 6px">Not here? Pick the right place</button><div id="lg-near"></div>` : ''}
+    ${notHereCenter(l) ? `<button class="linkbtn" id="lg-nothere" style="margin:-4px 0 6px">Not here? Pick the right place</button><div id="lg-near"></div>` : ''}
     <div class="two">
       <div class="field"><label>Day</label><select id="lg-day">${dayOptions(t, l.day, '—')}</select></div>
       <div class="field"><label>Time</label><input type="time" id="lg-time" value="${esc(l.time)}"></div>
