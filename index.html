@@ -1540,7 +1540,8 @@ function openTotals(t, d) {
       Object.keys(data).forEach(k => { if (!data[k]) delete data[k]; });
       store.set('th_units', u);
       const note = JSON.stringify(data);
-      if (row) queue('updateLog', { id: row.id, patch: { note } }, () => { row.note = note; });
+      const cur = dayTotalsRow(t.id, d);   // looked up again at save time, so a second save can't make a second row
+      if (cur) queue('updateLog', { id: cur.id, patch: { note } }, () => { cur.note = note; });
       else {
         const l = { id: uid('lg'), trip_id: t.id, day: d, seq: '', time: '', title: 'Day totals', category: TOTALS_CAT, origin: '', note,
                     lat: '', lng: '', logged_at: new Date().toISOString(), timezone: t.timezone || '' };
