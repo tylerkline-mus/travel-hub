@@ -754,7 +754,17 @@ function startsAtStay(tripId, d, first) {
   return st;
 }
 /** Where you're staying that day (tonight's place, else last night's). */
-function stayForDay(tripId, d) { return stayForNight(tripId, d) || stayForMorning(tripId, d); }
+/** Where you're staying that day. On a moving day (checking out of one, into another) it's the one you're
+ *  checking out of until 2pm and the one you're checking into after (Tyler, Oct 2026: Back at hotel picked
+ *  the next stay on the morning he was still coming and going from the Exeter). `time` defaults to now
+ *  when `d` is today's logging day; with no time (a past day) it's tonight's. */
+const STAY_SWITCH = '14:00';
+function stayForDay(tripId, d, time) {
+  const night = stayForNight(tripId, d), morning = stayForNight(tripId, addDays(d, -1));
+  if (!night || !morning || night === morning) return night || morning || null;
+  if (time == null) { const tr = tripById(tripId), now = logNow(tr && tr.timezone); if (now.day === d) time = now.time; }
+  return time && timeCmp(time, STAY_SWITCH) < 0 ? morning : night;
+}
 /** The stay a logged spot is really at: the same Google place as last night's or tonight's stay, or (for a pin
  *  with no Google place) within 40 m of it. A different place next door, like the bakery downstairs, never matches. */
 function stayMatch(tripId, d, p) {
@@ -4997,7 +5007,7 @@ function openHome(t, d, st) {
     $('#hm-save', sh).onclick = () => {
       const time = $('#hm-time', sh).value;
       if (!time) { $('#hm-time', sh).focus(); return; }
-      saveHome(t, d, st, time, false); closeSheet();
+      saveHome(t, d, stayForDay(t.id, d, time) || st, time, false); closeSheet();
     };
   });
 }

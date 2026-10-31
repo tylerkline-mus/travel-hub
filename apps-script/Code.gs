@@ -597,14 +597,17 @@ const ACTIONS = {
         ACTIONS.addLog(Object.assign(base, { title: 'Out wandering', category: 'Wandering' }));
         return 'Out wandering from ' + clock + '.';
       }
-      // home: tonight's stay, else last night's
+      // home: the stay for today
       const stays = readTable('Items').filter(function (i) {
         return i.trip_id === trip.id && i.kind === 'fixed' && !i.parent_id && /^(stay|hotel|lodging|airbnb|hostel)$/i.test(i.category || '');
       });
       const night = function (d) {
         return stays.filter(function (i) { return i.day && i.day <= d && (i.end_day ? d < i.end_day : d === i.day); })[0];
       };
-      const st = night(day) || night(shiftDay(day, -1));
+      // a moving day: the stay you're checking out of until 2pm, the one you're checking into after (as the app)
+      const tonight = night(day), lastNight = night(shiftDay(day, -1));
+      const st = tonight && lastNight && tonight !== lastNight
+        ? (time >= '04:00' && time < '14:00' ? lastNight : tonight) : tonight || lastNight;
       if (!st) return 'No stay is booked for tonight on ' + trip.name + ', so nothing was logged.';
       const lastStop = tops.slice().reverse().filter(function (l) { return !isMarker(l); })[0];
       if (lastStop && lastStop.item_id === st.id) return 'Already back at ' + st.title + '.';
