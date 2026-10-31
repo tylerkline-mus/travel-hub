@@ -549,6 +549,70 @@ const ACTIONS = {
     });
   },
 
+  /** The one-tap shortcuts (On my way, Wandering, Back at the hotel), the same as the app's bottom bar.
+      POST {action:'quick', token, format:'text', what:'onway'|'wander'|'home'}. Logs to the trip happening today;
+      until 4am counts as last night, like the app. Returns a sentence for the shortcut's notification. */
+  quick: function (p) {
+    const what = String(p.what || '').toLowerCase().replace(/[^a-z]/g, '');
+    const kind = /^(onway|onmyway|leaving|leave)$/.test(what) ? 'onway' : /^(wander|wandering)$/.test(what) ? 'wander'
+      : /^(home|hotel|back|backathotel|stay)$/.test(what) ? 'home' : '';
+    if (!kind) throw new Error('Unknown shortcut: ' + (p.what || 'nothing') + ' (use onway, wander or home)');
+    const now = new Date();
+    // the trip happening today (a day either side counts, for travel days)
+    let trip = null, day = '', time = '';
+    readTable('Trips').forEach(function (t) {
+      if (trip || !t.start) return;
+      if (p.trip && t.id !== p.trip) return;
+      const tz = t.timezone || 'UTC', hm = Utilities.formatDate(now, tz, 'HH:mm');
+      let d = Utilities.formatDate(now, tz, 'yyyy-MM-dd');
+      if (hm < '04:00') d = shiftDay(d, -1);   // until 4am it's still last night
+      if (d >= shiftDay(t.start, -1) && d <= shiftDay(t.end || t.start, 1)) { trip = t; day = d; time = hm; }
+    });
+    if (!trip) return 'No trip is happening today, so nothing was logged.';
+    const tz = trip.timezone || 'UTC', clock = quickClock(time);
+
+    return withLock(function () {
+      const seqOf = function (l) { return l.seq === '' || l.seq == null ? 9999 : +l.seq; };
+      const isMarker = function (l) { return (l.category === 'Wandering' || l.category === 'Leaving') && (l.lat === '' || l.lat == null); };
+      const logs = readTable('Log').filter(function (l) { return l.trip_id === trip.id && l.day === day && l.category !== 'Totals'; });
+      const tops = logs.filter(function (l) { return !l.parent_id; }).sort(function (a, b) { return seqOf(a) - seqOf(b); });
+      const last = tops[tops.length - 1];
+      const recent = function (cat) {
+        return logs.some(function (l) { return l.category === cat && (now - new Date(l.logged_at || l.created).getTime()) < 3 * 60000; });
+      };
+      const seqs = tops.map(seqOf).filter(function (x) { return x < 9999; });
+      const seq = tops.length ? Math.max.apply(null, seqs.concat([-1])) + 1 : 0;
+      const base = { trip: trip.id, day: day, seq: seq, time: time, timezone: tz, logged_at: now.toISOString() };
+
+      if (kind === 'onway') {
+        if (last && last.category === 'Leaving' && isMarker(last)) return 'Already on your way since ' + quickClock(last.time) + '.';
+        if (recent('Leaving')) return 'Already got that.';
+        const from = tops.slice().reverse().filter(function (l) { return !isMarker(l); })[0];
+        ACTIONS.addLog(Object.assign(base, { title: 'On my way', category: 'Leaving' }));
+        return 'Left ' + (from ? from.title : 'there') + ' at ' + clock + '.';
+      }
+      if (kind === 'wander') {
+        if (last && last.category === 'Wandering' && isMarker(last)) return 'Already wandering since ' + quickClock(last.time) + '.';
+        if (recent('Wandering')) return 'Already got that.';
+        ACTIONS.addLog(Object.assign(base, { title: 'Out wandering', category: 'Wandering' }));
+        return 'Out wandering from ' + clock + '.';
+      }
+      // home: tonight's stay, else last night's
+      const stays = readTable('Items').filter(function (i) {
+        return i.trip_id === trip.id && i.kind === 'fixed' && !i.parent_id && /^(stay|hotel|lodging|airbnb|hostel)$/i.test(i.category || '');
+      });
+      const night = function (d) {
+        return stays.filter(function (i) { return i.day && i.day <= d && (i.end_day ? d < i.end_day : d === i.day); })[0];
+      };
+      const st = night(day) || night(shiftDay(day, -1));
+      if (!st) return 'No stay is booked for tonight on ' + trip.name + ', so nothing was logged.';
+      const lastStop = tops.slice().reverse().filter(function (l) { return !isMarker(l); })[0];
+      if (lastStop && lastStop.item_id === st.id) return 'Already back at ' + st.title + '.';
+      ACTIONS.addLog(Object.assign(base, { item_id: st.id, category: st.category || 'Stay' }));
+      return 'Back at ' + st.title + ', ' + clock + '.';
+    });
+  },
+
   /** Preview a link without saving (used by the capture sheet). */
   resolve: function (p) { return resolveText(String(p.text || '')); },
 
@@ -1178,6 +1242,13 @@ function num(v) {
   if (v === undefined || v === null || v === '') return '';
   const n = parseFloat(String(v).replace(',', '.'));
   return isFinite(n) ? n : '';
+}
+/** "23:05" → "11:05pm" (as the app writes times). */
+function quickClock(t) {
+  const m = String(t || '').match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return String(t || '');
+  const h = +m[1], mm = +m[2];
+  return ((h % 12) || 12) + (mm ? ':' + m[2] : '') + (h < 12 ? 'am' : 'pm');
 }
 function shiftDay(ymd, n) {
   const d = new Date(ymd + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n);

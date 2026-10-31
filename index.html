@@ -5041,7 +5041,11 @@ const PICKUP_CAT = 'Pickup';   // old On my way rows logged a place; still a cho
 /** The ride you're on, if you tapped On my way today and haven't logged a stop since. */
 function onWayFor(t, d) {
   const w = store.get('th_onway', null);
-  return w && w.trip === t.id && w.day === d && Date.now() - w.at < 14 * 3600e3 ? w.mode : '';
+  if (w && w.trip === t.id && w.day === d && Date.now() - w.at < 14 * 3600e3) return w.mode;
+  // tapped from the iPhone shortcut (no localStorage there): the day's last stop is an On my way marker
+  const tops = topLogs(t.id, d), last = tops[tops.length - 1];
+  if (last && isLeave(last) && loggedAgo(last) < 14 * 3600e3) return tourRunning(t.id, d, last.time || logNow(t.timezone).time) ? 'tour' : 'transit';
+  return '';
 }
 function logOnMyWay(t, d) {
   const now = logNow(t.timezone), tops = topLogs(t.id, d), last = tops[tops.length - 1];

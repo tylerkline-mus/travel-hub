@@ -123,6 +123,24 @@ To put it within reach: **ⓘ → Add to Home Screen**; or **Settings → Action
 
 It logs to whichever trip is happening today (a day either side counts, for travel days). A shared place that's already saved to the trip is logged as that place (and ticked off). A second log at the same spot within half an hour doesn't log twice. It needs signal; with none, open the app and use **I'm here** there, which saves offline.
 
+
+## 7b. On my way, Wandering and Back at the hotel shortcuts (one tap each)
+
+The same three buttons as the app's bottom bar, without opening the app. Make one shortcut per button; each is a single step.
+
+In the **Shortcuts** app, tap **+** and name it **On my way**. Then:
+
+1. Add **Get Contents of URL**: your Web app URL only (ending in `/exec`). Tap **›** → **Method** POST, **Request Body** JSON, Text fields: `action` = `quick`, `token` = your passphrase, `format` = `text`, `what` = `onway`.
+2. Add **Show Notification** with **Contents of URL**. It says e.g. *Left Kaffibarinn at 3:40pm.*
+
+Then long-press the shortcut → **Duplicate** twice and change two things in each copy:
+- **Wandering**: `what` = `wander`.
+- **Back at the hotel**: `what` = `home`. (It logs tonight's stay, else last night's, linked to the booking.)
+
+To put them within reach: **ⓘ → Add to Home Screen** for each, or add a **Shortcuts widget** to your Home Screen or Lock Screen and pick the three. One can also go on the **Action Button** or **Back Tap**, and Siri runs each by name ("Hey Siri, on my way").
+
+Like the app: they log to whichever trip is happening today, until 4am counts as last night, and a repeat tap is ignored. They need signal.
+
 ---
 
 ## How the pieces talk
