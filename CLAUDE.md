@@ -25,6 +25,7 @@ Read this before changing anything. Keep it current when the structure changes.
 - **Chapters**: id, trip_id, name, start, end, radius_km
 - **Shares**: id, token, trip_id, chapter_id, who, created, revoked
 - **Reactions**: id, share_id, item_id, answer (plan | nearby | pass | later), created, updated
+- **Tracks**: id, trip_id, day, title, start, end (ISO), start_time, end_time (trip clock), timezone, distance_m, duration_min, moving_min, climb_m, points, polyline (encoded, ≤ 600 pts), note, created, updated
 - **Inbox**: id, share_id, trip_id, kind (place | link | ask), text, title, note, category, city, address, lat, lng, place_id, maps_url, website, image, types, hours, status (new | boost | kept | dismissed | asked), item_id, created, updated
 - **Plan**: unused (legacy)
 
@@ -97,6 +98,17 @@ Sample mode runs fully offline. Test with Playwright at 390×844 @2x: route `cdn
 - **Day totals**: one Log row per day, `title: 'Day totals'`, `category: 'Totals'`, no place, the numbers as JSON in `note`: `{walk_m, walk_min, steps, ride_m, ride_min}` (metres / minutes). No script change. `logsFor` skips it (`isTotals`), so it's never a stop, a count or a marker; read it with `dayTotals(tripId, d)`.
 - Log day shows a card under the stops (`totalsLine`, dashed "Add how far you went today" when empty); tap → `openTotals`: Miles / Kilometres switch (remembered in localStorage `th_units`, default mi; switching converts what's typed), walking distance + time + steps, ride distance + time. Times are two number boxes, hours and minutes (`hmBox`; the iPhone number pad has no colon). Tyler copies them from Google Maps Timeline (walk / drive totals at the top of the day) or Health.
 - `recapData`: a day with totals replaces that day's estimated walk/ride (`estWalk`/`estRide`) with the typed numbers (not for an area frame); returns `totals`, `measured`, `walkMin`, `rideMin`, `steps`. Key measures say the time and steps instead of "between stops"; Longest walk prefers a typed day. Poster distances in the key and Longest walk follow `th_units` (`fmtLen`); the scale bar and edge notes stay km.
+
+## Recorded walks (Nov 2026, for the Iceland residency)
+
+- Why: up north Tyler logs few places but walks for hours; the Log and poster made a 2½-hour day look like three stops. He records walks in **Open GPX Tracker** (iOS, free, open source, no Shortcuts actions or URL scheme, so it can't be started from the hub); the GPX file *is* the walk, no Start/End buttons in the hub.
+- Two ways in, same result: the **Share Sheet shortcut** (SETUP §7c) POSTs `{action:'track', token, format:'text', gpx}` and the script parses it; **Add a recorded walk (.gpx)** in the Log (`walksBlock` file input → `addTrackFile`) parses on the phone and queues `track` with `{track: row}` (only the small row goes in the outbox). Parsing is duplicated in both files and must stay identical: `gpxPoints` (regex over `<trkpt>`, namespace-tolerant), `dropGlitches` (> 60 m/s, or 200 m at the same instant; gives up after 20 in a row), `trackSummary` (6 m jitter filter → distance; moving = 0.3–7 m/s with gaps ≤ 5 min; climb with 3 m hysteresis; Douglas–Peucker from 2.5 m, ×1.6 until ≤ 600 pts), `encodePolyline`. The id comes from the walk (`tk_` + first time, point count, first spot) so the same file twice is saved once (script returns `_duplicate` / "Already saved").
+- Script picks the trip by the walk's own start time in each trip's timezone (±1 day, 4am rule); `trip` param overrides. `bootstrap` returns `tracks` only when the tab exists (missing = setup not run): the app **parks** `track`/`updateTrack`/`deleteTrack` (`TRACK_OPS`) on "Unknown action" or "Missing tab" and re-queues once `tracks` comes back, keeping parked walks visible.
+- App: `tracksOf` / `tracksFor`, `trackPts` (decoded once), `trackSvg` (little drawing of the shape), `openTrack` (name, note, Map, Remove — undoable; `tracks` is in `undoable`'s LISTS). Log: walk rows under the stops; days with only a walk count as logged (`logDays`).
+- **Day totals**: `dayFar` = typed totals if any (they cover the whole day), else the day's walks added up (`recorded: true`; walk_min = time out, not moving). `totalsLine` and `recapData` use it.
+- **Map**: Lived layer draws the day's walks under the pins and drops legs whose stop time falls inside a walk (`inRecordedWalk`, ±2 min). **Paths** chip (when a trip has walks): every walk faint on top of the others (opacity by count) so repeated routes build up; stays shown as home pins; tap a path → `openTrack`.
+- **Poster**: `recapData` returns `walks` (in the frame's days; place frames need a point in the area). `drawPoster` draws them first as a thinner continuous pen line (0.62 × lw), skips walk/wander legs they cover (`walkCovers`), and adds them to the inset probe and label avoidance. `posterFrame` adds walk points within 3 km of what's drawn. A wander inside a walk no longer counts toward Off the map.
+- Not yet: odometer as a journey, visit counts per place, a residency poster lens (Tyler liked these ideas; Nov 1 2026).
 
 ## Adding a stop after the fact (Oct 2026, on the trip)
 

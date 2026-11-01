@@ -181,6 +181,17 @@ main { padding: 6px 16px 24px; max-width: 720px; margin: 0 auto; }
 .totals-row b { font-weight: 600; }
 .totals-row.empty { border-style: dashed; background: none; color: var(--muted); }
 .totals-row .sub { display: block; font-size: 12px; }
+.walk-row { display: flex; align-items: center; gap: 12px; margin: 8px 0 4px; padding: 8px 14px 8px 8px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--card); cursor: pointer; }
+.walk-row.pending { opacity: .6; }
+.walk-row .walk-svg { flex: none; color: var(--found); background: color-mix(in srgb, var(--found) 8%, transparent); border-radius: 8px; }
+.walk-row .body { display: flex; flex-direction: column; min-width: 0; }
+.walk-row .title { font-weight: 600; font-size: 15px; }
+.walk-row .meta { color: var(--muted); font-size: 13px; white-space: normal; }
+.walk-add { display: block; text-align: center; margin: 6px auto 0; width: max-content; cursor: pointer; }
+.walk-big { display: flex; justify-content: center; color: var(--found); margin: 4px 0 6px; }
+.walk-big svg { width: 100%; height: auto; max-width: 340px; background: color-mix(in srgb, var(--found) 7%, transparent); border-radius: 14px; }
+.walk-nums { text-align: center; font-size: 15px; margin: 0 0 12px; }
 .hm { display: flex; align-items: center; gap: 6px; }
 .hm input { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 11px 8px; font-size: 16px; min-height: 46px; text-align: center; outline: none; }
 .hm input:focus { border-color: var(--accent); }
@@ -467,7 +478,7 @@ const store = {
   del(k) { try { localStorage.removeItem(k); } catch (e) {} },
 };
 
-const EMPTY_DB = () => ({ trips: [], items: [], plan: [], log: [], artifacts: [], chapters: [], shares: [], reactions: [], inbox: [], places: false });
+const EMPTY_DB = () => ({ trips: [], items: [], plan: [], log: [], artifacts: [], chapters: [], shares: [], reactions: [], inbox: [], tracks: [], places: false });
 let cfg = store.get('th_cfg', null);          // { url, token, sheetUrl, demo }
 let db = Object.assign(EMPTY_DB(), store.get('th_cache', {}));
 let outbox = store.get('th_outbox', []);
@@ -843,6 +854,187 @@ function dayTotals(tripId, d) { const r = dayTotalsRow(tripId, d); if (!r) retur
 const distUnit = () => store.get('th_units', 'mi');
 const fmtLen = (m, u = distUnit()) => { const v = u === 'mi' ? m / 1609.344 : m / 1000; return (v >= 10 ? Math.round(v) : v.toFixed(1)) + ' ' + u; };
 const fmtMins = m => m >= 60 ? `${Math.floor(m / 60)} h${m % 60 ? ' ' + (m % 60) + ' min' : ''}` : `${m} min`;
+
+/* ============================================================
+ * Recorded walks (built Nov 2026, for the residency): a .gpx file from a GPS tracker (Open GPX Tracker)
+ * becomes a Tracks row with the real path. Read the same way as the script's gpxPoints/trackSummary,
+ * so the same file gets the same id whichever way it arrives (Share Sheet shortcut or Add a recorded walk).
+ * ============================================================ */
+function gpxPoints(text) {
+  const out = [], re = /<(?:\w+:)?trkpt\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:\w+:)?trkpt>)/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const attrs = m[1] || '', body = m[2] || '';
+    const la = attrs.match(/\blat\s*=\s*["']\s*(-?[\d.]+)/), lo = attrs.match(/\blon\s*=\s*["']\s*(-?[\d.]+)/);
+    if (!la || !lo) continue;
+    const tm = body.match(/<(?:\w+:)?time>\s*([^<\s]+)/), el = body.match(/<(?:\w+:)?ele>\s*(-?[\d.]+)/);
+    const t = tm ? Date.parse(tm[1]) : NaN, lat = +la[1], lng = +lo[1];
+    if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)) continue;
+    out.push({ lat, lng, t: isFinite(t) ? t : null, ele: el ? +el[1] : null });
+  }
+  return out;
+}
+function trackSummary(raw) {
+  raw = dropGlitches(raw);
+  const timed = raw.filter(q => q.t != null), kept = [];
+  raw.forEach(q => { const last = kept[kept.length - 1]; if (!last || meters(last, q) >= 6) kept.push(q); });
+  const end = raw[raw.length - 1];
+  if (kept[kept.length - 1] !== end) kept.push(end);
+  let dist = 0, moving = 0;
+  for (let k = 1; k < kept.length; k++) {
+    const a = kept[k - 1], b = kept[k], d = meters(a, b);
+    dist += d;
+    if (a.t != null && b.t != null) { const dt = (b.t - a.t) / 1000; if (dt > 0 && dt <= 300 && d / dt >= 0.3 && d / dt <= 7) moving += dt; }
+  }
+  let climb = 0, ref = null;
+  raw.forEach(q => {
+    if (q.ele == null || !isFinite(q.ele)) return;
+    if (ref == null) { ref = q.ele; return; }
+    if (q.ele - ref >= 3) { climb += q.ele - ref; ref = q.ele; } else if (ref - q.ele >= 3) ref = q.ele;
+  });
+  let tol = 2.5, path = simplifyPath(kept, tol);
+  while (path.length > 600) { tol *= 1.6; path = simplifyPath(kept, tol); }
+  const t0 = timed.length ? timed[0].t : null, t1 = timed.length ? timed[timed.length - 1].t : null, first = raw[0];
+  return {
+    id: 'tk_' + [t0 || 0, raw.length, Math.round(Math.abs(first.lat) * 1e4), Math.round(Math.abs(first.lng) * 1e4)].map(x => x.toString(36)).join(''),
+    start: t0 != null ? new Date(t0).toISOString() : '', end: t1 != null ? new Date(t1).toISOString() : '',
+    distance_m: String(Math.round(dist)), duration_min: t0 != null ? String(Math.round((t1 - t0) / 60000)) : '',
+    moving_min: t0 != null ? String(Math.round(moving / 60)) : '', climb_m: String(Math.round(climb)),
+    points: String(path.length), polyline: encodePolyline(path),
+  };
+}
+function dropGlitches(raw) {
+  const out = []; let skipped = 0;
+  raw.forEach(q => {
+    const a = out[out.length - 1];
+    if (a) {
+      const d = meters(a, q), dt = a.t != null && q.t != null ? (q.t - a.t) / 1000 : null;
+      const bad = dt != null ? (dt > 0 ? d / dt > 60 : d > 200) : d > 3000;
+      if (bad && skipped < 20) { skipped++; return; }
+    }
+    skipped = 0; out.push(q);
+  });
+  return out.length >= 2 ? out : raw;
+}
+function simplifyPath(pts, tol) {
+  if (pts.length < 3) return pts.slice();
+  const lat0 = pts[0].lat * Math.PI / 180, kx = 111320 * Math.cos(lat0), ky = 110540;
+  const xy = pts.map(q => [q.lng * kx, q.lat * ky]);
+  const keep = new Array(pts.length); keep[0] = keep[pts.length - 1] = true;
+  const stack = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [i, j] = stack.pop(), ax = xy[i][0], ay = xy[i][1], dx = xy[j][0] - ax, dy = xy[j][1] - ay, L2 = dx * dx + dy * dy;
+    let best = -1, bestD = 0;
+    for (let k = i + 1; k < j; k++) {
+      let u = L2 ? ((xy[k][0] - ax) * dx + (xy[k][1] - ay) * dy) / L2 : 0; u = Math.max(0, Math.min(1, u));
+      const ex = xy[k][0] - (ax + u * dx), ey = xy[k][1] - (ay + u * dy), d = ex * ex + ey * ey;
+      if (d > bestD) { bestD = d; best = k; }
+    }
+    if (best > 0 && bestD > tol * tol) { keep[best] = true; stack.push([i, best], [best, j]); }
+  }
+  return pts.filter((q, k) => keep[k]);
+}
+function encodePolyline(pts) {
+  let out = '', pLat = 0, pLng = 0;
+  const enc = v => { v = v < 0 ? ~(v << 1) : v << 1; let s = ''; while (v >= 0x20) { s += String.fromCharCode((0x20 | (v & 0x1f)) + 63); v >>= 5; } return s + String.fromCharCode(v + 63); };
+  pts.forEach(q => { const la = Math.round(q.lat * 1e5), ln = Math.round(q.lng * 1e5); out += enc(la - pLat) + enc(ln - pLng); pLat = la; pLng = ln; });
+  return out;
+}
+/** A moment as the trip's own day and clock (until 4am is still last night, as everywhere in logging). */
+function dayClockIn(ms, tz) {
+  try {
+    const f = new Intl.DateTimeFormat('en-CA', { timeZone: tz || undefined, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+    const p = Object.fromEntries(f.formatToParts(new Date(ms)).map(x => [x.type, x.value]));
+    const time = `${p.hour === '24' ? '00' : p.hour}:${p.minute}`, day = `${p.year}-${p.month}-${p.day}`;
+    return { day: time < NIGHT_END ? addDays(day, -1) : day, time };
+  } catch (e) { return null; }
+}
+const tracksOf = tripId => (db.tracks || []).filter(k => k.trip_id === tripId);
+const tracksFor = (tripId, d) => tracksOf(tripId).filter(k => k.day === d).sort((a, b) => String(a.start).localeCompare(String(b.start)));
+const trackPtsMemo = new Map();
+/** The walk's path as [{lat, lng}] (decoded once). */
+function trackPts(k) {
+  const key = k.polyline || '';
+  if (!trackPtsMemo.has(key)) trackPtsMemo.set(key, key ? decodePolyline(key).map(([lat, lng]) => ({ lat, lng })) : []);
+  return trackPtsMemo.get(key);
+}
+const trackLabel = k => k.title || 'Walk';
+/** How far that day: typed-in totals win (they cover the whole day); otherwise the recorded walks, added up. */
+function dayFar(tripId, d) {
+  const x = dayTotals(tripId, d);
+  if (x && (x.walk_m || x.ride_m || x.steps)) return x;
+  const ks = tracksFor(tripId, d);
+  if (!ks.length) return x;
+  return { walk_m: ks.reduce((m, k) => m + (+k.distance_m || 0), 0), walk_min: ks.reduce((m, k) => m + (+k.duration_min || 0), 0), recorded: true };
+}
+/** Is this stop's time inside one of the day's recorded walks? (then the walk itself shows how you got there) */
+function inRecordedWalk(tripId, d, time) {
+  if (!time) return false;
+  return tracksFor(tripId, d).some(k => k.start_time && k.end_time && minsOf(time) >= minsOf(k.start_time) - 2 && minsOf(time) <= minsOf(k.end_time) + 2);
+}
+/** A little drawing of the walk's shape, for its row in the Log. */
+function trackSvg(k, w = 64, h = 48) {
+  const pts = trackPts(k); if (pts.length < 2) return '';
+  const b = geoBounds(pts), kx = Math.cos((b.s + b.n) / 2 * Math.PI / 180);
+  const gw = Math.max((b.e - b.w) * kx, 1e-6), gh = Math.max(b.n - b.s, 1e-6), sc = Math.min((w - 8) / gw, (h - 8) / gh);
+  const ox = (w - gw * sc) / 2, oy = (h - gh * sc) / 2;
+  const d = pts.map((q, j) => `${j ? 'L' : 'M'}${(ox + (q.lng - b.w) * kx * sc).toFixed(1)} ${(oy + (b.n - q.lat) * sc).toFixed(1)}`).join('');
+  const e = pts[pts.length - 1], s0 = pts[0];
+  return `<svg class="walk-svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true"><path d="${d}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+    <circle cx="${(ox + (s0.lng - b.w) * kx * sc).toFixed(1)}" cy="${(oy + (b.n - s0.lat) * sc).toFixed(1)}" r="2.4" fill="currentColor"/><circle cx="${(ox + (e.lng - b.w) * kx * sc).toFixed(1)}" cy="${(oy + (b.n - e.lat) * sc).toFixed(1)}" r="2.4" fill="var(--card)" stroke="currentColor" stroke-width="1.3"/></svg>`;
+}
+function trackMeta(k) {
+  return [k.start_time ? fmtTime(k.start_time) + (k.end_time ? '–' + fmtTime(k.end_time) : '') : '',
+    +k.distance_m ? fmtLen(+k.distance_m) : '', +k.duration_min ? 'out ' + fmtMins(+k.duration_min) : '',
+    +k.climb_m >= 10 ? '↑ ' + Math.round(+k.climb_m) + ' m' : ''].filter(Boolean).join(' · ');
+}
+function walksBlock(t, d) {
+  const ks = tracksFor(t.id, d);
+  return ks.map(k => `<div class="walk-row ${k._pending ? 'pending' : ''}" data-track="${esc(k.id)}">${trackSvg(k)}
+      <span class="body"><span class="title">${esc(trackLabel(k))}</span><span class="meta">${esc(trackMeta(k))}</span></span></div>`).join('') +
+    `<label class="linkbtn walk-add">${ks.length ? 'Add another recorded walk' : 'Add a recorded walk (.gpx)'}<input type="file" data-gpx="${esc(d)}" hidden></label>`;
+}
+/** A .gpx file picked on the phone: worked out here, so only the small simplified path is queued for the Sheet. */
+async function addTrackFile(t, d, file) {
+  if (!file) return;
+  let text = '';
+  try { text = await file.text(); } catch (e) { return toast('Couldn’t read that file'); }
+  const raw = gpxPoints(text);
+  if (raw.length < 2) return toast(/<gpx/i.test(text) ? 'No walk in that file' : 'That isn’t a .gpx file');
+  const row = trackSummary(raw);
+  if ((db.tracks || []).some(k => k.id === row.id)) return toast('Already saved that walk');
+  const tz = t.timezone;
+  const a = row.start ? dayClockIn(Date.parse(row.start), tz) : null, b = row.end ? dayClockIn(Date.parse(row.end), tz) : null;
+  Object.assign(row, { trip_id: t.id, day: a ? a.day : d, start_time: a ? a.time : '', end_time: b ? b.time : '', timezone: tz || '', title: '', note: '' });
+  queue('track', { track: row }, () => { db.tracks = (db.tracks || []).concat([{ ...row, _pending: true }]); });
+  if (row.day !== d) { ui.logDay[t.id] = row.day; render(); }
+  toast(`Saved: ${fmtLen(+row.distance_m)}${+row.duration_min ? ', out ' + fmtMins(+row.duration_min) : ''}${row.day !== d ? ' (' + fmtShortDay(row.day) + ')' : ''}`);
+}
+function openTrack(id) {
+  const k = (db.tracks || []).find(x => x.id === id); if (!k) return;
+  const t = tripById(k.trip_id);
+  const moving = +k.moving_min && +k.duration_min && +k.moving_min < +k.duration_min - 5 ? `, ${fmtMins(+k.moving_min)} of it moving` : '';
+  openSheet(`
+    <h3>${esc(trackLabel(k))}</h3>
+    <p class="hint" style="margin-top:-4px">${esc(fmtDay(k.day))}${k.start_time ? ' · ' + esc(fmtTime(k.start_time)) + (k.end_time ? '–' + esc(fmtTime(k.end_time)) : '') : ''}</p>
+    <div class="walk-big">${trackSvg(k, 300, 200)}</div>
+    <p class="walk-nums">${+k.distance_m ? `<b>${esc(fmtLen(+k.distance_m))}</b>` : ''}${+k.duration_min ? ` · out for ${esc(fmtMins(+k.duration_min))}${esc(moving)}` : ''}${+k.climb_m >= 10 ? ` · climbed ${Math.round(+k.climb_m)} m` : ''}</p>
+    <div class="field"><label>Name (optional)</label><input id="tk-title" value="${esc(k.title || '')}" placeholder="Walk"></div>
+    <div class="field"><label>Note</label><textarea id="tk-note" rows="2" placeholder="Fog on the cliff, the river loud…">${esc(k.note || '')}</textarea></div>
+    <div class="btnrow"><button class="btn danger" id="tk-del">Remove</button><button class="btn ghost" id="tk-map">Map</button><button class="btn" id="tk-save">Save</button></div>
+  `, sh => {
+    $('#tk-save', sh).onclick = () => {
+      const patch = { title: $('#tk-title', sh).value.trim(), note: $('#tk-note', sh).value.trim() };
+      queue('updateTrack', { id: k.id, patch }, () => Object.assign(k, patch));
+      closeSheet();
+    };
+    $('#tk-map', sh).onclick = () => { closeSheet(); ui.mapDay = k.day; ui.mapLayer = 'lived'; location.hash = `#/trip/${encodeURIComponent(k.trip_id)}/map`; };
+    $('#tk-del', sh).onclick = () => {
+      closeSheet();
+      undoable('Walk removed', () => { db.tracks = db.tracks.filter(x => x.id !== k.id); }, () => queue('deleteTrack', { id: k.id }));
+    };
+  });
+}
 /** "2:33", "2h 33", "2 hr 33 min", "153" → minutes */
 function parseMins(v) {
   v = String(v || '').trim().toLowerCase(); if (!v) return 0;
@@ -869,7 +1061,7 @@ const pendingDeletes = [];
 function undoable(msg, removeLocal, commit) {
   // Remember only what this delete removes or changes, so Undo puts back just that
   // (restoring a whole snapshot could bring back other things deleted or synced in the meantime)
-  const LISTS = ['trips', 'items', 'log', 'artifacts'];
+  const LISTS = ['trips', 'items', 'log', 'artifacts', 'tracks'];
   const before = {};
   LISTS.forEach(k => { before[k] = new Map((db[k] || []).map(x => [x.id, JSON.stringify(x)])); });
   removeLocal();
@@ -943,6 +1135,7 @@ function reconcile(action, data) {
   else if (action === 'dismissInbox') swap('inbox', data);
   else if (action === 'keepInbox') { if (data.item) swap('items', data.item); if (data.inbox) swap('inbox', data.inbox); }
   else if (action === 'upload' || action === 'updateArtifact') swap('artifacts', data);
+  else if (action === 'track' || action === 'updateTrack') { db.tracks = db.tracks || []; const o = { ...data }; delete o._duplicate; swap('tracks', o); }
   else if (action === 'addLog' || action === 'updateLog') {
     swap('log', data);
     if (data.item_id) { const it = itemById(data.item_id); if (it) it.status = 'done'; }
@@ -976,10 +1169,10 @@ async function flush() {
       reconcile(op.action, data);
       outbox.shift(); saveLocal();
     } catch (e) {
-      if (e.server && /Unknown action/.test(e.message) && ARTIFACT_OPS.includes(op.action)) {
+      if (e.server && /Unknown action|Missing tab "Tracks"/.test(e.message) && (ARTIFACT_OPS.includes(op.action) || TRACK_OPS.includes(op.action))) {
         // the script hasn't been updated yet: keep these until it is
         parked.push(op); outbox.shift(); saveLocal();
-        toast('Photos and sounds are kept on your phone until the script is updated');
+        toast(TRACK_OPS.includes(op.action) ? 'Walks are kept on your phone until the script is updated' : 'Photos and sounds are kept on your phone until the script is updated');
       }
       // The Sheet was busy (another save or a Google lookup held it): keep the change and try again, never drop it
       else if (e.server && /lock|timed? ?out|too many|try again|service|busy|exceeded/i.test(e.message)) { syncState = 'offline'; lastSyncError = 'Your Sheet was busy'; scheduleRetry(); break; }
@@ -1013,9 +1206,12 @@ async function pull() {
   if (outbox.length) return;
   try {
     const data = await api('bootstrap');
-    const scriptKnowsArtifacts = Array.isArray(data.artifacts);
+    const scriptKnowsArtifacts = Array.isArray(data.artifacts), scriptKnowsTracks = Array.isArray(data.tracks);
     db = Object.assign(EMPTY_DB(), data);
-    if (parked.length && scriptKnowsArtifacts) { outbox.push(...parked); parked = []; }
+    // parked ops go back in the queue once the script knows them (photos and sounds; recorded walks)
+    const ready = o => TRACK_OPS.includes(o.action) ? scriptKnowsTracks : scriptKnowsArtifacts;
+    if (parked.some(ready)) { outbox.push(...parked.filter(ready)); parked = parked.filter(o => !ready(o)); }
+    outbox.concat(parked).filter(o => o.action === 'track').forEach(o => { if (!db.tracks.some(k => k.id === o.payload.track.id)) db.tracks.push({ ...o.payload.track, _pending: true }); });
     // anything not yet in the Sheet stays visible
     outbox.concat(parked).filter(o => o.action === 'upload').forEach(o => { if (!db.artifacts.some(a => a.id === o.payload.id)) db.artifacts.push(artifactRow(o.payload)); });
     syncState = 'ok'; saveLocal(); render();
@@ -1480,7 +1676,8 @@ function savedResults(t) {
 /* ---------- Log (travelogue) ---------- */
 function logDays(t) {
   const days = tripDays(t);
-  const extra = [...new Set(db.log.filter(l => l.trip_id === t.id && l.day && !days.includes(l.day)).map(l => l.day))];
+  const extra = [...new Set(db.log.filter(l => l.trip_id === t.id && l.day && !days.includes(l.day)).map(l => l.day)
+    .concat(tracksOf(t.id).map(k => k.day).filter(d => d && !days.includes(d))))];
   return [...days, ...extra].sort();
 }
 function currentLogDay(t) {
@@ -1504,10 +1701,11 @@ function unratedStops(t, d) {
 }
 /** Shown from 8pm on today, and on any past day, until there's nothing left to rate or review. */
 function totalsLine(t, d) {
-  const x = dayTotals(t.id, d);
+  const x = dayFar(t.id, d);
   if (!x || !(x.walk_m || x.ride_m || x.steps)) return `<div class="totals-row empty" data-totals="${esc(d)}"><span class="ico" aria-hidden="true">👣</span><span>Add how far you went today <span class="sub">from Health or Google Maps</span></span></div>`;
   const parts = [];
   if (x.walk_m || x.walk_min || x.steps) parts.push(`<b>On foot</b> ${[x.walk_m ? fmtLen(x.walk_m) : '', x.walk_min ? fmtMins(x.walk_min) : '', x.steps ? Number(x.steps).toLocaleString('en-US') + ' steps' : ''].filter(Boolean).join(' · ')}`);
+  if (x.recorded) parts.push(`<span class="sub">From your recorded walks. Tap to type the whole day’s totals instead.</span>`);
   if (x.ride_m || x.ride_min) parts.push(`<b>By road</b> ${[x.ride_m ? fmtLen(x.ride_m) : '', x.ride_min ? fmtMins(x.ride_min) : ''].filter(Boolean).join(' · ')}`);
   return `<div class="totals-row" data-totals="${esc(d)}"><span class="ico" aria-hidden="true">👣</span><span>${parts.join('<br>')}</span></div>`;
 }
@@ -1589,7 +1787,7 @@ function logContent(t) {
   const reorder = ui.reorder === key;
 
   const homeStay = stayForDay(t.id, d), docked = d === logNow(t.timezone).day && liveTrip() === t;
-  const chips = days.length ? `<div class="filters">${days.map(x => `<button class="${x === d ? 'on' : ''} ${logsFor(t.id, x).length ? 'has' : ''}" data-logday="${x}">${esc(fmtShortDay(x))}</button>`).join('')}</div>` : '';
+  const chips = days.length ? `<div class="filters">${days.map(x => `<button class="${x === d ? 'on' : ''} ${logsFor(t.id, x).length || tracksFor(t.id, x).length ? 'has' : ''}" data-logday="${x}">${esc(fmtShortDay(x))}</button>`).join('')}</div>` : '';
   let list = '', n = 0;
   const start = tops.length ? startsAtStay(t.id, d, tops.find(l => !isWander(l))) : null;
   if (start) list += `<div class="start-row"><span class="sq" aria-hidden="true"></span><span>Started at <b>${esc(start.title)}</b></span></div>`;
@@ -1618,7 +1816,8 @@ function logContent(t) {
       ${reorder ? `<div class="moves"><button data-move="up" data-list="${key}" data-id="${esc(l.id)}" ${k === 0 ? 'disabled' : ''}>↑</button><button data-move="down" data-list="${key}" data-id="${esc(l.id)}" ${k === tops.length - 1 ? 'disabled' : ''}>↓</button></div>` : ''}
     </div>`;
   });
-  if (!tops.length) list = `<div class="empty" style="padding:26px 10px"><div class="big">Nothing logged ${d === logNow(t.timezone).day ? 'yet today' : 'this day'}</div>Tap “I’m here” at each stop, or fill the day in tonight. Order matters more than times.</div>`;
+  if (!tops.length && tracksFor(t.id, d).length) list = '';
+  else if (!tops.length) list = `<div class="empty" style="padding:26px 10px"><div class="big">Nothing logged ${d === logNow(t.timezone).day ? 'yet today' : 'this day'}</div>Tap “I’m here” at each stop, or fill the day in tonight. Order matters more than times.</div>`;
   const wrap = wrapUpCard(t, d, toReview);
 
   return `${chips}
@@ -1630,11 +1829,12 @@ function logContent(t) {
     ${homeStay && !docked ? `<div class="log-actions" style="margin-top:0"><button class="btn ghost" data-act="home">${esc(homeLabel(homeStay))}</button></div>` : ''}
     ${wrap || `<div style="text-align:center;margin:-2px 0 6px"><button class="linkbtn" data-act="review">Review plan${toReview ? ` (${toReview})` : ''}</button></div>`}
     ${list}
+    ${walksBlock(t, d)}
     ${totalsLine(t, d)}
     <div style="display:flex;gap:6px;justify-content:center;margin-top:10px">
       ${!reorder && outOfTimeOrder(tops) ? `<button class="linkbtn" data-act="timeorder">Put in time order</button>` : ''}
       ${tops.length > 1 ? `<button class="linkbtn" data-reorder="${key}">${reorder ? 'Done reordering' : 'Reorder'}</button>` : ''}
-      ${all.length ? `<button class="linkbtn" data-maplived="${d}">See on map</button>` : ''}
+      ${all.length || tracksFor(t.id, d).length ? `<button class="linkbtn" data-maplived="${d}">See on map</button>` : ''}
     </div>
     <button class="btn ghost" data-go="#/trip/${encodeURIComponent(t.id)}/recap" style="margin-top:22px">${db.log.some(l => l.trip_id === t.id) ? 'Make a poster of the trip' : 'Preview the trip poster'}</button>`;
 }
@@ -1768,17 +1968,24 @@ function recapData(t, frame) {
   const totals = {};
   let walkMin = 0, rideMin = 0, steps = 0, measured = false;
   if (lived && (!frame || frame.kind !== 'place')) days.filter(ft.inDay).forEach(d => {
-    const x = dayTotals(t.id, d); if (!x) return;
+    const x = dayFar(t.id, d); if (!x) return;
     totals[d] = x; measured = true;
     if (x.walk_m) { walked += x.walk_m - (estWalk[d] || 0); moved += x.walk_m - (estWalk[d] || 0); }
     if (x.ride_m) { rode += x.ride_m - (estRide[d] || 0); moved += x.ride_m - (estRide[d] || 0); }
     walkMin += x.walk_min || 0; rideMin += x.ride_min || 0; steps += x.steps || 0;
   });
   let wandered = 0;
-  stops.forEach(s => { if (s.wandered && s.wanderFrom && s.time) { const m = minsOf(s.time) - minsOf(s.wanderFrom); if (m > 0 && m < 12 * 60) wandered += m; } });
+  // a wander inside a recorded walk isn't off the map any more: the walk shows where you went
+  stops.forEach(s => { if (s.wandered && s.wanderFrom && s.time && !inRecordedWalk(t.id, s.day, s.time)) { const m = minsOf(s.time) - minsOf(s.wanderFrom); if (m > 0 && m < 12 * 60) wandered += m; } });
+  // recorded walks (real paths from a GPS tracker), for the days and area in the frame
+  const walks = [];
+  if (lived || tracksOf(t.id).length) days.filter(ft.inDay).forEach(d => tracksFor(t.id, d).forEach(k => {
+    const wp = trackPts(k);
+    if (wp.length > 1 && (!frame || frame.kind !== 'place' || wp.some(ft.inArea))) walks.push({ day: d, id: k.id, pts: wp, start_time: k.start_time, end_time: k.end_time, m: +k.distance_m || 0 });
+  }));
   const busiest = perDay.reduce((x, y) => (y.n > (x ? x.n : 0) ? y : x), null);
   const inDays = perDay.filter(x => x.in).map(x => x.day);
-  return { lived, days, tracks, stops, homes: [...homes.values()], unvisited, perDay, walked, moved, rode, busiest, allPts, sliced: !ft.all, wandered,
+  return { lived, days, tracks, walks, stops, homes: [...homes.values()], unvisited, perDay, walked, moved, rode, busiest, allPts, sliced: !ft.all, wandered,
     totals, measured, walkMin, rideMin, steps,
     from: inDays[0], to: inDays[inDays.length - 1],
     found: stops.filter(s => s.found).length, marked: stops.filter(s => s.mark),
@@ -2079,7 +2286,14 @@ function posterFrame(data, prefs) {
   const everything = [...data.stops, ...data.homes];
   const cluster = recapCluster(data.stops);
   const zoomed = prefs.zoom === 'close' && cluster;
-  const framePts = zoomed ? cluster : (everything.length ? everything : data.unvisited);
+  let framePts = zoomed ? cluster : (everything.length ? everything : data.unvisited);
+  // recorded walks: a residency day may be one stop and a long walk out to the cliff, so the walk sets the frame too
+  // (only the parts within 3 km of what's drawn, so one long hike doesn't zoom a city poster out)
+  const wp = (data.walks || []).flatMap(w => w.pts.filter((q, j) => j % 4 === 0 || j === w.pts.length - 1));
+  if (wp.length) {
+    const near = framePts.length ? wp.filter(q => framePts.some(f => meters(f, q) < 3000)) : wp;
+    framePts = framePts.concat(near);
+  }
   return { everything, cluster, zoomed, framePts };
 }
 const roundBox = (b, pad) => {
@@ -2402,6 +2616,7 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
       const probe = [...everything, ...data.unvisited].map(P);
       data.tracks.forEach(tr => tr.pts.forEach((b, k) => { if (!k) return; const A = P(tr.pts[k - 1]), B = P(b);
         for (let j = 1; j < 12; j++) probe.push({ x: A.x + (B.x - A.x) * j / 12, y: A.y + (B.y - A.y) * j / 12 }); }));
+      (data.walks || []).forEach(w => w.pts.forEach(q => probe.push(P(q))));
       const boxes = [[0, 0], [0, 1], [1, 1], [1, 0]].map(([i, j]) => ({ x: xs[i], y: ys[j], w: S, h: S }));
       const busy = b => probe.filter(q => q.x > b.x - 20 && q.x < b.x + b.w + 20 && q.y > b.y - 20 && q.y < b.y + b.h + 20).length + (b.x === M && b.y > mapRect.y + 10 ? 3 : 0);
       inset = boxes.reduce((a, b) => busy(b) < busy(a) ? b : a);
@@ -2433,10 +2648,18 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     ctx.strokeStyle = L.ink; ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     // a leg to somewhere outside the drawing fades out as it leaves, instead of being cut off at the edge
     const inDrawing = q => q.x >= mapRect.x && q.x <= mapRect.x + mapRect.w && q.y >= mapRect.y && q.y <= mapRect.y + mapRect.h;
+    // recorded walks: the real path you walked, one continuous pen line (thinner than a route, so a day's walks read as footsteps)
+    const walkCovers = (d, tm) => !!tm && (data.walks || []).some(w => w.day === d && w.start_time && w.end_time && minsOf(tm) >= minsOf(w.start_time) - 2 && minsOf(tm) <= minsOf(w.end_time) + 2);
+    (data.walks || []).forEach(w => {
+      ctx.save(); ctx.strokeStyle = L.ink; ctx.lineWidth = lw * 0.62; ctx.globalAlpha = .82; ctx.setLineDash([]);
+      ctx.beginPath(); w.pts.forEach((q, j) => { const c = P(q); j ? ctx.lineTo(c.x, c.y) : ctx.moveTo(c.x, c.y); }); ctx.stroke(); ctx.restore();
+    });
     data.tracks.forEach((tr, ti) => tr.pts.forEach((b, k) => {
       if (!k) return;
       const a = tr.pts[k - 1];
       const mode = b.mode || guessMode(a, b);
+      // the recorded walk already draws this leg (or this wander) for real
+      if ((b.wandered || mode === 'walk') && walkCovers(tr.day, b.time)) return;
       const A0 = P(a), B0 = P(b), inA = inDrawing(A0), inB = inDrawing(B0);
       if (!inA && !inB) return;
       // the walk home isn't part of the story: the square already says where home is
@@ -2516,6 +2739,8 @@ function drawPoster(canvas, t, data, prefs, ground, credits) {
     // and the lines (sampled), so a name never sits on a route
     data.tracks.forEach(tr => tr.pts.forEach((pb, k) => { if (!k) return; const A = P(tr.pts[k - 1]), B = P(pb), n = Math.ceil(Math.hypot(B.x - A.x, B.y - A.y) / 14);
       for (let j = 1; j < n; j++) taken.push({ x: A.x + (B.x - A.x) * j / n - 3, y: A.y + (B.y - A.y) * j / n - 3, w: 6, h: 6 }); }));
+    (data.walks || []).forEach(w => w.pts.forEach((pb, k) => { if (!k) return; const A = P(w.pts[k - 1]), B = P(pb), n = Math.ceil(Math.hypot(B.x - A.x, B.y - A.y) / 14);
+      for (let j = 0; j < n; j++) taken.push({ x: A.x + (B.x - A.x) * j / n - 3, y: A.y + (B.y - A.y) * j / n - 3, w: 6, h: 6 }); }));
     const free = r => r.x > 8 && r.x + r.w < W - 8 && r.y > mapRect.y - 10 && r.y + r.h < mapRect.y + mapRect.h &&
       !taken.some(o => r.x < o.x + o.w && r.x + r.w > o.x && r.y < o.y + o.h && r.y + r.h > o.y);
     // where the off-map legs went: a quiet italic note hugging the edge they leave by, slid along it to a free spot
@@ -3824,16 +4049,16 @@ function somedayView() {
  * ============================================================ */
 function mapChips(t) {
   const days = scopedDays(t);
-  const opt = [['all', 'All'], ['unplanned', 'No day yet'], ...days.map(d => [d, fmtShortDay(d)])];
+  const opt = [['all', 'All'], ...(tracksOf(t.id).length ? [['paths', 'Paths']] : []), ['unplanned', 'No day yet'], ...days.map(d => [d, fmtShortDay(d)])];
   return `<div class="map-chips">${opt.map(([k, l]) => `<button class="${ui.mapDay === k ? 'on' : ''}" data-mapchip="${k}">${esc(l)}</button>`).join('')}</div>`;
 }
 function mapLayerToggle(t) {
   const d = ui.mapDay;
-  if (d === 'all' || d === 'unplanned') return '';
-  return `<div class="map-layer"><button class="${ui.mapLayer === 'plan' ? 'on' : ''}" data-maplayer="plan">Plan</button><button class="${ui.mapLayer === 'lived' ? 'on' : ''}" data-maplayer="lived">Lived${logsFor(t.id, d).length ? '' : ' (0)'}</button></div>`;
+  if (d === 'all' || d === 'unplanned' || d === 'paths') return '';
+  return `<div class="map-layer"><button class="${ui.mapLayer === 'plan' ? 'on' : ''}" data-maplayer="plan">Plan</button><button class="${ui.mapLayer === 'lived' ? 'on' : ''}" data-maplayer="lived">Lived${logsFor(t.id, d).length || tracksFor(t.id, d).length ? '' : ' (0)'}</button></div>`;
 }
 function mapSignature(tripId) {
-  return JSON.stringify([ui.mapDay, ui.mapLayer, ui.chapter[tripId] || '', db.items.filter(i => i.trip_id === tripId).map(i => [i.id, i.lat, i.day, i.end_day, i.seq, i.parent_id, i.status, i.priority, i.from_lat, i.to_lat]), db.log.filter(l => l.trip_id === tripId).map(l => [l.id, l.lat, l.day, l.seq, l.mode, l.parent_id, l.rating])]);
+  return JSON.stringify([ui.mapDay, ui.mapLayer, ui.chapter[tripId] || '', db.items.filter(i => i.trip_id === tripId).map(i => [i.id, i.lat, i.day, i.end_day, i.seq, i.parent_id, i.status, i.priority, i.from_lat, i.to_lat]), db.log.filter(l => l.trip_id === tripId).map(l => [l.id, l.lat, l.day, l.seq, l.mode, l.parent_id, l.rating]), tracksOf(tripId).map(k => [k.id, k.day, k.title])]);
 }
 function sizeMap() {
   const el = $('#map'); if (!el) return;
@@ -3869,7 +4094,7 @@ function initMap(tripId) {
   map.on('moveend', () => { ui.mapView = { key: viewKey, center: map.getCenter(), zoom: map.getZoom() }; });
   map.on('popupopen', e => {
     const b = e.popup.getElement().querySelector('[data-pop]');
-    if (b) b.onclick = () => { const [k, id] = b.dataset.pop.split(':'); k === 'log' ? openLogEntry(id) : openItem(id); };
+    if (b) b.onclick = () => { const [k, id] = b.dataset.pop.split(':'); k === 'log' ? openLogEntry(id) : k === 'track' ? openTrack(id) : openItem(id); };
   });
   render._mapSig = mapSignature(t.id);
 }
@@ -3965,6 +4190,23 @@ function drawMap(t, layer) {
   const chOn = activeChapter(t), chStays = chOn ? chapterStays(chOn) : null;
   const items = chOn ? itemsFor(t.id).filter(i => inChapter(i, chOn, chStays)) : itemsFor(t.id);
   const d = ui.mapDay;
+  // a recorded walk on the map: the real path, tap for its numbers
+  const addWalk = (k, style) => {
+    const ll = trackPts(k).map(q => [q.lat, q.lng]); if (ll.length < 2) return;
+    ll.forEach(x => pts.push(x));
+    L.polyline(ll, Object.assign({ color: C.found, weight: 4, opacity: .85, lineJoin: 'round', lineCap: 'round' }, style))
+      .bindPopup(`<b>${esc(trackLabel(k))}</b><br><span style="color:#7a7064;font-size:12px">${esc([fmtShortDay(k.day), trackMeta(k)].filter(Boolean).join(' · '))}</span><br><button class="pop-btn" data-pop="track:${esc(k.id)}">Details</button>`).addTo(layer);
+  };
+  if (d === 'paths') {
+    // Worn paths: every recorded walk drawn faintly on top of the others, so the ways you take again and again build up
+    const ks = tracksOf(t.id);
+    const w = ks.length > 12 ? 4 : 5, op = Math.max(.14, Math.min(.5, 1.6 / Math.sqrt(ks.length + 1)));
+    ks.forEach(k => addWalk(k, { weight: w, opacity: op, color: C.found }));
+    items.filter(i => i.kind === 'fixed' && isStay(i) && !i.parent_id).forEach(i => { if (ks.some(k => k.day >= (i.day || '') && k.day <= (i.end_day || i.day || ''))) addHome(i); });
+    const km = ks.reduce((m, k) => m + (+k.distance_m || 0), 0), mins = ks.reduce((m, k) => m + (+k.duration_min || 0), 0);
+    say(`${ks.length} recorded walk${ks.length === 1 ? '' : 's'} · ${fmtLen(km)} · out ${fmtMins(mins)}. The paths you take most show up strongest.`);
+    return pts;
+  }
   if (d === 'all' || d === 'unplanned') {
     if (d === 'all') drawFlights(items.filter(i => isFlight(i) && !i.parent_id), drawMap._flightPts);
     items.forEach(i => {
@@ -3987,12 +4229,21 @@ function drawMap(t, layer) {
   if (nightStay && nightStay !== home) addHome(nightStay);
 
   if (ui.mapLayer === 'lived') {
+    tracksFor(t.id, d).forEach(k => addWalk(k));
     const seq = flatLogs(t.id, d);
     seq.forEach((l, k) => addNum(l, k + 1, l.parent_id ? C.tour : l.origin === 'found' ? C.found : C.place, 'log'));
     const st = startsAtStay(t.id, d, seq.find(l => !isWander(l) && !l.parent_id));
     if (st && st !== home) addHome(st);
-    drawLegs(st ? [st, ...seq] : seq, C.found);
-    say(seq.length ? '' : 'Nothing logged this day yet.');
+    // legs the recorded walk already shows aren't drawn again
+    const legSeq = (st ? [st, ...seq] : seq);
+    if (tracksFor(t.id, d).length) {
+      for (let k = 1; k < legSeq.length; k++) if (inRecordedWalk(t.id, d, legSeq[k].time) && (legSeq[k].mode || 'walk') === 'walk') legSeq[k] = { ...legSeq[k], _cut: true };
+      const parts = []; let cur = [];
+      legSeq.forEach(x => { if (x._cut) { if (cur.length) parts.push(cur); cur = [x]; } else cur.push(x); });
+      if (cur.length) parts.push(cur);
+      parts.forEach(pp => drawLegs(pp, C.found));
+    } else drawLegs(legSeq, C.found);
+    say(seq.length || tracksFor(t.id, d).length ? '' : 'Nothing logged this day yet.');
     return pts;
   }
 
@@ -4075,6 +4326,8 @@ function bindCommon() {
   $$('[data-addday]').forEach(el => el.onclick = () => openAddToDay(r.id, el.dataset.addday));
   $$('[data-mapday]').forEach(el => el.onclick = () => { ui.mapDay = el.dataset.mapday; ui.mapLayer = 'plan'; location.hash = `#/trip/${encodeURIComponent(r.id)}/map`; });
   $$('[data-totals]').forEach(el => el.onclick = () => openTotals(tripById(r.id), el.dataset.totals));
+  $$('[data-track]').forEach(el => el.onclick = e => { e.stopPropagation(); openTrack(el.dataset.track); });
+  $$('[data-gpx]').forEach(el => el.onchange = () => { const f = el.files && el.files[0]; el.value = ''; addTrackFile(tripById(r.id), el.dataset.gpx, f); });
   $$('[data-maplived]').forEach(el => el.onclick = () => { ui.mapDay = el.dataset.maplived; ui.mapLayer = 'lived'; location.hash = `#/trip/${encodeURIComponent(r.id)}/map`; });
   $$('[data-logday]').forEach(el => el.onclick = () => {
     ui.logDay[r.id] = el.dataset.logday; ui.reorder = null;
@@ -4517,6 +4770,7 @@ function openAddToDay(tripId, d) {
  * Files wait on the phone (IndexedDB) until they're sent, and stay there as a cache.
  * In the Sheet they're rows in Artifacts; the files themselves live privately in Drive (Travel Hub / <trip>). */
 const ARTIFACT_OPS = ['upload', 'updateArtifact', 'deleteArtifact'];
+const TRACK_OPS = ['track', 'updateTrack', 'deleteTrack'];
 const MAX_PHOTOS = 4, MAX_SOUND_S = 60;
 const blobs = (() => {
   let dbp = null;
@@ -5548,12 +5802,33 @@ function demoData() {
       { id: 'ib_d3', share_id: 'sh_demo1', trip_id: 'tr_demo1', kind: 'link', status: 'new', title: 'Make your own wagashi: a sweets class (sample)', website: 'https://example.com/wagashi-class', note: 'A two-hour class in a family-run shop.' },
       { id: 'ib_d4', share_id: 'sh_demo1', trip_id: 'tr_demo1', kind: 'ask', status: 'asked', item_id: 'i3', title: 'Somewhere to buy nice paper and pens?' },
     ],
+    tracks: demoWalks(d),
     artifacts: [
       { id: 'ar_demo1', log_id: 'rl1', trip_id: 'tr_demo3', kind: 'photo', file_id: 'demo', mime: 'image/jpeg', seq: '0' },
       { id: 'ar_demo2', log_id: 'rl4', trip_id: 'tr_demo3', kind: 'souvenir', title: 'a Sibelius 5 programme', seq: '0' },
       { id: 'ar_demo3', log_id: 'rl6', trip_id: 'tr_demo3', kind: 'souvenir', title: 'lava salt', seq: '0' },
     ],
   };
+}
+
+/** Sample recorded walks: a wiggly line through a few waypoints, like a real GPS trace. */
+function demoWalks(d) {
+  const walk = (id, day, from, to, way, title, note) => {
+    const pts = [];
+    way.forEach((b, k) => { if (!k) return; const a = way[k - 1], n = Math.max(8, Math.round(meters({ lat: a[0], lng: a[1] }, { lat: b[0], lng: b[1] }) / 25));
+      for (let j = 0; j < n; j++) { const u = j / n, w = Math.sin((k * 7 + j) * 0.9) * 0.00006;
+        pts.push({ lat: a[0] + (b[0] - a[0]) * u + w, lng: a[1] + (b[1] - a[1]) * u + w * 0.6 }); } });
+    pts.push({ lat: way[way.length - 1][0], lng: way[way.length - 1][1] });
+    let m = 0; for (let k = 1; k < pts.length; k++) m += meters(pts[k - 1], pts[k]);
+    const mins = (h => h[0] * 60 + h[1])(to.split(':').map(Number)) - (h => h[0] * 60 + h[1])(from.split(':').map(Number));
+    return { id, trip_id: 'tr_demo1', day, title, note, start: `${day}T${from}:00+09:00`, end: `${day}T${to}:00+09:00`, start_time: from, end_time: to, timezone: 'Asia/Tokyo',
+      distance_m: String(Math.round(m)), duration_min: String(mins), moving_min: String(Math.round(mins * 0.8)), climb_m: '12', points: String(pts.length), polyline: encodePolyline(pts) };
+  };
+  const hotel = [35.7037, 139.7930], senso = [35.7148, 139.7967], kappa = [35.7130, 139.7890];
+  return [
+    walk('tk_demo1', d(0), '06:55', '10:05', [hotel, [35.7080, 139.7950], [35.7115, 139.7985], senso, [35.7150, 139.7930], kappa, [35.7085, 139.7905], hotel], '', 'Temple before the crowds'),
+    walk('tk_demo2', d(-1), '18:10', '19:35', [hotel, [35.7060, 139.7980], [35.7095, 139.7990], [35.7115, 139.7985], [35.7080, 139.7950], hotel], 'Along the river', ''),
+  ];
 }
 
 function demoApi(action, p) {
@@ -5587,6 +5862,9 @@ function demoApi(action, p) {
     else if (action === 'upload') resolve({ ...artifactRow(p), file_id: p.hasFile ? 'demo' : '', _pending: false });
     else if (action === 'updateArtifact') resolve(Object.assign(db.artifacts.find(a => a.id === p.id) || {}, p.patch || {}));
     else if (action === 'deleteArtifact') resolve({ id: p.id });
+    else if (action === 'track') resolve({ ...p.track, _pending: false });
+    else if (action === 'updateTrack') { const k = (db.tracks || []).find(x => x.id === p.id); if (k) delete k._pending; resolve(k); }
+    else if (action === 'deleteTrack') resolve({ id: p.id });
     else if (action === 'file') {   // a made-up photo: dusk over the water
       const c = document.createElement('canvas'); c.width = 640; c.height = 480; const g = c.getContext('2d');
       const gr = g.createLinearGradient(0, 0, 0, 480); gr.addColorStop(0, '#2b3a55'); gr.addColorStop(.55, '#d9895b'); gr.addColorStop(.56, '#1f2b3a'); gr.addColorStop(1, '#101820');

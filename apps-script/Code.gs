@@ -38,6 +38,10 @@ const SHEETS = {
   // What someone with a review link sent in. Never written into Items until you keep it (asks are the exception: they become ideas).
   Inbox: ['id', 'share_id', 'trip_id', 'kind', 'text', 'title', 'note', 'category', 'city', 'address', 'lat', 'lng',
           'place_id', 'maps_url', 'website', 'image', 'types', 'hours', 'status', 'item_id', 'created', 'updated'],
+  // Walks recorded with a GPS tracker (a .gpx file): the real path, simplified, as an encoded polyline.
+  // start/end are ISO times; start_time/end_time the clock in the trip's timezone; moving_min leaves out the standing still.
+  Tracks: ['id', 'trip_id', 'day', 'title', 'start', 'end', 'start_time', 'end_time', 'timezone',
+           'distance_m', 'duration_min', 'moving_min', 'climb_m', 'points', 'polyline', 'note', 'created', 'updated'],
 };
 
 // What a review link (someone you shared a chapter with) may do. Nothing here edits or deletes your rows.
@@ -193,6 +197,7 @@ const ACTIONS = {
       shares: hasTab('Shares') ? readTable('Shares') : [],
       reactions: hasTab('Reactions') ? readTable('Reactions') : [],
       inbox: hasTab('Inbox') ? readTable('Inbox') : [],
+      tracks: hasTab('Tracks') ? readTable('Tracks') : undefined,   // missing = setup hasn't been run (the app keeps walks on the phone until then)
       places: !!PropertiesService.getScriptProperties().getProperty('PLACES_KEY'),
     };
   },
@@ -614,6 +619,77 @@ const ACTIONS = {
       ACTIONS.addLog(Object.assign(base, { item_id: st.id, category: st.category || 'Stay' }));
       return 'Back at ' + st.title + ', ' + clock + '.';
     });
+  },
+
+  /** A recorded walk. Two ways in:
+      - the iPhone Share Sheet shortcut: POST {action:'track', token, format:'text', gpx:<the .gpx file's text>[, trip, title]}
+        → the file is read here, and the shortcut gets back one sentence.
+      - the app: POST {action:'track', token, track:{…}} with the walk already worked out on the phone (it's much smaller).
+      The id comes from the walk itself (start time, point count, first spot), so sending the same file twice saves it once. */
+  track: function (p) {
+    let row;
+    if (p.gpx) {
+      const raw = gpxPoints(String(p.gpx));
+      if (raw.length < 2) throw new Error('No walk in that file (found ' + raw.length + ' point' + (raw.length === 1 ? '' : 's') + ')');
+      row = trackSummary(raw);
+      row.title = String(p.title || '').trim();
+    } else {
+      row = parsePatch(p.track);
+      if (!row || !row.polyline) throw new Error('No walk was sent');
+    }
+    // which trip: the one asked for, else the one happening on the walk's own day (a day either side counts)
+    let trip = null, day = '', clock = function () { return ''; };
+    const trips = readTable('Trips').filter(function (t) { return t.start; });
+    const asked = p.trip && String(p.trip).toLowerCase() !== 'auto' ? resolveTripParam(p.trip) : (row.trip_id || '');
+    const startAt = row.start ? new Date(row.start) : new Date();
+    trips.forEach(function (t) {
+      if (trip || (asked && t.id !== asked)) return;
+      const tz = t.timezone || 'UTC';
+      let d = Utilities.formatDate(startAt, tz, 'yyyy-MM-dd');
+      if (Utilities.formatDate(startAt, tz, 'HH:mm') < '04:00') d = shiftDay(d, -1);   // until 4am it's still last night
+      if (asked || (d >= shiftDay(t.start, -1) && d <= shiftDay(t.end || t.start, 1))) { trip = t; day = d; }
+    });
+    const dayWord = function (d) { return Utilities.formatDate(new Date(d + 'T12:00:00Z'), 'UTC', 'EEE d MMM'); };
+    if (!trip) {
+      const d = Utilities.formatDate(startAt, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      if (p.format === 'text') return 'That walk was on ' + dayWord(d) + ', and no trip covers that day, so it wasn\'t saved.';
+      throw new Error('No trip covers ' + d);
+    }
+    const tz = trip.timezone || 'UTC';
+    row.trip_id = trip.id;
+    if (!row.day || !p.track) row.day = day;
+    row.timezone = tz;
+    if (row.start) row.start_time = Utilities.formatDate(new Date(row.start), tz, 'HH:mm');
+    if (row.end) row.end_time = Utilities.formatDate(new Date(row.end), tz, 'HH:mm');
+    const lenWords = function (m) { return (m / 1000).toFixed(1) + ' km (' + (m / 1609.344).toFixed(1) + ' mi)'; };
+    const minWords = function (m) { m = Math.round(m); return m >= 60 ? Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '') : m + ' min'; };
+    return withLock(function () {
+      const have = findRow('Tracks', row.id);
+      if (have) {
+        if (p.format === 'text') return 'Already saved that walk (' + dayWord(have.obj.day) + ').';
+        const o = have.obj; o._duplicate = true; return o;
+      }
+      const now = new Date().toISOString();
+      row.created = row.created || now; row.updated = now;
+      appendObj('Tracks', row);
+      if (p.format === 'text') {
+        return 'Saved your walk on ' + dayWord(row.day) + ': ' + lenWords(+row.distance_m) + ', out for ' + minWords(+row.duration_min) +
+          (row.start_time ? ' from ' + quickClock(row.start_time) : '') + ' (' + trip.name + ').';
+      }
+      return row;
+    });
+  },
+
+  updateTrack: function (p) {
+    const patch = parsePatch(p.patch);
+    const keep = {};
+    ['title', 'note', 'day'].forEach(function (k) { if (k in patch) keep[k] = patch[k]; });
+    keep.updated = new Date().toISOString();
+    return withLock(function () { return updateRow('Tracks', p.id, keep); });
+  },
+
+  deleteTrack: function (p) {
+    return withLock(function () { deleteRow('Tracks', p.id); return { id: p.id }; });
   },
 
   /** Preview a link without saving (used by the capture sheet). */
@@ -1457,4 +1533,115 @@ function withLock(fn) {
   lock.waitLock(20000);
   LOCK_HELD = true;
   try { return fn(); } finally { LOCK_HELD = false; lock.releaseLock(); }
+}
+
+/* ---------------------------------------------------------------
+ * Recorded walks (.gpx). The same reading and simplifying as the
+ * app's, so a walk sent either way comes out the same (and the same id).
+ * ------------------------------------------------------------- */
+/** Every <trkpt> in a GPX file: {lat, lng, t (ms or null), ele (m or null)}, in file order. */
+function gpxPoints(text) {
+  const out = [];
+  const re = /<(?:\w+:)?trkpt\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:\w+:)?trkpt>)/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const attrs = m[1] || '', body = m[2] || '';
+    const la = attrs.match(/\blat\s*=\s*["']\s*(-?[\d.]+)/), lo = attrs.match(/\blon\s*=\s*["']\s*(-?[\d.]+)/);
+    if (!la || !lo) continue;
+    const tm = body.match(/<(?:\w+:)?time>\s*([^<\s]+)/), el = body.match(/<(?:\w+:)?ele>\s*(-?[\d.]+)/);
+    const t = tm ? Date.parse(tm[1]) : NaN;
+    const lat = +la[1], lng = +lo[1];
+    if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)) continue;
+    out.push({ lat: lat, lng: lng, t: isFinite(t) ? t : null, ele: el ? +el[1] : null });
+  }
+  return out;
+}
+
+/** A walk's numbers and its simplified path. GPS wobbles a few metres while you stand still, so points closer than
+    6 m to the last one kept are skipped before measuring; moving time counts only walking-ish speeds with no long gap. */
+function trackSummary(raw) {
+  raw = dropGlitches(raw);
+  const timed = raw.filter(function (q) { return q.t != null; });
+  const kept = [];
+  raw.forEach(function (q) { const last = kept[kept.length - 1]; if (!last || metersBetween(last.lat, last.lng, q.lat, q.lng) >= 6) kept.push(q); });
+  const end = raw[raw.length - 1];
+  if (kept[kept.length - 1] !== end) kept.push(end);
+  let dist = 0, moving = 0;
+  for (let k = 1; k < kept.length; k++) {
+    const a = kept[k - 1], b = kept[k], d = metersBetween(a.lat, a.lng, b.lat, b.lng);
+    dist += d;
+    if (a.t != null && b.t != null) { const dt = (b.t - a.t) / 1000; if (dt > 0 && dt <= 300 && d / dt >= 0.3 && d / dt <= 7) moving += dt; }
+  }
+  // climb: rises of 3 m or more (smaller wiggles are the GPS)
+  let climb = 0, ref = null;
+  raw.forEach(function (q) {
+    if (q.ele == null || !isFinite(q.ele)) return;
+    if (ref == null) { ref = q.ele; return; }
+    if (q.ele - ref >= 3) { climb += q.ele - ref; ref = q.ele; } else if (ref - q.ele >= 3) ref = q.ele;
+  });
+  // simplify until it fits comfortably in one cell (≤ 600 points)
+  let tol = 2.5, path = simplifyPath(kept, tol);
+  while (path.length > 600) { tol *= 1.6; path = simplifyPath(kept, tol); }
+  const t0 = timed.length ? timed[0].t : null, t1 = timed.length ? timed[timed.length - 1].t : null;
+  const first = raw[0];
+  return {
+    id: 'tk_' + [t0 || 0, raw.length, Math.round(Math.abs(first.lat) * 1e4), Math.round(Math.abs(first.lng) * 1e4)].map(function (x) { return x.toString(36); }).join(''),
+    start: t0 != null ? new Date(t0).toISOString() : '', end: t1 != null ? new Date(t1).toISOString() : '',
+    distance_m: String(Math.round(dist)), duration_min: t0 != null ? String(Math.round((t1 - t0) / 60000)) : '',
+    moving_min: t0 != null ? String(Math.round(moving / 60)) : '', climb_m: String(Math.round(climb)),
+    points: String(path.length), polyline: encodePolyline(path),
+  };
+}
+
+/** GPS sometimes throws a point far away for a second (faster than 60 m/s, or a 200 m jump at the same instant). Those go;
+    if 20 in a row would go, the phone really did move (a bus, a ferry), so it picks up from there. */
+function dropGlitches(raw) {
+  const out = []; let skipped = 0;
+  raw.forEach(function (q) {
+    const a = out[out.length - 1];
+    if (a) {
+      const d = metersBetween(a.lat, a.lng, q.lat, q.lng), dt = a.t != null && q.t != null ? (q.t - a.t) / 1000 : null;
+      const bad = dt != null ? (dt > 0 ? d / dt > 60 : d > 200) : d > 3000;
+      if (bad && skipped < 20) { skipped++; return; }
+    }
+    skipped = 0; out.push(q);
+  });
+  return out.length >= 2 ? out : raw;
+}
+
+/** Douglas–Peucker on metres (a flat projection is fine at walking scale). */
+function simplifyPath(pts, tol) {
+  if (pts.length < 3) return pts.slice();
+  const lat0 = pts[0].lat * Math.PI / 180, kx = 111320 * Math.cos(lat0), ky = 110540;
+  const xy = pts.map(function (q) { return [q.lng * kx, q.lat * ky]; });
+  const keep = new Array(pts.length); keep[0] = keep[pts.length - 1] = true;
+  const stack = [[0, pts.length - 1]];
+  while (stack.length) {
+    const seg = stack.pop(), i = seg[0], j = seg[1];
+    const ax = xy[i][0], ay = xy[i][1], dx = xy[j][0] - ax, dy = xy[j][1] - ay, L2 = dx * dx + dy * dy;
+    let best = -1, bestD = 0;
+    for (let k = i + 1; k < j; k++) {
+      let u = L2 ? ((xy[k][0] - ax) * dx + (xy[k][1] - ay) * dy) / L2 : 0; u = Math.max(0, Math.min(1, u));
+      const ex = xy[k][0] - (ax + u * dx), ey = xy[k][1] - (ay + u * dy), d = ex * ex + ey * ey;
+      if (d > bestD) { bestD = d; best = k; }
+    }
+    if (best > 0 && bestD > tol * tol) { keep[best] = true; stack.push([i, best], [best, j]); }
+  }
+  return pts.filter(function (q, k) { return keep[k]; });
+}
+
+/** Google's encoded polyline (precision 5), the same format the Routes tab and the app use. */
+function encodePolyline(pts) {
+  let out = '', pLat = 0, pLng = 0;
+  const enc = function (v) {
+    v = v < 0 ? ~(v << 1) : v << 1;
+    let s = '';
+    while (v >= 0x20) { s += String.fromCharCode((0x20 | (v & 0x1f)) + 63); v >>= 5; }
+    return s + String.fromCharCode(v + 63);
+  };
+  pts.forEach(function (q) {
+    const la = Math.round(q.lat * 1e5), ln = Math.round(q.lng * 1e5);
+    out += enc(la - pLat) + enc(ln - pLng); pLat = la; pLng = ln;
+  });
+  return out;
 }

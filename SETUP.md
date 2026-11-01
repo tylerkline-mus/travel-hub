@@ -141,6 +141,25 @@ To put them within reach: **ⓘ → Add to Home Screen** for each, or add a **Sh
 
 Like the app: they log to whichever trip is happening today, until 4am counts as last night, and a repeat tap is ignored. They need signal.
 
+## 7c. Recorded walks: "Send to Travel Hub" (Open GPX Tracker → Share)
+
+For the walks you want drawn as the real path. Record the walk in **Open GPX Tracker** (free in the App Store), then share the file into the hub. The hub works out the distance, how long you were out and the climb, keeps a simplified copy of the path, and puts it on the right day of the trip happening then.
+
+**Make the shortcut once.** In **Shortcuts**, tap **+** and name it **Send to Travel Hub**. Then:
+
+1. Tap **ⓘ** (bottom) → turn on **Show in Share Sheet**. Back in the editor, the first block says *Receive **Any** input from Share Sheet*: tap **Any** → tap **Clear**, then turn on just **Files**.
+2. Add **Get Text from Input** (search "Get Text"). It turns the .gpx file into text.
+3. Add **Get Contents of URL**: your Web app URL only (ending in `/exec`). Tap **›** → **Method** POST, **Request Body** JSON, add Text fields: `action` = `track`, `token` = your passphrase, `format` = `text`, and `gpx` = tap the field → choose the **Text** variable (from step 2).
+4. Add **Show Notification** with **Contents of URL**. It says e.g. *Saved your walk on Sun 1 Nov: 4.2 km (2.6 mi), out for 2 h 31 min from 1:40pm (Iceland).*
+
+**Each walk:** in Open GPX Tracker tap **Start** when you head out. When you're back, tap **Pause** → **Save** (name it anything), open the folder icon, tap the walk, **Share**, and pick **Send to Travel Hub**.
+
+Good to know:
+- Sending the same file twice saves it once.
+- No signal? Save the file in Open GPX Tracker and share it later. It still lands on the day you walked.
+- No shortcut? In the app's **Log**, under the day's stops, **Add a recorded walk (.gpx)** picks the file from the Files app (in Open GPX Tracker, Share → **Save to Files** first). That way works offline too.
+- Your stops and the dock buttons work as before during a walk. Stops logged while a walk was recording sit on its line, and the poster draws the walk instead of guessing those legs.
+
 ---
 
 ## How the pieces talk
@@ -149,6 +168,7 @@ Like the app: they log to whichever trip is happening today, until 4am counts as
 - **The Sheet** is the record. You can edit cells directly: fix a typo, paste rows, add notes. The app picks it up on the next open.
 - **The `id` column** is how the app knows which row is which. Don't change existing IDs. If you add a row by hand, give it any unique short ID (e.g. `it_hand01`) so the app can edit it later.
 - **Deleting a trip** sends its places back to Someday rather than deleting them.
+- **Recorded walks** are rows in the **Tracks** tab: the day, times, distance, minutes out (and moving), climb, and the path as an encoded polyline (the same format as the Routes tab). Rename one or add a note in the app; delete the row to remove it.
 - **Photos, sounds and souvenirs** you keep with a stop are rows in the **Artifacts** tab; the files themselves go to a **Travel Hub** folder in your Google Drive (one folder per trip), private to you. The app loads them back through the script and keeps a copy on the phone. The first time the script saves a file, Google asks for Drive permission — run **testDrive** once from the editor to get that out of the way. Deleting a stop sends its files to the Drive trash.
 
 ## Next steps (step 2)

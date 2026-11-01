@@ -25,3 +25,4 @@ No data, keys or passphrases live in this repo. The app asks for the web app URL
 3. ✅ Travelogue: ordered "I'm here" logging, planned vs. found, travel mode per leg, end-of-day review
 4. ✅ Flights with airport codes and arcs, Must/Want/Maybe priority, Loved/Liked/Meh ratings, undo on deletes, travel days, offline map tiles
 5. Trip recap + poster export for socials, photos, suggestion workflows
+6. Recorded walks (.gpx from Open GPX Tracker): the real path on the Log, the map (**Paths**: worn paths over a stay) and the poster
