@@ -2085,10 +2085,17 @@ function recapData(t, frame) {
   const walks = [];
   if (lived || tracksOf(t.id).length) days.filter(ft.inDay).forEach(d => tracksFor(t.id, d).forEach(k => {
     const wp = trackPts(k);
-    if (wp.length > 1 && (!frame || frame.kind !== 'place' || wp.some(ft.inArea))) walks.push({ day: d, id: k.id, pts: wp, start_time: k.start_time, end_time: k.end_time, m: +k.distance_m || 0 });
+    if (wp.length > 1 && (!frame || frame.kind !== 'place' || wp.some(ft.inArea))) walks.push({ day: d, id: k.id, pts: wp, start_time: k.start_time, end_time: k.end_time, m: +k.distance_m || 0, min: +k.duration_min || 0 });
   }));
   const busiest = perDay.reduce((x, y) => (y.n > (x ? x.n : 0) ? y : x), null);
   const inDays = perDay.filter(x => x.in).map(x => x.day);
+  // a place frame leaves out the day's typed totals (they cover the whole day), but a recorded walk is where it was:
+  // its real distance and time replace the guessed walking legs of that day inside the frame
+  if (frame && frame.kind === 'place') {
+    const byDay = {};
+    walks.forEach(w => { (byDay[w.day] ||= { m: 0, min: 0 }); byDay[w.day].m += w.m; byDay[w.day].min += w.min; });
+    Object.entries(byDay).forEach(([d, x]) => { walked += x.m - (estWalk[d] || 0); moved += x.m - (estWalk[d] || 0); walkMin += x.min; measured = true; });
+  }
   return { lived, days, tracks, walks, stops, homes: [...homes.values()], unvisited, perDay, walked, moved, rode, busiest, allPts, sliced: !ft.all, wandered,
     totals, measured, walkMin, rideMin, steps,
     from: inDays[0], to: inDays[inDays.length - 1],
@@ -3130,15 +3137,25 @@ function paperGrain(ctx, W, H, L) {
 
 function recapView(t) {
   const p = posterPrefs(t.id);
-  // a place picked before the areas were drawn differently: move it to the nearest area as they are now
-  if (p.frame && p.frame.kind === 'place' && !p.frame.sliceId) {
-    const now = recapAreas(t);
-    if (now.length && !now.some(a => meters(a, p.frame) < 3000)) {
-      const a = now.slice().sort((x, y) => meters(x, p.frame) - meters(y, p.frame))[0];
-      p.frame = { kind: 'place', lat: a.lat, lng: a.lng, r: a.r, name: a.name };
-      savePosterPrefs(t.id, p);
+  // a place picked (or saved as a slice) before the areas were drawn differently: move it to the nearest area as they are now,
+  // keeping a saved slice's own name (Nov 2026: a "Skagaströnd" slice still held Blönduós too, and zoomed to Blönduós)
+  const nowAreas = recapAreas(t);
+  const fixPlace = f => {
+    if (!f || f.kind !== 'place' || !nowAreas.length || nowAreas.some(a => meters(a, f) < 3000)) return null;
+    const a = nowAreas.slice().sort((x, y) => meters(x, f) - meters(y, f))[0];
+    return { kind: 'place', lat: a.lat, lng: a.lng, r: a.r };
+  };
+  let moved = false;
+  (p.slices || []).forEach(sl => { const nf = fixPlace(sl.frame); if (nf) { sl.frame = nf; moved = true; } });
+  if (p.frame && p.frame.kind === 'place') {
+    const nf = fixPlace(p.frame);
+    if (nf) {
+      const sl = p.frame.sliceId && (p.slices || []).find(x => x.id === p.frame.sliceId);
+      p.frame = sl ? { ...sl.frame, name: sl.name, sliceId: sl.id } : { ...nf, name: (nowAreas.find(a => a.lat === nf.lat) || {}).name || p.frame.name };
+      moved = true;
     }
   }
+  if (moved) savePosterPrefs(t.id, p);
   const data = recapData(t, p.frame);
   const f = p.frame || { kind: 'all' };
   const stays = topItemsFor(t.id).filter(i => i.kind === 'fixed' && isStay(i) && i.day).sort((a, b) => a.day.localeCompare(b.day));
