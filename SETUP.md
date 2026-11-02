@@ -148,9 +148,10 @@ For the walks you want drawn as the real path. Record the walk in **Open GPX Tra
 **Make the shortcut once.** In **Shortcuts**, tap **+** and name it **Send to Travel Hub**. Then:
 
 1. Tap **ⓘ** (bottom) → turn on **Show in Share Sheet**. Back in the editor, the first block says *Receive **Any** input from Share Sheet*: tap **Any** → tap **Clear**, then turn on just **Files**.
-2. Add **Base64 Encode** (search "Base64"). Its input should be **Shortcut Input** (tap the blue word to change it). Tap **›** on it and set **Line Breaks** to **None**. This packs the file's own contents for sending. (Get Text from Input can hand over the file's name instead of what's in it.)
-3. Add **Get Contents of URL**: your Web app URL only (ending in `/exec`). Tap **›** → **Method** POST, **Request Body** JSON, add Text fields: `action` = `track`, `token` = your passphrase, `format` = `text`, and `gpx64` = tap the field → choose the **Base64 Encoded** variable (from step 2). Make sure the Method is **POST**, the Request Body is **JSON**, and nothing comes after `/exec` in the address.
-4. Add **Show Notification** with **Contents of URL**. It says e.g. *Saved your walk on Sun 1 Nov: 4.2 km (2.6 mi), out for 2 h 31 min from 1:40pm (Iceland).*
+2. Add **Make Archive** (search "Archive"), with **Shortcut Input** as its input and format **.zip**. A walk file is mostly repeated text, so zipping makes it about ten times smaller and a long walk sends in seconds.
+3. Add **Base64 Encode** with the **Archive** as its input. Tap **›** on it and set **Line Breaks** to **None**. (Get Text from Input can hand over the file's name instead of what's in it.)
+4. Add **Get Contents of URL**: your Web app URL only (ending in `/exec`). Tap **›** → **Method** POST, **Request Body** JSON, add Text fields: `action` = `track`, `token` = your passphrase, `format` = `text`, and `gpxzip` = tap the field → choose the **Base64 Encoded** variable (from step 3). Make sure the Method is **POST**, the Request Body is **JSON**, and nothing comes after `/exec` in the address.
+5. Add **Show Notification** with **Contents of URL**. It says e.g. *Saved your walk on Sun 1 Nov: 4.2 km (2.6 mi), out for 2 h 31 min from 1:40pm (Iceland).*
 
 **Each walk:** in Open GPX Tracker tap **Start** when you head out. When you're back, tap **Pause** → **Save** (name it anything), open the folder icon, tap the walk, **Share**, and pick **Send to Travel Hub**.
 

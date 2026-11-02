@@ -628,7 +628,7 @@ const ACTIONS = {
       The id comes from the walk itself (start time, point count, first spot), so sending the same file twice saves it once. */
   track: function (p) {
     let row;
-    if (p.gpx || p.gpx64) {
+    if (p.gpx || p.gpx64 || p.gpxzip) {
       const text = gpxText(p);
       const raw = gpxPoints(text);
       if (raw.length < 2) {
@@ -1550,6 +1550,17 @@ function withLock(fn) {
 /** The GPX file's text, however the shortcut sent it: as text (gpx), or Base64 (gpx64, or gpx with no "<" in it).
     Base64 is the sturdier way from Shortcuts: Base64 Encode reads the file's own bytes. */
 function gpxText(p) {
+  // zipped first (Shortcuts: Make Archive → Base64 Encode): a GPX file shrinks about ten times, so long walks send fast
+  if (p.gpxzip) {
+    const bytes = Utilities.base64Decode(String(p.gpxzip).replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/'));
+    const zipped = Utilities.newBlob(bytes, 'application/zip', 'walk.zip');
+    let files = [];
+    try { files = Utilities.unzip(zipped); } catch (e) {
+      try { files = [Utilities.ungzip(Utilities.newBlob(bytes, 'application/x-gzip', 'walk.gz'))]; } catch (e2) { throw new Error('Couldn\'t open the zipped walk'); }
+    }
+    const f = files.filter(function (b) { return /\.gpx$/i.test(b.getName() || ''); })[0] || files[0];
+    return f ? f.getDataAsString('UTF-8').replace(/^\uFEFF/, '') : '';
+  }
   let s = String(p.gpx64 || p.gpx || '');
   if (p.gpx64 || (s.indexOf('<') === -1 && /^[A-Za-z0-9+\/=_\-\s]{40,}$/.test(s))) {
     const clean = s.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
