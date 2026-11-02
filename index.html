@@ -188,6 +188,11 @@ main { padding: 6px 16px 24px; max-width: 720px; margin: 0 auto; }
 .walk-row .body { display: flex; flex-direction: column; min-width: 0; }
 .walk-row .title { font-weight: 600; font-size: 15px; }
 .walk-row .meta { color: var(--muted); font-size: 13px; white-space: normal; }
+.pause-row { display: flex; align-items: center; gap: 8px; margin: 2px 0 2px 26px; padding: 2px 4px 2px 12px; border-left: 2px dotted var(--found);
+  font-size: 13px; color: var(--muted); }
+.pause-row .what { flex: 1; min-width: 0; }
+.pause-row .linkbtn { font-size: 13px; padding: 4px 2px; }
+.pause-row .linkbtn.quiet { color: var(--muted); font-weight: 400; padding: 4px 6px; }
 .walk-add { display: block; text-align: center; margin: 6px auto 0; width: max-content; cursor: pointer; }
 .walk-big { display: flex; justify-content: center; color: var(--found); margin: 4px 0 6px; }
 .walk-big svg { width: 100%; height: auto; max-width: 340px; background: color-mix(in srgb, var(--found) 7%, transparent); border-radius: 14px; }
@@ -910,12 +915,21 @@ function trackSummary(raw) {
   let tol = 2.5, path = simplifyPath(kept, tol);
   while (path.length > 600) { tol *= 1.6; path = simplifyPath(kept, tol); }
   const t0 = timed.length ? timed[0].t : null, t1 = timed.length ? timed[timed.length - 1].t : null;
+  // the pauses along the way (each kept as two points at the same spot): [lat, lng, from, to] with times in epoch seconds
+  const stays = [];
+  for (let k = 0; k + 1 < pts.length; k++) {
+    const a = pts[k], b = pts[k + 1];
+    if (a.stay && b.stay && a.lat === b.lat && a.lng === b.lng && a.t != null && b.t != null) {
+      stays.push([Math.round(a.lat * 1e5) / 1e5, Math.round(a.lng * 1e5) / 1e5, Math.round(a.t / 1000), Math.round(b.t / 1000)]);
+      k++;
+    }
+  }
   return {
     id: id,
     start: t0 != null ? new Date(t0).toISOString() : '', end: t1 != null ? new Date(t1).toISOString() : '',
     distance_m: String(Math.round(dist)), duration_min: t0 != null ? String(Math.round((t1 - t0) / 60000)) : '',
     moving_min: t0 != null ? String(Math.round(moving / 60)) : '', climb_m: String(Math.round(climb)),
-    points: String(path.length), polyline: encodePolyline(path),
+    points: String(path.length), polyline: encodePolyline(path), stays: JSON.stringify(stays),
   };
 }
 
@@ -1010,6 +1024,48 @@ function inRecordedWalk(tripId, d, time) {
   if (!time) return false;
   return tracksFor(tripId, d).some(k => k.start_time && k.end_time && minsOf(time) >= minsOf(k.start_time) - 2 && minsOf(time) <= minsOf(k.end_time) + 2);
 }
+/** The pauses along a day's walks (staying within 50 m for 4+ minutes), with clock times in the trip's timezone. */
+function trackStays(k) {
+  let list = [];
+  try { list = JSON.parse(k.stays || '[]'); } catch (e) { list = []; }
+  const tz = k.timezone || (tripById(k.trip_id) || {}).timezone;
+  return (Array.isArray(list) ? list : []).map(([lat, lng, a, b], i) => {
+    const f = dayClockIn(a * 1000, tz), t2 = dayClockIn(b * 1000, tz);
+    return { lat: +lat, lng: +lng, a, b, from: f ? f.time : '', to: t2 ? t2.time : '', min: Math.round((b - a) / 60), i, track: k.id };
+  }).filter(x => isFinite(x.lat) && x.min > 0);
+}
+const dayStays = (tripId, d) => tracksFor(tripId, d).flatMap(trackStays);
+/** The pause on a recorded walk that matches a logged stop: near the place (indoors and under trees GPS is off by tens of
+    metres) and, if the stop has a time, around that time. Untimed stops take the longest pause near them. */
+function gpsStayFor(tripId, d, stop) {
+  if (!stop || !hasCoords(stop)) return null;
+  const spots = [stop].concat(hasCoords({ lat: stop.here_lat, lng: stop.here_lng }) ? [{ lat: +stop.here_lat, lng: +stop.here_lng }] : []);
+  const near = x => Math.min(...spots.map(p => meters(p, x)));
+  let c = dayStays(tripId, d).filter(x => near(x) < (stop.time ? 90 : 60));
+  if (stop.time) c = c.filter(x => x.from && minsOf(stop.time) >= minsOf(x.from) - 10 && minsOf(stop.time) <= minsOf(x.to) + 5);
+  if (!c.length) return null;
+  return stop.time ? c.sort((x, y) => near(x) - near(y))[0] : c.sort((x, y) => y.min - x.min)[0];
+}
+/** Pauses of 8+ minutes that no logged stop accounts for, away from where you're staying: places you might want to add. */
+function unloggedPauses(t, d) {
+  const skip = new Set(store.get('th_pause_skip', []));
+  const logged = logsFor(t.id, d).filter(l => !isWander(l) && hasCoords(l));
+  const taken = new Set(logged.map(l => gpsStayFor(t.id, d, l)).filter(Boolean).map(x => x.track + ':' + x.i));
+  const homes = itemsFor(t.id).filter(i => isStay(i) && hasCoords(i));
+  return dayStays(t.id, d).filter(x => x.min >= 8 && !taken.has(x.track + ':' + x.i) && !skip.has(x.track + ':' + x.a) &&
+    !homes.some(h => meters(h, x) < 120) && !logged.some(l => meters(l, x) < 40));
+}
+async function addPause(t, d, x) {
+  const tops = topLogs(t.id, d);
+  const seq = tops.length ? seqForTime(tops, x.from) : 0;
+  const named = await hereName({ lat: x.lat, lng: x.lng });
+  const title = (named && named.title) || 'Paused here';
+  const l = { id: uid('lg'), trip_id: t.id, day: d, seq: String(seq), time: x.from, title, origin: 'found', mode: 'walk', lat: x.lat, lng: x.lng,
+    city: named ? named.city : '', note: '', logged_at: new Date().toISOString(), timezone: t.timezone || '', _pending: true };
+  queue('addLog', { id: l.id, trip: t.id, day: d, seq: l.seq, time: l.time, title, lat: l.lat, lng: l.lng, city: l.city, mode: 'walk', logged_at: l.logged_at, timezone: l.timezone },
+    () => db.log.push(l));
+  toast(`Added ${title}, ${fmtTime(x.from)}. Tap it to rename it or pick the right place.`);
+}
 /** A little drawing of the walk's shape, for its row in the Log. */
 function trackSvg(k, w = 64, h = 48) {
   const pts = trackPts(k); if (pts.length < 2) return '';
@@ -1027,9 +1083,12 @@ function trackMeta(k) {
     +k.climb_m >= 10 ? '↑ ' + Math.round(+k.climb_m) + ' m' : ''].filter(Boolean).join(' · ');
 }
 function walksBlock(t, d) {
-  const ks = tracksFor(t.id, d);
+  const ks = tracksFor(t.id, d), pauses = unloggedPauses(t, d);
   return ks.map(k => `<div class="walk-row ${k._pending ? 'pending' : ''}" data-track="${esc(k.id)}">${trackSvg(k)}
-      <span class="body"><span class="title">${esc(trackLabel(k))}</span><span class="meta">${esc(trackMeta(k))}</span></span></div>`).join('') +
+      <span class="body"><span class="title">${esc(trackLabel(k))}</span><span class="meta">${esc(trackMeta(k))}</span></span></div>` +
+    pauses.filter(x => x.track === k.id).map(x => `<div class="pause-row"><span class="dot" aria-hidden="true"></span>
+      <span class="what">Paused ${esc(fmtMins(x.min))} · ${esc(fmtTime(x.from))}</span>
+      <button class="linkbtn" data-pauseadd="${esc(k.id)}:${x.i}">Add as a stop</button><button class="linkbtn quiet" data-pauseskip="${esc(k.id)}:${x.a}" aria-label="Not a stop">✕</button></div>`).join('')).join('') +
     `<label class="linkbtn walk-add">${ks.length ? 'Add another recorded walk' : 'Add a recorded walk (.gpx)'}<input type="file" data-gpx="${esc(d)}" hidden></label>`;
 }
 /** A .gpx file picked on the phone: worked out here, so only the small simplified path is queued for the Sheet. */
@@ -1041,7 +1100,7 @@ async function addTrackFile(t, d, file) {
   if (raw.length < 2) return toast(/<gpx/i.test(text) ? 'No walk in that file' : 'That isn’t a .gpx file');
   const row = trackSummary(raw);
   const had = (db.tracks || []).find(k => k.id === row.id);
-  if (had && ['distance_m', 'duration_min', 'start', 'end', 'polyline'].every(k => String(had[k]) === String(row[k]))) return toast('Already saved that walk');
+  if (had && ['distance_m', 'duration_min', 'start', 'end', 'polyline', 'stays'].every(k => String(had[k] ?? '') === String(row[k] ?? ''))) return toast('Already saved that walk');
   if (had) Object.assign(row, { title: had.title || '', note: had.note || '' });
   const tz = t.timezone;
   const a = row.start ? dayClockIn(Date.parse(row.start), tz) : null, b = row.end ? dayClockIn(Date.parse(row.end), tz) : null;
@@ -1844,7 +1903,8 @@ function logContent(t) {
     const nSnd = kept.filter(a => a.kind === 'sound').length, nSouv = kept.filter(a => a.kind === 'souvenir').length;
     // the thumbnail says "photos"; sounds and souvenirs get a word, early so it isn't cut off
     const keptLine = [nSnd ? (nSnd === 1 ? '♪ sound' : `♪ ${nSnd} sounds`) : '', nSouv ? 'brought home' : ''].filter(Boolean).join(' · ');
-    const meta = [l.time ? fmtTime(l.time) : '', l.category === PICKUP_CAT ? 'picked up here' : '', keptLine, l.city, l.note].filter(Boolean).join(' · ');
+    const gs = tracksFor(t.id, d).length ? gpsStayFor(t.id, d, l) : null;
+    const meta = [l.time ? fmtTime(l.time) : gs ? '~' + fmtTime(gs.from) : '', gs ? fmtMins(gs.min) + ' here' : '', l.category === PICKUP_CAT ? 'picked up here' : '', keptLine, l.city, l.note].filter(Boolean).join(' · ');
     const rb = rateBadge(l);
     list += `<div class="entry ${l._pending ? 'pending' : ''}" data-log="${esc(l.id)}">
       <span class="num" style="--c:${l.origin === 'found' ? 'var(--found)' : 'var(--place)'}">${n}</span>
@@ -1959,6 +2019,9 @@ function recapData(t, frame) {
           city: l.city || (it && it.city) || '', region: (it && it.region) || '', country: (it && it.country) || '',
           category: l.category || (it && it.category) || '', key: l.item_id || l.place_id || `${l.title}|${(+l.lat).toFixed(3)},${(+l.lng).toFixed(3)}`,
           wandered: !!pendW, wanderFrom: pendW ? pendW.time || '' : '', icon: l.icon || '' });
+        // a recorded walk saw you stand here: that's how long you stayed (and when, if you didn't log a time)
+        const gs = tracksFor(t.id, d).length ? gpsStayFor(t.id, d, l) : null;
+        if (gs) { s.dwell = gs.min; if (!s.time) s.time = gs.from; s.gps = true; }
         // time spent at the stop before: until a wander/On my way if one was logged, else until this stop (capped by what the place could hold)
         if (prev) endDwell(prev, prev.wanderAt || s.time, !!prev.wanderAt);
         pendW = null; seq.push(s); prev = s;
@@ -2965,7 +3028,7 @@ function recapKey(data, story) {
   if (data.wandered >= 20) measures.push({ label: 'Off the map', value: hrs(data.wandered), note: 'wandering' });
   const lingered = S.reduce((a, s) => a + (s.dwell || 0), 0);
   if (lingered >= 30) measures.push({ label: 'Lingered', value: hrs(lingered), note: `across ${all.length} place${all.length === 1 ? '' : 's'}` });
-  return { best, loved, measures };
+  return { best, loved, measures, walked: !!(data.walks && data.walks.length) };
 }
 /** An icon drawn from a photo, stored on the Log row as JSON: {"r": rotation, "p": [[path, stroke i|a|'', fill p|a|''], …]} on a 48-unit square. */
 function parseIcon(s) { if (!s) return null; try { const o = JSON.parse(s); return o && Array.isArray(o.p) ? o : null; } catch (e) { return null; } }
@@ -2985,7 +3048,9 @@ function drawKey(ctx, K, L, M, CW, y, story) {
   const fs = story ? 18 : 17;
   ctx.font = `600 ${fs}px ${PF}`; setSpacing(ctx, 3); ctx.fillStyle = L.ink; ctx.globalAlpha = 0.62; ctx.fillText('KEY', M, y); const kw = ctx.measureText('KEY').width; setSpacing(ctx, 0);
   ctx.font = `400 ${fs}px ${PF}`;
-  const items = [['best', 'unforgettable', 24], ['loved', 'loved', 16], ['time', 'time spent', 28], ['speck', 'errand', 10], ['wander', 'wandered', 34]];
+  // a recorded walk gets its own entry, so the real footsteps read apart from the guessed lines between stops
+  const items = [['best', 'unforgettable', 24], ['loved', 'loved', 16], ['time', 'time spent', 28], ['speck', 'errand', 10]]
+    .concat(K.walked ? [['walk', 'walked', 30]] : []).concat([['wander', 'wandered', 34]]);
   const gap = 26, widths = items.map(([, t, g]) => g + 8 + ctx.measureText(t).width);
   let x = W - M - widths.reduce((a, b) => a + b, 0) - gap * (items.length - 1);
   ctx.strokeStyle = L.ink; ctx.globalAlpha = 0.24; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(M + kw + 18, y); ctx.lineTo(x - 18, y); ctx.stroke();
@@ -2996,6 +3061,8 @@ function drawKey(ctx, K, L, M, CW, y, story) {
     if (k === 'time') { ctx.strokeStyle = L.ink; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(x + 4, y, 3.5, 0, 7); ctx.stroke(); ctx.beginPath(); ctx.arc(x + 19, y, 8, 0, 7); ctx.stroke(); }
     if (k === 'speck') { ctx.fillStyle = L.ink; ctx.globalAlpha = 0.6; ctx.beginPath(); ctx.arc(x + 5, y, 3, 0, 7); ctx.fill(); ctx.globalAlpha = 1; }
     if (k === 'wander') { ctx.strokeStyle = L.ink; wanderLeg(ctx, { x: x - 6, y }, { x: x + 60, y }, 2.2, 0, 0); }
+    if (k === 'walk') { ctx.strokeStyle = L.ink; ctx.lineWidth = 1.9; ctx.globalAlpha = .82; ctx.lineJoin = 'round'; ctx.beginPath();
+      [[0, 2], [5, -3], [10, 1], [15, -4], [21, 0], [26, -2], [30, 2]].forEach(([dx, dy], j) => j ? ctx.lineTo(x + dx, y + dy) : ctx.moveTo(x + dx, y + dy)); ctx.stroke(); ctx.globalAlpha = 1; }
     ctx.fillStyle = L.ink; ctx.globalAlpha = 0.62; ctx.fillText(t, x + g + 8, y);
     x += widths[i] + gap;
   });
@@ -4367,6 +4434,13 @@ function bindCommon() {
   $$('[data-mapday]').forEach(el => el.onclick = () => { ui.mapDay = el.dataset.mapday; ui.mapLayer = 'plan'; location.hash = `#/trip/${encodeURIComponent(r.id)}/map`; });
   $$('[data-totals]').forEach(el => el.onclick = () => openTotals(tripById(r.id), el.dataset.totals));
   $$('[data-track]').forEach(el => el.onclick = e => { e.stopPropagation(); openTrack(el.dataset.track); });
+  $$('[data-pauseadd]').forEach(el => el.onclick = e => {
+    e.stopPropagation(); const [id, i] = el.dataset.pauseadd.split(':'); const k = (db.tracks || []).find(x => x.id === id); if (!k) return;
+    const x = trackStays(k).find(p => String(p.i) === i); if (x) addPause(tripById(r.id), k.day, x);
+  });
+  $$('[data-pauseskip]').forEach(el => el.onclick = e => {
+    e.stopPropagation(); store.set('th_pause_skip', store.get('th_pause_skip', []).concat([el.dataset.pauseskip]).slice(-300)); render();
+  });
   $$('[data-gpx]').forEach(el => el.onchange = () => { const f = el.files && el.files[0]; el.value = ''; addTrackFile(tripById(r.id), el.dataset.gpx, f); });
   $$('[data-maplived]').forEach(el => el.onclick = () => { ui.mapDay = el.dataset.maplived; ui.mapLayer = 'lived'; location.hash = `#/trip/${encodeURIComponent(r.id)}/map`; });
   $$('[data-logday]').forEach(el => el.onclick = () => {
@@ -5853,7 +5927,7 @@ function demoData() {
 
 /** Sample recorded walks: a wiggly line through a few waypoints, like a real GPS trace. */
 function demoWalks(d) {
-  const walk = (id, day, from, to, way, title, note) => {
+  const walk = (id, day, from, to, way, title, note, pauses = []) => {
     const pts = [];
     way.forEach((b, k) => { if (!k) return; const a = way[k - 1], n = Math.max(8, Math.round(meters({ lat: a[0], lng: a[1] }, { lat: b[0], lng: b[1] }) / 25));
       for (let j = 0; j < n; j++) { const u = j / n, w = Math.sin((k * 7 + j) * 0.9) * 0.00006;
@@ -5862,11 +5936,13 @@ function demoWalks(d) {
     let m = 0; for (let k = 1; k < pts.length; k++) m += meters(pts[k - 1], pts[k]);
     const mins = (h => h[0] * 60 + h[1])(to.split(':').map(Number)) - (h => h[0] * 60 + h[1])(from.split(':').map(Number));
     return { id, trip_id: 'tr_demo1', day, title, note, start: `${day}T${from}:00+09:00`, end: `${day}T${to}:00+09:00`, start_time: from, end_time: to, timezone: 'Asia/Tokyo',
-      distance_m: String(Math.round(m)), duration_min: String(mins), moving_min: String(Math.round(mins * 0.8)), climb_m: '12', points: String(pts.length), polyline: encodePolyline(pts) };
+      distance_m: String(Math.round(m)), duration_min: String(mins), moving_min: String(Math.round(mins * 0.8)), climb_m: '12', points: String(pts.length), polyline: encodePolyline(pts),
+      stays: JSON.stringify(pauses.map(([la, ln, a, b]) => [la, ln, Date.parse(`${day}T${a}:00+09:00`) / 1000, Date.parse(`${day}T${b}:00+09:00`) / 1000])) };
   };
   const hotel = [35.7037, 139.7930], senso = [35.7148, 139.7967], kappa = [35.7130, 139.7890];
   return [
-    walk('tk_demo1', d(0), '06:55', '10:05', [hotel, [35.7080, 139.7950], [35.7115, 139.7985], senso, [35.7150, 139.7930], kappa, [35.7085, 139.7905], hotel], '', 'Temple before the crowds'),
+    walk('tk_demo1', d(0), '06:55', '10:05', [hotel, [35.7080, 139.7950], [35.7115, 139.7985], senso, [35.7150, 139.7930], kappa, [35.7085, 139.7905], hotel], '', 'Temple before the crowds',
+      [[35.71475, 139.79655, '07:04', '07:49'], [35.71498, 139.79302, '08:18', '08:40']]),
     walk('tk_demo2', d(-1), '18:10', '19:35', [hotel, [35.7060, 139.7980], [35.7095, 139.7990], [35.7115, 139.7985], [35.7080, 139.7950], hotel], 'Along the river', ''),
   ];
 }

@@ -41,7 +41,8 @@ const SHEETS = {
   // Walks recorded with a GPS tracker (a .gpx file): the real path, simplified, as an encoded polyline.
   // start/end are ISO times; start_time/end_time the clock in the trip's timezone; moving_min leaves out the standing still.
   Tracks: ['id', 'trip_id', 'day', 'title', 'start', 'end', 'start_time', 'end_time', 'timezone',
-           'distance_m', 'duration_min', 'moving_min', 'climb_m', 'points', 'polyline', 'note', 'created', 'updated'],
+           'distance_m', 'duration_min', 'moving_min', 'climb_m', 'points', 'polyline', 'note', 'created', 'updated',
+           'stays'],   // pauses along the walk (4+ min within 50 m): JSON [[lat, lng, from, to], …], times in epoch seconds
 };
 
 // What a review link (someone you shared a chapter with) may do. Nothing here edits or deletes your rows.
@@ -677,7 +678,7 @@ const ACTIONS = {
         // the same walk again: read afresh (the reading improves now and then), keeping its name and note
         const keepNames = { title: have.obj.title, note: have.obj.note, created: have.obj.created, updated: new Date().toISOString() };
         const fresh = Object.assign({}, row, keepNames);
-        const same = ['distance_m', 'duration_min', 'start', 'end', 'polyline'].every(function (k) { return String(have.obj[k]) === String(fresh[k]); });
+        const same = ['distance_m', 'duration_min', 'start', 'end', 'polyline', 'stays'].every(function (k) { return String(have.obj[k] == null ? '' : have.obj[k]) === String(fresh[k] == null ? '' : fresh[k]); });
         if (same) {
           if (p.format === 'text') return 'Already saved that walk (' + dayWord(have.obj.day) + ').';
           const o = have.obj; o._duplicate = true; return o;
@@ -1637,12 +1638,21 @@ function trackSummary(raw) {
   let tol = 2.5, path = simplifyPath(kept, tol);
   while (path.length > 600) { tol *= 1.6; path = simplifyPath(kept, tol); }
   const t0 = timed.length ? timed[0].t : null, t1 = timed.length ? timed[timed.length - 1].t : null;
+  // the pauses along the way (each kept as two points at the same spot): [lat, lng, from, to] with times in epoch seconds
+  const stays = [];
+  for (let k = 0; k + 1 < pts.length; k++) {
+    const a = pts[k], b = pts[k + 1];
+    if (a.stay && b.stay && a.lat === b.lat && a.lng === b.lng && a.t != null && b.t != null) {
+      stays.push([Math.round(a.lat * 1e5) / 1e5, Math.round(a.lng * 1e5) / 1e5, Math.round(a.t / 1000), Math.round(b.t / 1000)]);
+      k++;
+    }
+  }
   return {
     id: id,
     start: t0 != null ? new Date(t0).toISOString() : '', end: t1 != null ? new Date(t1).toISOString() : '',
     distance_m: String(Math.round(dist)), duration_min: t0 != null ? String(Math.round((t1 - t0) / 60000)) : '',
     moving_min: t0 != null ? String(Math.round(moving / 60)) : '', climb_m: String(Math.round(climb)),
-    points: String(path.length), polyline: encodePolyline(path),
+    points: String(path.length), polyline: encodePolyline(path), stays: JSON.stringify(stays),
   };
 }
 

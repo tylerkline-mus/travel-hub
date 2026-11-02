@@ -160,6 +160,7 @@ Good to know:
 - If something's off, the notification says what arrived (how many characters, and how it starts), which shows whether the shortcut sent the walk or just its name.
 - No signal? Save the file in Open GPX Tracker and share it later. It still lands on the day you walked.
 - No shortcut? In the app's **Log**, under the day's stops, **Add a recorded walk (.gpx)** picks the file from the Files app (in Open GPX Tracker, Share → **Save to Files** first). That way works offline too.
+- Pauses: anywhere you stood still for 4+ minutes is noted. A pause that matches a stop you logged sets how long you were there (and its time, if you didn't log one). Pauses of 8+ minutes you didn't log show under the walk in the Log with **Add as a stop**.
 - Your stops and the dock buttons work as before during a walk. Stops logged while a walk was recording sit on its line, and the poster draws the walk instead of guessing those legs.
 
 ---

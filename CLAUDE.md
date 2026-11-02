@@ -25,7 +25,7 @@ Read this before changing anything. Keep it current when the structure changes.
 - **Chapters**: id, trip_id, name, start, end, radius_km
 - **Shares**: id, token, trip_id, chapter_id, who, created, revoked
 - **Reactions**: id, share_id, item_id, answer (plan | nearby | pass | later), created, updated
-- **Tracks**: id, trip_id, day, title, start, end (ISO), start_time, end_time (trip clock), timezone, distance_m, duration_min, moving_min, climb_m, points, polyline (encoded, ≤ 600 pts), note, created, updated
+- **Tracks**: id, trip_id, day, title, start, end (ISO), start_time, end_time (trip clock), timezone, distance_m, duration_min, moving_min, climb_m, points, polyline (encoded, ≤ 600 pts), note, created, updated, stays (JSON `[[lat, lng, from, to], …]`, epoch seconds: pauses of 4+ min along the walk)
 - **Inbox**: id, share_id, trip_id, kind (place | link | ask), text, title, note, category, city, address, lat, lng, place_id, maps_url, website, image, types, hours, status (new | boost | kept | dismissed | asked), item_id, created, updated
 - **Plan**: unused (legacy)
 
@@ -108,6 +108,7 @@ Sample mode runs fully offline. Test with Playwright at 390×844 @2x: route `cdn
 - **Day totals**: `dayFar` = typed totals if any (they cover the whole day), else the day's walks added up (`recorded: true`; walk_min = time out, not moving). `totalsLine` and `recapData` use it.
 - **Map**: Lived layer draws the day's walks under the pins and drops legs whose stop time falls inside a walk (`inRecordedWalk`, ±2 min). **Paths** chip (when a trip has walks): every walk faint on top of the others (opacity by count) so repeated routes build up; stays shown as home pins; tap a path → `openTrack`.
 - **Poster**: `recapData` returns `walks` (in the frame's days; place frames need a point in the area). `drawPoster` draws them first as a thinner continuous pen line (0.62 × lw), skips walk/wander legs they cover (`walkCovers`), and adds them to the inset probe and label avoidance. `posterFrame` adds walk points within 3 km of what's drawn. A wander inside a walk no longer counts toward Off the map.
+- **Pauses** (Nov 2 2026, Tyler asked): `trackSummary` keeps the interior stays as `stays`. App: `trackStays` (clock times via `dayClockIn`), `dayStays`, `gpsStayFor(trip, d, stop)` = a pause within 90 m of the stop (or its `here_lat`) around its time (−10/+5 min), or for an untimed stop the longest pause within 60 m. Used by: the Log meta ("45 min here", "~8:18am" for untimed), `recapData` (sets `dwell` from the pause, and `time` if the stop had none; `s.gps`), so dot sizes and walk-covering use what the GPS saw. `unloggedPauses`: 8+ min pauses no stop accounts for, not within 120 m of a stay item, shown under the walk row as "Paused 22 min · 8:18am — Add as a stop / ✕" (`addPause`: a found stop at the pause's middle and start time, named by `hereName`; then Not here? can fix it; ✕ remembered in localStorage `th_pause_skip` by `track:from`). Poster key adds **walked** (a small solid squiggle) when the poster has walks (`K.walked`). Walks recorded before Nov 2 have no `stays` until re-shared.
 - Not yet: odometer as a journey, visit counts per place, a residency poster lens (Tyler liked these ideas; Nov 1 2026).
 
 ## Adding a stop after the fact (Oct 2026, on the trip)
