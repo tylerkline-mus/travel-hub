@@ -1997,7 +1997,8 @@ function recapData(t, frame) {
   const tracks = [], stops = [], homes = new Map(), perDay = [], allPts = [];
   days.forEach(d => {
     const home = stayForMorning(t.id, d);
-    if (home && hasCoords(home)) allPts.push(pt(home));
+    // once you're logging, only nights so far count (a month of residency nights ahead outweighed the towns you'd actually been in)
+    if (home && hasCoords(home) && (!lived || d <= logNow(t.timezone).day)) allPts.push(pt(home));
     let seq = [];
     if (lived) {
       // a wander ends the stop before it (wanderAt) and makes the leg after it a wander (wandered)
@@ -2100,7 +2101,8 @@ function recapAreas(t) {
   const pts = recapData(t).allPts;
   const groups = [];
   pts.forEach(p => {
-    const hits = groups.filter(g => g.some(q => meters(p, q) < 30000));
+    // 15 km: neighbouring towns stay apart (Blönduós and Skagaströnd are 18 km apart); a day trip far away is its own area anyway
+    const hits = groups.filter(g => g.some(q => meters(p, q) < 15000));
     if (!hits.length) groups.push([p]);
     else { hits[0].push(p); hits.slice(1).forEach(g => { hits[0].push(...g); groups.splice(groups.indexOf(g), 1); }); }
   });
@@ -3128,6 +3130,15 @@ function paperGrain(ctx, W, H, L) {
 
 function recapView(t) {
   const p = posterPrefs(t.id);
+  // a place picked before the areas were drawn differently: move it to the nearest area as they are now
+  if (p.frame && p.frame.kind === 'place' && !p.frame.sliceId) {
+    const now = recapAreas(t);
+    if (now.length && !now.some(a => meters(a, p.frame) < 3000)) {
+      const a = now.slice().sort((x, y) => meters(x, p.frame) - meters(y, p.frame))[0];
+      p.frame = { kind: 'place', lat: a.lat, lng: a.lng, r: a.r, name: a.name };
+      savePosterPrefs(t.id, p);
+    }
+  }
   const data = recapData(t, p.frame);
   const f = p.frame || { kind: 'all' };
   const stays = topItemsFor(t.id).filter(i => i.kind === 'fixed' && isStay(i) && i.day).sort((a, b) => a.day.localeCompare(b.day));
