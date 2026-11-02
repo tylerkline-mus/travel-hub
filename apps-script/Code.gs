@@ -674,8 +674,20 @@ const ACTIONS = {
     return withLock(function () {
       const have = findRow('Tracks', row.id);
       if (have) {
-        if (p.format === 'text') return 'Already saved that walk (' + dayWord(have.obj.day) + ').';
-        const o = have.obj; o._duplicate = true; return o;
+        // the same walk again: read afresh (the reading improves now and then), keeping its name and note
+        const keepNames = { title: have.obj.title, note: have.obj.note, created: have.obj.created, updated: new Date().toISOString() };
+        const fresh = Object.assign({}, row, keepNames);
+        const same = ['distance_m', 'duration_min', 'start', 'end', 'polyline'].every(function (k) { return String(have.obj[k]) === String(fresh[k]); });
+        if (same) {
+          if (p.format === 'text') return 'Already saved that walk (' + dayWord(have.obj.day) + ').';
+          const o = have.obj; o._duplicate = true; return o;
+        }
+        const saved = updateRow('Tracks', row.id, fresh);
+        if (p.format === 'text') {
+          return 'Updated your walk on ' + dayWord(saved.day) + ': ' + lenWords(+saved.distance_m) + ', out for ' + minWords(+saved.duration_min) +
+            (saved.start_time ? ' from ' + quickClock(saved.start_time) : '') + '.';
+        }
+        return saved;
       }
       const now = new Date().toISOString();
       row.created = row.created || now; row.updated = now;
@@ -1589,38 +1601,71 @@ function gpxPoints(text) {
 
 /** A walk's numbers and its simplified path. GPS wobbles a few metres while you stand still, so points closer than
     6 m to the last one kept are skipped before measuring; moving time counts only walking-ish speeds with no long gap. */
+function distM(a, b) { return metersBetween(a.lat, a.lng, b.lat, b.lng); }
 function trackSummary(raw) {
   raw = dropGlitches(raw);
-  const timed = raw.filter(function (q) { return q.t != null; });
+  // the id comes from the file as recorded, so the same file always gets the same id (and a re-send updates it)
+  const timed0 = raw.filter(function (q) { return q.t != null; }), first = raw[0];
+  const id = 'tk_' + [timed0.length ? timed0[0].t : 0, raw.length, Math.round(Math.abs(first.lat) * 1e4), Math.round(Math.abs(first.lng) * 1e4)].map(function (x) { return x.toString(36); }).join('');
+  // time spent staying put (indoors the GPS wanders 20–50 m for as long as you sit) becomes one spot,
+  // and staying put before you leave or after you're back isn't part of the walk
+  let pts = collapseStays(raw);
+  if (pts.length > 2 && pts[0].stay) pts = pts.slice(1);
+  if (pts.length > 2 && pts[pts.length - 1].stay) pts = pts.slice(0, -1);
+  const timed = pts.filter(function (q) { return q.t != null; });
   const kept = [];
-  raw.forEach(function (q) { const last = kept[kept.length - 1]; if (!last || metersBetween(last.lat, last.lng, q.lat, q.lng) >= 6) kept.push(q); });
-  const end = raw[raw.length - 1];
+  pts.forEach(function (q) { const last = kept[kept.length - 1]; if (!last || distM(last, q) >= 6) kept.push(q); });
+  const end = pts[pts.length - 1];
   if (kept[kept.length - 1] !== end) kept.push(end);
   let dist = 0, moving = 0;
   for (let k = 1; k < kept.length; k++) {
-    const a = kept[k - 1], b = kept[k], d = metersBetween(a.lat, a.lng, b.lat, b.lng);
+    const a = kept[k - 1], b = kept[k], d = distM(a, b);
     dist += d;
     if (a.t != null && b.t != null) { const dt = (b.t - a.t) / 1000; if (dt > 0 && dt <= 300 && d / dt >= 0.3 && d / dt <= 7) moving += dt; }
   }
-  // climb: rises of 3 m or more (smaller wiggles are the GPS)
+  // climb: rises of 5 m or more while moving (phone GPS height wobbles a lot; smaller rises are mostly that)
+  // (heights are averaged over about 20 points first, so the wobble cancels out and real hills remain)
+  const eles = pts.filter(function (q) { return !q.stay && q.ele != null && isFinite(q.ele); }).map(function (q) { return q.ele; });
   let climb = 0, ref = null;
-  raw.forEach(function (q) {
-    if (q.ele == null || !isFinite(q.ele)) return;
-    if (ref == null) { ref = q.ele; return; }
-    if (q.ele - ref >= 3) { climb += q.ele - ref; ref = q.ele; } else if (ref - q.ele >= 3) ref = q.ele;
+  eles.forEach(function (e, k) {
+    const lo = Math.max(0, k - 10), hi = Math.min(eles.length, k + 11);
+    let sum = 0; for (let j = lo; j < hi; j++) sum += eles[j];
+    const v = sum / (hi - lo);
+    if (ref == null) { ref = v; return; }
+    if (v - ref >= 5) { climb += v - ref; ref = v; } else if (ref - v >= 5) ref = v;
   });
-  // simplify until it fits comfortably in one cell (≤ 600 points)
   let tol = 2.5, path = simplifyPath(kept, tol);
   while (path.length > 600) { tol *= 1.6; path = simplifyPath(kept, tol); }
   const t0 = timed.length ? timed[0].t : null, t1 = timed.length ? timed[timed.length - 1].t : null;
-  const first = raw[0];
   return {
-    id: 'tk_' + [t0 || 0, raw.length, Math.round(Math.abs(first.lat) * 1e4), Math.round(Math.abs(first.lng) * 1e4)].map(function (x) { return x.toString(36); }).join(''),
+    id: id,
     start: t0 != null ? new Date(t0).toISOString() : '', end: t1 != null ? new Date(t1).toISOString() : '',
     distance_m: String(Math.round(dist)), duration_min: t0 != null ? String(Math.round((t1 - t0) / 60000)) : '',
     moving_min: t0 != null ? String(Math.round(moving / 60)) : '', climb_m: String(Math.round(climb)),
     points: String(path.length), polyline: encodePolyline(path),
   };
+}
+
+/** Staying put: a run of points that stays within 50 m of its own middle for 4 minutes or more (40 points with no times)
+    becomes two points at that middle, one when you got there and one when you left. Walking leaves 50 m in under a minute. */
+function collapseStays(pts) {
+  const R = 50, MIN_MS = 4 * 60000, MIN_N = 40, out = [];
+  let i = 0;
+  while (i < pts.length) {
+    let la = pts[i].lat, ln = pts[i].lng, n = 1, j = i;
+    while (j + 1 < pts.length) {
+      const q = pts[j + 1];
+      if (distM({ lat: la, lng: ln }, q) > R) break;
+      j++; n++; la += (q.lat - la) / n; ln += (q.lng - ln) / n;
+    }
+    const a = pts[i], b = pts[j];
+    const long = a.t != null && b.t != null ? b.t - a.t >= MIN_MS : j - i + 1 >= MIN_N;
+    if (j > i && long) {
+      out.push({ lat: la, lng: ln, t: a.t, ele: null, stay: true }, { lat: la, lng: ln, t: b.t, ele: null, stay: true });
+      i = j + 1;
+    } else { out.push(pts[i]); i++; }
+  }
+  return out;
 }
 
 /** GPS sometimes throws a point far away for a second (faster than 60 m/s, or a 200 m jump at the same instant). Those go;
