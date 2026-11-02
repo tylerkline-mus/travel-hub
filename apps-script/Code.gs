@@ -628,9 +628,17 @@ const ACTIONS = {
       The id comes from the walk itself (start time, point count, first spot), so sending the same file twice saves it once. */
   track: function (p) {
     let row;
-    if (p.gpx) {
-      const raw = gpxPoints(String(p.gpx));
-      if (raw.length < 2) throw new Error('No walk in that file (found ' + raw.length + ' point' + (raw.length === 1 ? '' : 's') + ')');
+    if (p.gpx || p.gpx64) {
+      const text = gpxText(p);
+      const raw = gpxPoints(text);
+      if (raw.length < 2) {
+        // say what arrived, so a shortcut sending the wrong thing (the file's name, an empty value) is easy to spot
+        const peek = text.replace(/\s+/g, ' ').trim().slice(0, 60);
+        const why = 'No walk in that file: it had ' + raw.length + ' point' + (raw.length === 1 ? '' : 's') +
+          '. The shortcut sent ' + text.length + ' characters' + (peek ? ', starting "' + peek + '"' : '') + '.';
+        if (p.format === 'text') return why;
+        throw new Error(why);
+      }
       row = trackSummary(raw);
       row.title = String(p.title || '').trim();
     } else {
@@ -1539,6 +1547,17 @@ function withLock(fn) {
  * Recorded walks (.gpx). The same reading and simplifying as the
  * app's, so a walk sent either way comes out the same (and the same id).
  * ------------------------------------------------------------- */
+/** The GPX file's text, however the shortcut sent it: as text (gpx), or Base64 (gpx64, or gpx with no "<" in it).
+    Base64 is the sturdier way from Shortcuts: Base64 Encode reads the file's own bytes. */
+function gpxText(p) {
+  let s = String(p.gpx64 || p.gpx || '');
+  if (p.gpx64 || (s.indexOf('<') === -1 && /^[A-Za-z0-9+\/=_\-\s]{40,}$/.test(s))) {
+    const clean = s.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+    try { s = Utilities.newBlob(Utilities.base64Decode(clean)).getDataAsString('UTF-8'); } catch (e) { /* not Base64 after all */ }
+  }
+  return s.replace(/^\uFEFF/, '');
+}
+
 /** Every <trkpt> in a GPX file: {lat, lng, t (ms or null), ele (m or null)}, in file order. */
 function gpxPoints(text) {
   const out = [];

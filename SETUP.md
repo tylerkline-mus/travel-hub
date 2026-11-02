@@ -148,14 +148,15 @@ For the walks you want drawn as the real path. Record the walk in **Open GPX Tra
 **Make the shortcut once.** In **Shortcuts**, tap **+** and name it **Send to Travel Hub**. Then:
 
 1. Tap **ⓘ** (bottom) → turn on **Show in Share Sheet**. Back in the editor, the first block says *Receive **Any** input from Share Sheet*: tap **Any** → tap **Clear**, then turn on just **Files**.
-2. Add **Get Text from Input** (search "Get Text"). It turns the .gpx file into text.
-3. Add **Get Contents of URL**: your Web app URL only (ending in `/exec`). Tap **›** → **Method** POST, **Request Body** JSON, add Text fields: `action` = `track`, `token` = your passphrase, `format` = `text`, and `gpx` = tap the field → choose the **Text** variable (from step 2).
+2. Add **Base64 Encode** (search "Base64"). Its input should be **Shortcut Input** (tap the blue word to change it). Tap **›** on it and set **Line Breaks** to **None**. This packs the file's own contents for sending. (Get Text from Input can hand over the file's name instead of what's in it.)
+3. Add **Get Contents of URL**: your Web app URL only (ending in `/exec`). Tap **›** → **Method** POST, **Request Body** JSON, add Text fields: `action` = `track`, `token` = your passphrase, `format` = `text`, and `gpx64` = tap the field → choose the **Base64 Encoded** variable (from step 2). Make sure the Method is **POST**, the Request Body is **JSON**, and nothing comes after `/exec` in the address.
 4. Add **Show Notification** with **Contents of URL**. It says e.g. *Saved your walk on Sun 1 Nov: 4.2 km (2.6 mi), out for 2 h 31 min from 1:40pm (Iceland).*
 
 **Each walk:** in Open GPX Tracker tap **Start** when you head out. When you're back, tap **Pause** → **Save** (name it anything), open the folder icon, tap the walk, **Share**, and pick **Send to Travel Hub**.
 
 Good to know:
 - Sending the same file twice saves it once.
+- If something's off, the notification says what arrived (how many characters, and how it starts), which shows whether the shortcut sent the walk or just its name.
 - No signal? Save the file in Open GPX Tracker and share it later. It still lands on the day you walked.
 - No shortcut? In the app's **Log**, under the day's stops, **Add a recorded walk (.gpx)** picks the file from the Files app (in Open GPX Tracker, Share → **Save to Files** first). That way works offline too.
 - Your stops and the dock buttons work as before during a walk. Stops logged while a walk was recording sit on its line, and the poster draws the walk instead of guessing those legs.
